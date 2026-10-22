@@ -17,7 +17,7 @@ myHA ist eine Home-Assistant-App (HAOS-Add-on) mit eigener Administration im HA-
 | S0 Nachweise | Minimal-App real auf Dimitris HA: Ingress-Identität und Peer, Supervisor-`/info` ohne `hassio_api`, Client-IP am Public-Port, Backup-Hooks mit Archivprüfung; Android-Transport-Spike (OkHttp HTTPS/WSS mit Pin); HA-Lese-/Schreibadapter gegen Simulator | Keine unbelegte Annahme trägt das weitere Design; Ergebnisse in `docs/s0-report.md` |
 | M1 Vertikaler Kern | Ein Raum (Wohnzimmer), ein Govee-Licht, eine Klimaanlage; Principal/Gruppe/Policy; Gast-Redeem im Browser (Bewohner-Login folgt in M2); Fremdansicht; Aktion und gefiltertes Live-Update | Verbotene API-Aktion und fremder Zustand nachweislich blockiert; Simulation steuert kein Gerät |
 | M2 Webpilot | GUI-Einrichtung, Gruppen/Rollen/Fences, Gerätebindungen, Dashboard-Editor, Gast-QR, Aufenthalte, Checkout, Audit, Backup/Restore | Abnahmefälle A01–A32, A34, A35, A39–A42, A44, A45, A47–A52 automatisiert bzw. dokumentiert; A33 entfällt (E21) |
-| M3 Native | Android/Fire-Paket mit lokaler UI, sicherer Speicherung, Scanner, nativer Verbindung, optionalem Pinning; iOS als Gerüst | Android-Build läuft auf Emulator/Gerät; iOS-Gerüst kompiliert nicht hier (kein macOS) und ist als ungetestet markiert |
+| M3 Native | Android-, Fire-OS- und iOS-App mit lokaler UI, sicherer Speicherung, Scanner, nativer Verbindung, optionalem Pinning und store-fertigen Release-Pipelines | Android-Build läuft auf Emulator/Gerät; iOS-Build und Simulator-Tests laufen in CI auf GitHub-macOS-Runnern; Gerätetests auf echter Hardware und Store-Einreichungen setzen die Entwicklerkonten des Herausgebers voraus und werden als eigene Checkliste geführt |
 
 **Nicht im Umfang:** M4 (Vorlagen-Rollout für viele Einheiten, Lizenzierung, Support-Tooling), Store-Einreichung, Raumpresets (E21), Konfigurationsexport (E23) und alles aus Spez §18.1. Ein Rollout einer neuen Rollenversion auf bestehende Zuweisungen und Aufenthalte ist dagegen Teil von M2, weil der Publish-Ablauf ohne ihn unvollständig wäre.
 
@@ -356,7 +356,7 @@ Keine Zugangsdaten in `options`. Das Dockerfile ist mehrstufig (Node-Stage baut 
 ## 9. Native Apps (M3, privates Repo)
 
 - **Shell:** Capacitor 8 (8.5.x), TypeScript. Screens: Instanzen (mehrere, getrennte Sessions/Trustprofile), Instanz hinzufügen (QR oder Adresse), Panel (Web-UI aus dem Submodule im Modus `native`), Wandmodus-Einstellungen (Wachhalten, Querformat, Nachtthema, PIN für App-Einstellungen).
-- **Transport:** Plugin `MyhaTransport` hinter dem `Transport`-Interface aus §7. Android: Kotlin, OkHttp mit `CertificatePinner` (SPKI-SHA-256 aus dem Trustprofil, primär und Ersatz), WebSocket über OkHttp, Pools und Sockets werden bei Trustprofil-Änderung geschlossen; keine Redirect-Verfolgung bei Auth-Endpunkten. iOS: Swift, `URLSession` mit `URLSessionWebSocketTask` und `urlSession(_:didReceive:)`-Pinning, Gerüst ohne Build-Nachweis. Nur systemvertrauenswürdige Ketten (E27).
+- **Transport:** Plugin `MyhaTransport` hinter dem `Transport`-Interface aus §7. Android: Kotlin, OkHttp mit `CertificatePinner` (SPKI-SHA-256 aus dem Trustprofil, primär und Ersatz), WebSocket über OkHttp, Pools und Sockets werden bei Trustprofil-Änderung geschlossen; keine Redirect-Verfolgung bei Auth-Endpunkten. iOS: Swift, `URLSession` mit `URLSessionWebSocketTask` und `urlSession(_:didReceive:)`-Pinning, gebaut und im Simulator getestet auf GitHub-macOS-Runnern. Nur systemvertrauenswürdige Ketten (E27).
 - **Tokenablage:** Android Keystore-verschlüsselt (EncryptedSharedPreferences), iOS Keychain; Access-Token nur im Speicher.
 - **QR-Scanner:** Web-Decoder `zxing-wasm` mit `getUserMedia` im WebView (keine Play Services nötig); Kameraberechtigung über Capacitor. Fallback manuelle Adresseingabe. Das Secret wird erst nach erfolgreicher TLS-/Pinprüfung gesendet; danach lädt der Client `GET /api/v1/me/trust` und speichert das Trustprofil je Instanz.
 - **Gerätematrix:** Pixel-Emulator API 30/35, reales Android-Gerät, Fire HD 10 falls vorhanden; Ergebnisse in `docs/device-matrix.md`.
@@ -393,7 +393,7 @@ Keine Zugangsdaten in `options`. Das Dockerfile ist mehrstufig (Node-Stage baut 
 
 - `scripts/dev.sh` startet Simulator (:8123), Gateway (Admin :8099, Public :8443 im Modus `proxy` ohne TLS auf localhost) und Vite-Dev-Server mit Proxy; `MYHA_DATA_DIR=./.dev/data`.
 - `scripts/build-image.sh` baut das amd64-Image lokal wie der Supervisor (gleiches Dockerfile, `BUILD_FROM`-Arg).
-- `scripts/install-on-ha.py` nutzt WS `supervisor/api`: `POST /store/repositories {repository}`, `POST /store/addons/<slug>/install`, `POST /addons/<slug>/options`, `POST /addons/<slug>/start`; der Token wird aus `~/.claude.json` gelesen und nie ausgegeben. Vor jedem Lauf fragt das Skript nach Bestätigung.
+- `scripts/install-on-ha.py` (generisches Entwicklerwerkzeug, konfiguriert über `HA_URL` und `HA_TOKEN`) nutzt WS `supervisor/api`: `POST /store/repositories {repository}`, `POST /store/addons/<slug>/install`, `POST /addons/<slug>/options`, `POST /addons/<slug>/start`; der Token wird nie ausgegeben, Zugangsdaten der Referenzinstallation liegen nur in der ungetrackten Datei `.dev/ha.env`. Vor jedem mutierenden Lauf fragt das Skript nach Bestätigung.
 - Commits auf `main` im öffentlichen Repo; Feature-Arbeit in kurzen Branches, wenn parallel gearbeitet wird. Jedes Arbeitspaket endet mit grünen Tests und Commit.
 
 ## 13. Arbeitspakete, Reihenfolge und Orchestrierung
@@ -419,7 +419,7 @@ Fable 5.1 schreibt den Implementierungsplan, dispatcht je Arbeitspaket Opus-5.5-
 | 12 | Backup-Hooks, Restore-Modus, Archivprüfung | M2 | A39, A40, A47, A48 grün |
 | 13 | Paketierung, Dockerfile, s6, Image-Workflow, Installation der echten App auf Dimitris HA, realer vertikaler Pfad | M1/M2 | Add-on läuft, Admin-SSO real, Licht und Klima real bedient |
 | 14 | E2E-Suite, Lastskript, Doku (setup, security, restore, device-matrix), DOCS.md | M2 | A41, A42, A45, A46 dokumentiert |
-| 15 | Natives Repo: Capacitor-App, `MyhaTransport` Android, iOS-Gerüst, Scanner, sichere Ablage, Wandmodus, Pinning-Tests | M3 | A36–A38, A43 auf Android/Emulator; iOS als ungetestet markiert |
+| 15 | Natives Repo: Capacitor-App, `MyhaTransport` Android und iOS, Scanner, sichere Ablage, Wandmodus, Pinning-Tests, Release-Pipelines (Android/Fire auf Linux-Runnern, iOS auf macOS-Runnern), Store-Vorbereitung | M3 | A36–A38, A43 auf Android/Emulator; iOS-Pinning-Tests im Simulator auf dem macOS-Runner; Gerätetests und Einreichung als Checkliste mit Vorbedingung Entwicklerkonten |
 | 16 | Fable-Abschlussreview: Code-Review, Security-Review, Abnahmematrix, Restrisiken | alle | Bericht an Dimitri |
 
 ## 14. Risiken und bewusst offene Punkte
@@ -427,7 +427,7 @@ Fable 5.1 schreibt den Implementierungsplan, dispatcht je Arbeitspaket Opus-5.5-
 - **Supervisor 2026.10.3** ist auf Dimitris Instanz noch nicht aktiv; bis dahin bleibt der Admin-Zugang laut E4 gesperrt. WP1 und WP13 setzen das Update voraus (Admin-UI zeigt den Hinweis).
 - **`/info` ohne `hassio_api`**, **Client-IP am Public-Port** und **Backup-Exclude-Muster** werden erst in WP1 real nachgewiesen.
 - **Cover** nur im Simulator; **Fahrenheit**, Doppelsollwerte und Presets bleiben gesperrt.
-- **iOS** kann hier weder gebaut noch getestet werden; das Gerüst ist Startpunkt, kein Nachweis.
+- **iOS** wird nur in CI (GitHub-macOS-Runner, Simulator) gebaut und getestet; Nachweise auf echter Hardware und die Store-Einreichung hängen von Apple-Entwicklerkonto, Signaturmaterial und einem Testgerät ab.
 - **Alte Fire-WebViews**: Buildziel `es2019` und CSS-Fallbacks sind eine Annahme, bis ein Fire-Gerät getestet ist.
 - **Selbstsignierte Zertifikate im Browser** funktionieren nur, wenn das Gastgerät die CA kennt; der Setup-Assistent warnt, verbietet es aber nicht (Dimitris Wunsch nach Freiheit). Nativ gilt E27.
 - **Zeitplausibilität (E26)** erkennt Rücksprünge und Sprünge der Systemuhr, aber keinen langsamen gemeinsamen Drift; `dt_synchronized` schließt die Lücke nur, wenn WP1 den Zugriff bestätigt.

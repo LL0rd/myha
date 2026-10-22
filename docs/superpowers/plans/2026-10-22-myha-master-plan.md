@@ -41,7 +41,8 @@ myHA ist ein Produkt für beliebige Betreiber und wird öffentlich vertrieben: d
 - **Web:** `pnpm` im Verzeichnis `myha/web`; `pnpm build`, `pnpm test` (Vitest), `pnpm lint`, `pnpm typecheck`.
 - **E2E:** `tests/e2e` mit eigenem `package.json`; `pnpm exec playwright test`.
 - **Tests sind Pflicht** für neue Logik; Abnahmefälle der Spez §19 heißen im Code `test_a06_*` usw. und liegen in `myha/gateway/tests/acceptance/`.
-- **Keine Geheimnisse im Repo:** `.env`, `.dev/`, Token-Dateien sind ignoriert. `scripts/install-on-ha.py` liest den Owner-Token aus `~/.claude.json` und gibt ihn nie aus.
+- **Keine Geheimnisse im Repo:** `.env`, `.dev/`, Token-Dateien sind ignoriert. `scripts/install-on-ha.py` ist generisch und liest `HA_URL` und `HA_TOKEN` aus der Umgebung; Fable setzt sie lokal aus der ungetrackten Datei `.dev/ha.env`. Kein Skript gibt Tokens aus.
+- **Commit-Trailer:** Jeder Commit endet mit dem `Co-Authored-By`-Trailer des Modells, das ihn erstellt hat (Opus-Subagenten: `Claude Opus 5.5 <noreply@anthropic.com>`, Fable: `Claude Fable 5.1 <noreply@anthropic.com>`).
 - **Dokumentation:** README und `docs/*.md` englisch; `docs/s0-report.md` enthält die S0-Ergebnisse.
 - **Secrets und IDs:** Produkt-IDs `unit_<12 hex>`, `res_<12 hex>`, `stay_<12 hex>`, `inv_<12 hex>`, `sess_<12 hex>`, `cmd_<12 hex>`; Secrets 32 Byte aus `secrets.token_bytes`, base64url ohne Padding; gespeichert nur als SHA-256-Hex.
 
