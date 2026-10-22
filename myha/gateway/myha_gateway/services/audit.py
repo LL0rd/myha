@@ -14,16 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from myha_gateway.db.models import AuditEvent as AuditRow
 
 # Parameter names that could carry a credential, judged word by word (snake_case, kebab-case,
-# camelCase), at any depth, in any case. Single words match exactly, so "reason_code",
-# "mapping" and "ping" pass; compounds match inside a word ("accesstoken"); pairs match as
-# neighbouring words ("api_key").
+# camelCase), at any depth, in any case. Single words match exactly, so "mapping" and "ping"
+# pass; compounds match inside a word ("accesstoken", "usercode"); pairs match as neighbouring
+# words ("api_key"). "code" is a secret word: Home Assistant takes alarm and lock codes as
+# "code", and a reason code has its own column, never a place in normalized_params.
 _WORD_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
 _SECRET_WORDS = frozenset(
-    {"token", "secret", "password", "pin", "csrf", "ticket", "cookie", "auth"}
-    | {"authorization", "credential", "credentials", "apikey", "bearer", "passphrase"}
+    {"token", "secret", "password", "pwd", "pin", "code", "otp", "csrf", "ticket", "cookie"}
+    | {"auth", "authorization", "credential", "credentials", "apikey", "bearer", "passphrase"}
 )
-_SECRET_PARTS = ("token", "secret", "password", "passwd", "csrf", "ticket", "cookie", "apikey")
-_SECRET_PAIRS = frozenset({("api", "key"), ("private", "key"), ("pairing", "code")})
+_SECRET_PARTS = (
+    *("token", "secret", "password", "passwd", "csrf", "ticket", "cookie", "apikey"),
+    *("passcode", "pincode", "usercode"),
+)
+_SECRET_PAIRS = frozenset({("api", "key"), ("private", "key")})
 
 
 def _is_secret(key: str) -> bool:

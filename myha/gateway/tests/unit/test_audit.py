@@ -100,6 +100,17 @@ async def test_audit_does_not_commit(engine: AsyncEngine) -> None:
         "passphrase",
         "private_key",
         "accesstoken",
+        "code",  # Home Assistant takes alarm and lock codes exactly as "code"
+        "door_code",
+        "user_code",
+        "usercode",
+        "access_code",
+        "lock_code",
+        "passcode",
+        "pincode",
+        "one_time_code",
+        "otp",
+        "pwd",
     ],
 )
 def test_secret_looking_keys_are_refused(key: str) -> None:
@@ -110,7 +121,7 @@ def test_secret_looking_keys_are_refused(key: str) -> None:
 
 @pytest.mark.parametrize(
     "key",
-    ["reason_code", "language_code", "mapping", "keeping", "ping", "spin", "hvac_mode"]
+    ["mapping", "keeping", "ping", "spin", "hvac_mode", "decode_mode", "codec"]
     + ["target_c", "position", "brightness_pct", "author", "key", "private", "api"],
 )
 def test_ordinary_keys_pass(key: str) -> None:
