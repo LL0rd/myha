@@ -8,13 +8,14 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from myha_gateway.adapters.base import WRITE_ACTIONS, Action
+from myha_gateway.adapters.base import WRITE_ACTIONS, Action, StateView
 from myha_gateway.db import models as db
 from myha_gateway.db import session_factory, write_session
 from myha_gateway.deps import AppContext
@@ -353,3 +354,14 @@ def test_project_resource_matches_the_dashboard_entry() -> None:
 def test_projection_refuses_another_policy_version() -> None:
     with pytest.raises(ValueError, match="policy version"):
         project(replace(guest_context(), policy_version=2))
+
+
+def test_state_decimals_never_use_exponents() -> None:
+    def views(resource_id: str) -> StateView:
+        if resource_id != "res_203_trv":
+            return fixture_view(resource_id)
+        return fixture_view(resource_id, target_c=Decimal("1E+2"), current_c=Decimal("1E-7"))
+
+    view = project_dashboard(guest_context(), room203_index(), views, LAYOUT, DURING_STAY)
+    state = resources(view)["res_203_trv"]["state"]
+    assert (state["target_c"], state["current_c"]) == ("100", "0.0000001")

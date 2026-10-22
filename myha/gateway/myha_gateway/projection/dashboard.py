@@ -177,7 +177,7 @@ def _state(kind: str, view: StateView | None) -> ResourceState:
         return ResourceState(availability="unknown")
     values = {name: getattr(view, name) for name in (*_COMMON, *STATE_FIELDS[kind])}
     return ResourceState.model_validate(
-        {name: str(v) if isinstance(v, Decimal) else v for name, v in values.items()}
+        {name: format(v, "f") if isinstance(v, Decimal) else v for name, v in values.items()}
     )
 
 
