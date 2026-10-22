@@ -486,7 +486,7 @@ async def test_admin_lifespan_runs_the_ha_client(
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         await until(lambda: ctx.ha.connected)
-        assert ctx.ha.generation == 1
+        assert (ctx.ha.connected, ctx.ha.generation) == (True, 1)
     assert not ctx.ha.connected  # stopped with the admin app
 
 

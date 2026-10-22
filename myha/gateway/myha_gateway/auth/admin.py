@@ -48,8 +48,11 @@ def _denied() -> ApiError:
 
 
 def csrf_token(secret: str, user_id: str, ingress_path: str, day: date) -> str:
-    """Hex HMAC-SHA256 of ``user_id|ingress_path|YYYY-MM-DD`` with the instance secret."""
-    message = f"{user_id}|{ingress_path}|{day.isoformat()}"
+    """Hex HMAC-SHA256 of ``admin-csrf|user_id|ingress_path|YYYY-MM-DD``, instance secret.
+
+    The prefix keeps it apart from every other HMAC under the same secret.
+    """
+    message = f"admin-csrf|{user_id}|{ingress_path}|{day.isoformat()}"
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
 
@@ -88,12 +91,14 @@ class AdminGuard:
         # Expiry and outcome of the last check: the Supervisor, or reason and message of the 503.
         self._supervisor: tuple[float, SupervisorInfo | tuple[str, str]] | None = None
         self._roles: dict[str, float] = {}  # user id -> when Core last confirmed the role
+        self._denials: dict[str, float] = {}  # user id -> when Core last said no, for 5 s
 
     @property
     def instance(self) -> Instance:
-        """The instance row; the admin lifespan loads it before the first request."""
+        """The instance row; missing only while a restore awaits review (design 4.6)."""
         if self.ctx.instance is None:
-            raise RuntimeError("instance not loaded")
+            details = {"reason": "restore_pending"}
+            raise ApiError(503, "UPSTREAM_UNAVAILABLE", "Restore pending", details)
         return self.ctx.instance
 
     async def supervisor_info(self) -> SupervisorInfo:
@@ -147,15 +152,28 @@ class AdminGuard:
             self._roles.pop(identity.user_id, None)  # never a fallback when Core says no (A05)
             problem = await self._role_problem(identity.user_id)
             if problem is not None:
+                self._deny(identity.user_id)
                 logger.warning(
-                    "admin access denied for user %s: %s; X-Remote-User-Groups %r",
+                    "admin access denied for user %r: %s; X-Remote-User-Groups %r",
                     identity.user_id,
                     problem,
                     identity.groups_header,
                 )
                 raise _denied()
-            self._roles[identity.user_id] = now
+            # A yes Core gave before a newer no, still in flight here, must not undo that no.
+            if now > self._denials.get(identity.user_id, float("-inf")):
+                self._roles[identity.user_id] = now
         return identity
+
+    def _deny(self, user_id: str) -> None:
+        """Forget the role, also a yes that came in meanwhile, and remember when Core said no.
+
+        A no older than 5 s no longer matters: a yes from before it would have expired anyway.
+        """
+        now = self._monotonic()
+        self._roles.pop(user_id, None)
+        self._denials = {user: at for user, at in self._denials.items() if now - at < ROLE_TTL}
+        self._denials[user_id] = now
 
     async def _role_problem(self, user_id: str) -> str | None:
         """Why Core does not list the user as active and owner or system-admin, if it does not."""
@@ -166,6 +184,8 @@ class AdminGuard:
         user = next((user for user in users if user.id == user_id), None)
         if user is None:
             return "unknown to Home Assistant"
+        if user.system_generated:
+            return "a system-generated user"
         if not (user.is_active and (user.is_owner or "system-admin" in user.group_ids)):
             return "neither an active owner nor an active system-admin"
         return None
@@ -198,6 +218,6 @@ async def require_csrf(
     guard = admin_guard(request)
     secret = guard.instance.server_secret
     if not csrf_ok(request.headers, secret, admin.user_id, guard.clock().date()):
-        logger.warning("admin request of user %s without a valid CSRF proof", admin.user_id)
+        logger.warning("admin request of user %r without a valid CSRF proof", admin.user_id)
         raise _denied()
     return admin

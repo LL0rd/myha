@@ -1,5 +1,6 @@
 """A01–A05: the admin identity behind the Supervisor ingress (design E4, E5, E24)."""
 
+import asyncio
 import copy
 import logging
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,8 @@ from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.auth.admin import csrf_token, require_admin, require_csrf
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import add_error_handlers
+from myha_gateway.ha.client import HAUnavailable
+from myha_gateway.ha.messages import HAUser
 from myha_gateway.ha.supervisor import SupervisorClient
 from myha_simulator.fixtures import HA_VERSION, SUPERVISOR_VERSION, USERS
 from tests.acceptance.conftest import OWNER, Clocks
@@ -160,6 +163,95 @@ async def test_a05_auth_list_failure_no_fallback(
     assert denied(await admin_client.get(SESSION))  # within the 5 s reuse of that success
 
 
+class Gate:
+    """``auth_list`` whose answers the test hands out one by one."""
+
+    def __init__(self) -> None:
+        self.waiting: list[tuple[asyncio.Event, dict[str, Any]]] = []
+
+    async def __call__(self) -> list[HAUser]:
+        event, answer = asyncio.Event(), {}
+        self.waiting.append((event, answer))
+        await event.wait()
+        if "error" in answer:
+            raise answer["error"]
+        users: list[HAUser] = answer["users"]
+        return users
+
+    async def wait_for(self, calls: int) -> None:
+        async with asyncio.timeout(5):
+            while len(self.waiting) < calls:  # noqa: ASYNC110 (no event for a list append)
+                await asyncio.sleep(0.001)
+
+    def answer(self, call: int, **answer: Any) -> None:
+        event, box = self.waiting[call]
+        box.update(answer)
+        event.set()
+
+
+OWNER_ADMIN = HAUser(OWNER, "Owner", "owner", True, True, False, ("system-admin",))
+OWNER_DEMOTED = HAUser(OWNER, "Owner", "owner", False, True, False, ("system-users",))
+
+
+@pytest.mark.parametrize("no_first", [False, True], ids=["yes-then-no", "no-then-yes"])
+@pytest.mark.parametrize(
+    "no",
+    [{"users": [OWNER_DEMOTED]}, {"error": HAUnavailable("connection to Home Assistant lost")}],
+    ids=["demoted", "unavailable"],
+)
+async def test_an_older_yes_never_outlives_a_newer_no(
+    no_first: bool,
+    no: dict[str, Any],
+    admin_client: httpx.AsyncClient,
+    ctx: AppContext,
+    clocks: Clocks,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = Gate()
+    monkeypatch.setattr(ctx.ha, "auth_list", gate)
+    assert ctx.instance is not None
+    token = csrf_token(ctx.instance.server_secret, OWNER, "", clocks.now.date())
+    read = asyncio.create_task(admin_client.get(SESSION))  # nothing to reuse yet: asks Core
+    await gate.wait_for(1)
+    mutation = asyncio.create_task(admin_client.post(CHECK, headers={"X-MyHA-CSRF": token}))
+    await gate.wait_for(2)  # the fresh check asks Core as well, after the demotion
+
+    async def yes() -> None:  # Core's answer to the read, from before the demotion
+        gate.answer(0, users=[OWNER_ADMIN])
+        assert (await read).status_code == 200
+
+    async def refusal() -> None:
+        gate.answer(1, **no)
+        assert denied(await mutation)
+
+    for step in (refusal, yes) if no_first else (yes, refusal):
+        await step()
+    later = asyncio.create_task(admin_client.get(SESSION))
+    await gate.wait_for(3)  # nothing to reuse: Core is asked again
+    gate.answer(2, users=[OWNER_DEMOTED])
+    assert denied(await later)
+
+
+async def test_denials_are_forgotten_after_the_reuse_window(
+    admin_app: FastAPI, admin_client: httpx.AsyncClient, clocks: Clocks
+) -> None:
+    for user in ("nobody1", "nobody2", "nobody3"):
+        assert denied(await admin_client.get(SESSION, headers={"X-Remote-User-Id": user}))
+    clocks.advance(5)
+    assert denied(await admin_client.get(SESSION, headers={"X-Remote-User-Id": "nobody4"}))
+    assert set(admin_app.state.admin_guard._denials) == {"nobody4"}  # bounded, never grows
+
+
+async def test_restore_pending_answers_503(
+    admin_client: httpx.AsyncClient, ctx: AppContext
+) -> None:
+    token = await csrf(admin_client)
+    ctx.instance = None  # a restore awaits review (design 4.6): no instance row, no secret
+    assert unavailable(await admin_client.get(SESSION), "restore_pending")
+    mutation = await admin_client.post(CHECK, headers={"X-MyHA-CSRF": token})
+    assert unavailable(mutation, "restore_pending")
+
+
 @pytest.mark.parametrize(
     ("changes", "allowed"),
     [
@@ -168,6 +260,7 @@ async def test_a05_auth_list_failure_no_fallback(
         ({"is_owner": False}, True),  # system-admin
         ({"is_owner": False, "group_ids": ["system-users"]}, False),
         ({"is_active": False}, False),  # an inactive owner
+        ({"is_owner": False, "system_generated": True}, False),  # like the Supervisor's user
         ({"id": "someone-else"}, False),  # Core does not know the user of the header
     ],
 )

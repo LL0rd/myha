@@ -28,7 +28,7 @@ def ok(sent: str | None, **headers: str) -> bool:
 
 
 def test_token_is_the_hex_hmac_of_user_path_and_day() -> None:
-    message = b"owner1|/api/hassio_ingress/abc|2026-10-22"
+    message = b"admin-csrf|owner1|/api/hassio_ingress/abc|2026-10-22"
     assert token() == hmac.new(SECRET.encode(), message, hashlib.sha256).hexdigest()
 
 
