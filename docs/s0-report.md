@@ -21,7 +21,7 @@ is treated as settled (design §1, phase S0). Entries marked **open** still need
 | 13 | `GET /host/info` (`dt_synchronized`) reachable with `hassio_api: true` + `hassio_role: default` (E26) | — | **open** (Task 1.2) | Second time source only if available |
 | 14 | Split air conditioners keep or change the setpoint on `hvac_mode` change (E7) | — | **open** (Task 1.4, needs operator consent) | Decides whether the post-change check must mark bindings for review |
 | 15 | Argon2id parameters reaching ≈250 ms on the reference hardware (E20) | — | **open** (Task 1.4) | Recorded in `docs/security.md` |
-| 16 | Android OkHttp HTTPS + WSS pinning behaves identically on both paths (A36–A37) | — | **open** (Task 1.5, private repo spike) | Native transport design |
+| 16 | Android OkHttp HTTPS + WSS pinning behaves identically on both paths (A36–A37) | JVM spike in the private repo (`spikes/`, commit `681a269`) on 2026-10-22: OkHttp 4.12.0 against a local TLS server with a test CA and keys A/B, ten tests, also green with OkHttp 5.5.1 | ✅ confirmed on the JVM, A38 included; **open:** the same cases on Android (Conscrypt) in WP15 | One client and pool per trust profile; paths only, no redirects; rotation closes WebSockets with 1012 and drops late frames |
 
 ## Notes
 
@@ -29,3 +29,7 @@ is treated as settled (design §1, phase S0). Entries marked **open** still need
 - The local image is 205 MB (base 128 MB, venv 77 MB, web 1.8 MB); uv is only mounted during the build and not part of the image.
 - The developer script `scripts/install-on-ha.py status` (read-only) was verified against the reference installation: Supervisor version, repository list and app state are reported; the app is not yet installed.
 - The reference installation is used exclusively for these proofs; nothing in the product is tailored to it.
+- Android transport spike (Task 1.5): HTTPS and WSS fail identically, with the same exception and message, on a wrong pin, a wrong host name or an untrusted chain, and the server sees no request; a matching pin never replaces chain validation.
+- OkHttp checks pins once per TLS handshake and only for host names it has an entry for, so an IP literal or any other name of the same server is not pinned. The native transport therefore takes paths only and never follows redirects. A pin on a CA key matches every certificate that CA issues, so the trust profile carries leaf SPKI pins.
+- On rotation, OkHttp's `evictAll()` closes only idle connections, and a graceful WebSocket `close()` keeps delivering frames until the peer answers (hard cancel after 60 s). The spike transport closes tracked WebSockets with 1012 and drops late frames; calls already running during a rotation still finish under the old profile, which WP15 has to handle.
+- Spike tooling: Gradle 9.8.2 (runs on JDK 26), Kotlin 2.4.21, JDK 17 toolchain, JUnit 5.14.4; `./gradlew test -Pokhttp=5.5.1` runs the same suite against OkHttp 5.
