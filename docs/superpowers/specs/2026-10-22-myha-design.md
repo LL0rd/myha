@@ -296,7 +296,7 @@ Namespace `/api/v1`. Öffentliche Routen nur in `PublicApp`, Admin-Routen nur in
 - `restore/review`, `restore/apply`
 - `WS admin/events` (Setup-Fortschritt, Pairing-Anfragen, Backup-Status, Live-Audit)
 
-Fehlerformat überall `{"error": {"code": "...", "message": "...", "details"?: ...}}`; öffentliche Codes nur die acht aus Spez §12.1; Admin-Antworten dürfen Decision-Codes enthalten. A26 wird so geprüft: Es gibt keinen statischen Zimmer-QR; die Einstiegsseite ohne gültiges Secret gewährt nichts.
+Fehlerformat überall `{"error": {"code": "...", "message": "...", "details"?: ...}}`, auch für unbehandelte Serverfehler (`500` → `UPSTREAM_UNAVAILABLE`, Nachricht „Internal error“, nie Stacktraces) und für `405` (→ `ACTION_NOT_ALLOWED`); öffentliche Codes nur die acht aus Spez §12.1; Admin-Antworten dürfen Decision-Codes enthalten. Beide Apps laufen mit `redirect_slashes=False`: Auth- und API-Endpunkte leiten nie weiter. A26 wird so geprüft: Es gibt keinen statischen Zimmer-QR; die Einstiegsseite ohne gültiges Secret gewährt nichts.
 
 ## 7. Web-Frontend
 
