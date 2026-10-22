@@ -500,7 +500,7 @@ Verhalten:
 ### Task 9a.8: Web – Admin-Shell, API-Client, Session-Bootstrap
 
 **Files:**
-- Modify: `web/src/admin/main.tsx`, `web/package.json` (`@radix-ui/react-dialog`, `@radix-ui/react-tabs`; Skript `gen:api:admin`)
+- Modify: `web/src/admin/main.tsx`, `web/package.json` (`@radix-ui/react-dialog`, `@radix-ui/react-tabs`; Skript `gen:api:admin`), `web/tests/e2e/ingress-proxy.mjs` (Step 8)
 - Create: `web/src/admin/App.tsx`, `web/src/admin/session.tsx`, `web/src/admin/api/client.ts`, `web/src/admin/api/events.ts`, `web/src/admin/api/types.ts` (generiert), `web/src/admin/i18n/de.json`, `web/src/admin/i18n/en.json`, `web/src/admin/admin.module.css`
 - Delete: `web/src/ui/ThemeSwitch.tsx`, sobald nichts mehr importiert (der `ThemeProvider` aus Teilplan 2 ersetzt ihn)
 - Test: `web/src/admin/api/client.test.ts`, `web/src/admin/api/events.test.ts`, `web/src/admin/App.test.tsx`, `web/src/admin/i18n/keys.test.ts`
@@ -1202,7 +1202,7 @@ Dieselbe versionsbewusste Vergleichsfunktion nutzen die Drift-Erkennung, die Bin
 **Files:**
 - Modify: `myha/web/package.json` (`packageManager`), `myha/Dockerfile` (`corepack prepare` mit derselben Angabe), `.github/workflows/ci.yml` (Prüfschritt)
 
-Verhalten: `packageManager` lautet `pnpm@10.14.0+sha512.<hex>`, damit corepack den heruntergeladenen pnpm gegen den Hash prüft; das Dockerfile bereitet genau diese Angabe vor. CI bricht ab, wenn das Feld keinen Hash trägt.
+Verhalten: `packageManager` lautet `pnpm@10.14.0+sha512.<hex>`, damit corepack den heruntergeladenen pnpm gegen den Hash prüft; das Dockerfile bereitet genau diese Angabe vor. CI bricht ab, wenn das Feld keinen Hash trägt. Gegen den Hash prüft nur corepack beim Image-Build; `pnpm/action-setup` in der CI liest das Feld, verifiziert den Download aber nicht.
 
 - [ ] **Step 1 – CI-Prüfung (rot):** im Web-Job vor `pnpm install` der Schritt `node -e "const p=require('./package.json').packageManager; if(!/^pnpm@\d+\.\d+\.\d+\+sha512\.[0-9a-f]{128}$/.test(p)){console.error('packageManager without sha512 hash: '+p);process.exit(1)}"` (Arbeitsverzeichnis `myha/web`); lokal ausführen → FAIL beim heutigen `pnpm@10.14.0`.
 - [ ] **Step 2 – Hash setzen:** `cd myha/web && corepack use pnpm@10.14.0` schreibt das Feld mit Hash. Gegenprobe: `npm view pnpm@10.14.0 dist.integrity | sed 's/^sha512-//' | base64 -d | xxd -p -c 256` ergibt denselben Hex-Wert. Im Dockerfile `corepack prepare pnpm@10.14.0+sha512.<hex> --activate`.
