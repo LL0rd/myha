@@ -63,6 +63,8 @@ scripts/check-no-external.mjs
 
 ### Task 5a.3: Redeem, Sessions, `/me`, Logout, WS-Ticket, Renew
 
+> Hinweis aus WP3: Gast-Sessions mit `unit_ids = [stay.unit_id]` anlegen und beim Zimmerwechsel nachziehen (eine leere Liste bedeutet „keine Obergrenze“, eine fremde Unit „nichts im Scope“); Display-Bestätigung (Plan 3) lehnt eine leere Unit-Liste ab.
+
 **Files:**
 - Create: `myha_gateway/auth/public.py`, `api/public/{auth,me,ws_ticket,config}.py`
 - Modify: `myha_gateway/app.py` (Router), `deps.py` (Limiter injizierbar: `AppContext.limiters`)
@@ -100,6 +102,7 @@ scripts/check-no-external.mjs
 - Test: `tests/integration/test_policy_loader.py`, `tests/acceptance/test_matrix_drift.py`
 
 - [ ] **Step 1: Verhalten.** `PolicyLoader(engine, ha)`: `index(now) -> PolicyIndex` baut aus DB (`resource_binding`, `role_version`, `assignment`, `group`, `membership`, `fence`) und HA (`adapter.capabilities(state, registry_entity, unit)`); Cache-Schlüssel `(instance.policy_version aus der DB – ein billiger Einzelzeilen-Select je Aufruf, damit Änderungen anderer Prozesse wie `dev-seed` sichtbar sind, ha.generation, ha.adapter_locked)`; `context_for_session(session_id, now)`; `invalidate()`. `drift.py` hat zwei Auslöser: (a) **jedes `state_changed` einer gebundenen Entity** – Fingerprint aus den neuen Attributen gegen `capability_fingerprint` (billig, kein Indexbau nötig); (b) Registry-Events (`entity_registry_updated`, `device_registry_updated`, `area_registry_updated`) und jeder Indexbau – `unique_id`, effektiver Bereich (`entity.area_id or device.area_id`), Existenz. Abweichung → `status=needs_review` + `policy_version`+1 + Audit `binding.needs_review` + `policy.changed`; Umbenennung (`entity_id` neu, `unique_id` gleich) → `entity_id` aktualisieren + Audit `binding.renamed`; Entity verschwunden → `needs_review`.
+- [ ] **Hinweise aus WP3 (Index-Review, verbindlich):** Index und Kontext aus derselben `policy_version` bauen und dem Index seine Version mitgeben; ALLE gebundenen Rollenversionen laden, sonst wirft `rules_for()` (`ValueError`, fail closed); Fences per SQL nach Scope filtern und beim Schreiben validieren (heute lässt eine kaputte Fence-Zeile jeden Kontext scheitern); Zuweisungen und Fences sortiert laden (Reihenfolge landet in `matched`); Fähigkeiten aus gespeichertem JSON laufen durch die strengere Grenzregel des Index (Grenzen ≥ 1e6 → nichts erlaubt); Temperaturregeln beim Speichern aufs 0,1-Raster und Prozentregeln auf ganze Zahlen prüfen; Drift erst prüfen, wenn `temperature_unit` bekannt ist, Zustände mit `availability == "offline"` überspringen; `blocked` fällt nie auf `needs_review` zurück.
 - [ ] **Step 2: Tests:** Index enthält bestätigte, nicht `blocked`; neue Version → neuer Index; `adapter_locked` propagiert; `policy_version`-Änderung durch einen zweiten Prozess (direktes DB-Update im Test) wird beim nächsten `index()` bemerkt; `test_a14_new_entity_in_area_not_granted`; `test_a16_capability_change_marks_needs_review` (`_sim/entity/attributes supported_features` → über `state_changed` innerhalb 1 s `needs_review`, Schreiben `UPSTREAM_UNAVAILABLE`, Lesen weiter); `test_a16_area_change_marks_needs_review` (Bereich über das Gerät geändert); `test_a15_replaced_device_marks_needs_review` (`registry/replace`); `test_rename_keeps_binding`.
 - [ ] **Step 3–4:** Commit `feat(policy): index loader with versioned cache and registry drift detection (A14-A16)`.
 
@@ -109,6 +112,7 @@ scripts/check-no-external.mjs
 - Create: `myha_gateway/projection/schema.py`, `projection/dashboard.py`, `api/public/dashboard.py`
 - Test: `tests/acceptance/test_matrix_projection.py`
 
+- [ ] **Hinweise aus WP3 (verbindlich):** `effective_capability`/`grant_intervals` liefern `None` für geräte-unmögliche Schreibaktionen, `history.read`, `blocked` und `needs_review`+Schreiben; die Projektion blendet `blocked` aus, bietet bei `needs_review` nur Lesen an und behandelt leere Intervalle oder ein leeres `allowed` als „kein Bedienelement“; Explain zeigt nur `index.fences()` der konkreten Ressource (`ctx.fences` enthält die Unit-Fences aller Units); Grenzen sind bereits aufs Raster geschnappt (Schritt = kgV aus Grant- und Geräteschritt).
 - [ ] **Step 1: Verhalten.** `project_dashboard(ctx, index, ha, layout, now) -> DashboardView`: Räume = Units im Scope mit ≥ 1 sichtbarer Ressource; sichtbar = `metadata.read` erlaubt; `state` nur mit `state.read` (Positivliste je Kind: light `power, level_pct`; climate `current_c, target_c, hvac_mode`; cover `position_pct, cover_state`; sensor `value, unit`; alle `availability, observed_at`); `capabilities` nur für erlaubte Schreibaktionen (`intervals` mit `step`/`origin`, `allowed`); `label`/`icon` aus Binding; **nie** `entity_id`, HA-Attribute, Kontext-IDs; Reihenfolge aus `dashboard.layout`, sonst Bindungsreihenfolge; `status` des Dashboards `online|waiting|expired` aus Fenster/Session. `GET /api/v1/dashboard` (Session) → `DashboardView` plus `policy_version`; im Zustand `waiting` leere Räume.
 - [ ] **Step 2: Tests:** `test_a06_projection_hides_foreign_rooms_and_entity_ids` (JSON enthält weder `light.` noch `climate.` noch `camera`), `test_a21_cache_keys_separate_principals`, `test_state_hidden_without_state_read`, `test_capabilities_reflect_fence`, `test_a24_waiting_dashboard_is_empty`, `test_a27_no_history_fields` (keine Historienfelder, `history.read` nie projiziert).
 - [ ] **Step 3–4:** Commit `feat(projection): allow-listed dashboard projection and endpoint`.
@@ -141,6 +145,8 @@ scripts/check-no-external.mjs
 ## WP7 – Preview und Simulation
 
 ### Task 7.1: Preview-Service und Admin-API
+
+> Hinweis aus WP3: Bei der Vorschau eines Principals ist `principal_ref` dessen echte ID; Audit und Rate-Limits müssen zusätzlich `purpose` auswerten. Vorschauen mit `session_id` akzeptieren nur `access`-Sessions.
 
 **Files:**
 - Create: `myha_gateway/services/preview.py`, `api/admin/preview.py`
