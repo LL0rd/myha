@@ -1,8 +1,10 @@
 # S0 report – compatibility evidence
 
-Status: in progress (WP1). This file records what was actually verified against real systems before the design
-is treated as settled (design §1, phase S0). Entries marked **open** still need the reference installation
-(a HAOS 18.x amd64 VM with Supervisor 2026.10.x) or a real device.
+Status: WP1 left open by operator decision on 2026-10-22. The operator declined the mutating S0 steps on the
+reference installation for now, so Plan 2 starts without them. This file records what was actually verified
+against real systems (design §1, phase S0). Entries marked **open** still need the reference installation
+(a HAOS 18.x amd64 VM with Supervisor 2026.10.x) or a real device; the `s0-probe` branch stays available for a
+later run. Until then rate limits, audit folding and the restore design rest on unverified assumptions 11, 12 and 14.
 
 | # | Assumption (design) | Evidence | Result | Consequence |
 |---|---|---|---|---|
