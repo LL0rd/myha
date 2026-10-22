@@ -1,6 +1,7 @@
 """The two ASGI apps: admin (Supervisor ingress only) and public (guests)."""
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
 from myha_gateway.ha.supervisor import SupervisorUnavailable
 from myha_gateway.limits import BodyLimitMiddleware
+from myha_gateway.services.timeguard import TimeGuard, system_audit
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
 
 logger = logging.getLogger(__name__)
@@ -99,14 +101,22 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("startup aborted: database %s is not usable", ctx.settings.db_path)
         await ctx.close()
         raise RuntimeError("database not usable") from None  # uvicorn logs this short copy
+    guard_task: asyncio.Task[None] | None = None
     try:
         if reason := ctx.refresh_public():
             logger.warning("public listener off: %s", reason)
+        if ctx.instance is not None:  # restore mode without a row has no clock to guard
+            ctx.timeguard = TimeGuard(ctx.engine, ctx.supervisor.host_info, system_audit)
+            guard_task = asyncio.create_task(ctx.timeguard.run(), name="timeguard")
         # Side by side, so that a slow Supervisor (5 s timeout) adds nothing to the HA start;
         # neither raises: an unreachable Core is logged and retried, never fatal.
         await asyncio.gather(ctx.ha.start(), _log_supervisor(ctx))
         yield
     finally:  # also after an aborted startup; stop() tolerates a client that never started
+        if guard_task is not None:
+            guard_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await guard_task
         await ctx.ha.stop()
         await ctx.close()
 

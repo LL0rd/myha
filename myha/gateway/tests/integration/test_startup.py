@@ -544,6 +544,9 @@ class BrokenSupervisor:
     async def info(self) -> None:
         raise RuntimeError("unexpected answer")
 
+    async def host_info(self) -> None:  # the time guard asks too; no host time source
+        return None
+
 
 async def test_a_failing_supervisor_check_never_stops_the_startup(
     tmp_path: Path, caplog: pytest.LogCaptureFixture

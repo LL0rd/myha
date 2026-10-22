@@ -16,9 +16,10 @@ from myha_gateway.db import (
     session_factory,
     write_session,
 )
+from myha_gateway.db.models import AuditEvent as AuditRow
 from myha_gateway.db.models import Instance
 from myha_gateway.ha.supervisor import HostInfo, SupervisorUnavailable
-from myha_gateway.services.timeguard import TimeGuard
+from myha_gateway.services.timeguard import TimeGuard, system_audit
 
 MARK = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 
@@ -207,3 +208,13 @@ async def test_no_write_session_when_nothing_is_due(engine: AsyncEngine) -> None
     assert await timeguard.check(MARK - timedelta(minutes=9), 240.0) is False
     assert await timeguard.check(MARK - timedelta(minutes=8), 300.0) is False
     assert len(begins) == 1  # still untrusted, nothing due
+
+
+async def test_system_audit_writes_the_transition(engine: AsyncEngine) -> None:
+    timeguard = TimeGuard(engine, None, system_audit)
+    assert await timeguard.check(MARK - timedelta(minutes=1), 1.0) is False
+    async with session_factory(engine)() as session:
+        rows = (await session.execute(select(AuditRow))).scalars().all()
+    assert [(row.actor, row.operation, row.result) for row in rows] == [
+        ("system", "time.untrusted", "ok")
+    ]

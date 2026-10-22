@@ -16,8 +16,11 @@ once on a trust transition or a reset. A restart therefore checks against a mark
 minutes old.
 """
 
+import asyncio
+import logging
+import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -25,12 +28,21 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from myha_gateway.db import session_factory, write_session
 from myha_gateway.db.models import Instance
 from myha_gateway.ha.supervisor import HostInfo, SupervisorUnavailable
+from myha_gateway.services.audit import AuditEvent, audit
 
+logger = logging.getLogger(__name__)
+
+CHECK_INTERVAL_S = 60.0  # read on every round, so tests can shorten it
 MAX_JUMP = timedelta(seconds=60)
 PERSIST_EVERY = timedelta(minutes=5)
 
 HostInfoSource = Callable[[], Awaitable[HostInfo | None]]
 AuditWriter = Callable[[AsyncSession, str], Awaitable[None]]  # (session, operation)
+
+
+async def system_audit(session: AsyncSession, operation: str) -> None:
+    """Audit a trust transition as the system; the guard's ``audit`` in production."""
+    await audit(session, AuditEvent(actor="system", operation=operation, result="ok"))
 
 
 class TimeGuard:
@@ -78,6 +90,15 @@ class TimeGuard:
                 await self._audit(session, "time.trusted" if trusted else "time.untrusted")
         self._stored = (self._mark, trusted)
         return trusted
+
+    async def run(self) -> None:
+        """Check now and then every ``CHECK_INTERVAL_S`` until cancelled; failures are logged."""
+        while True:
+            try:
+                await self.check(datetime.now(UTC), time.monotonic())
+            except Exception:  # the next round tries again; the flag keeps its last value
+                logger.exception("time plausibility check failed")
+            await asyncio.sleep(CHECK_INTERVAL_S)
 
     async def _synchronized(self) -> bool | None:
         """``dt_synchronized`` from the Supervisor; None when unknown or unreachable."""
