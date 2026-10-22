@@ -7,26 +7,22 @@ and the first that fails decides.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, DecimalException
+from decimal import Context, Decimal, DecimalException
+from types import MappingProxyType
 from typing import Any
 
-from myha_gateway.adapters.base import (
-    WRITE_ACTIONS,
-    Action,
-    DeviceCapabilities,
-    StateView,
-)
+from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities, StateView
 from myha_gateway.adapters.registry import adapter_for
 from myha_gateway.policy.codes import DecisionCode, PublicError, public_error
 from myha_gateway.policy.context import EffectiveContext
 from myha_gateway.policy.index import PolicyIndex
 from myha_gateway.policy.model import (
-    PARAM_SCHEMA,
     Bound,
     Fence,
     Grant,
     Interval,
     ParamSchemaError,
+    parameter_name,
     parse_params,
 )
 
@@ -39,14 +35,17 @@ _MESSAGES: Mapping[PublicError | None, str] = {
     PublicError.ACCESS_EXPIRED: "The access is not active at this time.",
     PublicError.UPSTREAM_UNAVAILABLE: "The device cannot be used right now.",
 }
+_CONTEXT = Context(prec=28)  # independent of the caller's decimal context
+# open and close drive a cover to one end, which its position range must allow (design §4.1)
+_COVER_ENDS = {Action.COVER_OPEN: Decimal(100), Action.COVER_CLOSE: Decimal(0)}
 
 
 @dataclass(frozen=True)
 class Decision:
     allowed: bool
     code: DecisionCode
-    public_code: str | None  # None exactly when allowed
-    normalized_params: dict[str, Any]  # from the parsed model; empty before or without parsing
+    public_code: PublicError | None  # None exactly when allowed
+    normalized_params: Mapping[str, Any]  # read-only, from the parsed model; empty unparsed
     matched: tuple[str, ...]  # the grants that allow the request; empty for every denial
     message: str  # public-safe, never client input
     check_range: tuple[Decimal, Decimal] | None = None  # set_mode cool/heat (E7), when allowed
@@ -63,18 +62,25 @@ def decide(
     *,
     execute: bool = False,
 ) -> Decision:
-    """Whether ``ctx`` may do ``action`` with ``params`` on the resource at ``now`` (aware).
+    """Whether ``ctx`` may do ``action`` with ``params`` on the resource at ``now``.
 
-    ``state_view`` is the adapter's view of the device, ``None`` while unknown; ``execute`` marks
-    the endpoints that act, where a preview context is refused.
+    ``state_view`` is the adapter's view of the device; without one a write counts as locked
+    and the target as unknown. ``execute`` marks the endpoints that act, where a preview
+    context is refused.
+
+    Raises ``ValueError`` for a naive ``now`` and, from the index, for a role version it does
+    not know; ``TypeError`` for an unhashable ``resource_id``. The API layer answers every
+    exception with a 500 and acts on nothing, so each of them fails closed.
     """
+    if now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
     code = _window_code(ctx, now, execute)
     if code is not None:
         return _denial(code)
     resource = index.resource(resource_id)
     if resource is None or not index.in_scope(ctx, resource_id):
         return _denial(DecisionCode.RESOURCE_NOT_IN_SCOPE)
-    if resource.status == "blocked":  # hidden completely, reads included
+    if resource.status not in ("confirmed", "needs_review"):  # blocked or unknown: hidden
         return _denial(DecisionCode.RESOURCE_UNCONFIRMED)
     try:
         act = Action(action)
@@ -84,7 +90,7 @@ def decide(
         parsed = parse_params(act, params)
     except ParamSchemaError:
         return _denial(DecisionCode.PARAM_SCHEMA)
-    name = next(iter(PARAM_SCHEMA[act].model_fields), None)  # every schema has at most one
+    name = parameter_name(act)
     value: Any = None if name is None else getattr(parsed, name)
     normalized = parsed.model_dump()
     if name == "target_c":
@@ -95,7 +101,9 @@ def decide(
     needed = adapter_for(capabilities.kind).required_actions(act, normalized) | {act}
     if any(index.denied(ctx, resource_id, need) for need in needed):
         return _denial(DecisionCode.DENIED_BY_RULE, normalized)
-    grants = index.grants(ctx, resource_id, act) or _implied(ctx, index, resource_id, act)
+    grants = index.grants(ctx, resource_id, act) or _implied(
+        ctx, index, resource_id, act, capabilities
+    )
     others = [index.grants(ctx, resource_id, need) for need in sorted(needed - {act})]
     if not grants or not all(others):
         return _denial(DecisionCode.NO_GRANT, normalized)
@@ -106,6 +114,8 @@ def decide(
     elif name is not None:
         cuts = index.grant_intervals(ctx, resource_id, act)
         code, allowing = _number_code(name, Decimal(value), cuts, fences)
+    elif act in _COVER_ENDS:
+        code, allowing = _cover_end_code(ctx, index, resource_id, act), tuple(grants)
     else:
         code, allowing = None, tuple(grants)
     if code is not None:
@@ -115,7 +125,7 @@ def decide(
     # No device offers history in the MVP (design §4.1), whatever a role grants.
     if act is Action.HISTORY_READ or (write and act not in capabilities.actions):
         return _denial(DecisionCode.CAPABILITY_MISSING, normalized)
-    if write and resource.status == "needs_review":
+    if write and resource.status != "confirmed":
         return _denial(DecisionCode.RESOURCE_NEEDS_REVIEW, normalized)
     check_range = None
     if act is Action.CLIMATE_SET_MODE and value != "off":
@@ -123,17 +133,22 @@ def decide(
         if ranges is not None:
             # In one range, gaps between grants excluded; unknown or no range: outside (E7).
             target = None if state_view is None else state_view.target_c
-            if target is None or not any(low <= target <= high for low, high in ranges):
+            if (
+                target is None
+                or not target.is_finite()
+                or not any(low <= target <= high for low, high in ranges)
+            ):
                 return _denial(DecisionCode.MODE_WOULD_BYPASS_FENCE, normalized)
             check_range = min(low for low, _ in ranges), max(high for _, high in ranges)
-    if write and state_view is not None and state_view.adapter_locked:
+    # No view: the state is unknown, as right after a reconnect, while HA writes stay locked.
+    if write and (state_view is None or state_view.adapter_locked):
         return _denial(DecisionCode.ADAPTER_LOCKED, normalized)
     matched = dict.fromkeys([*allowing, *(grant_id for more in others for grant_id in more)])
     return Decision(
         allowed=True,
         code=DecisionCode.GRANTED,
         public_code=None,
-        normalized_params=normalized,
+        normalized_params=MappingProxyType(normalized),
         matched=tuple(matched),
         message=_MESSAGES[None],
         check_range=check_range,
@@ -142,7 +157,8 @@ def decide(
 
 def _denial(code: DecisionCode, normalized: Mapping[str, Any] | None = None) -> Decision:
     public = public_error(code)
-    return Decision(False, code, public, dict(normalized or {}), (), _MESSAGES[public])
+    params = MappingProxyType(dict(normalized or {}))
+    return Decision(False, code, public, params, (), _MESSAGES[public])
 
 
 def _window_code(ctx: EffectiveContext, now: datetime, execute: bool) -> DecisionCode | None:
@@ -163,15 +179,25 @@ def _window_code(ctx: EffectiveContext, now: datetime, execute: bool) -> Decisio
 
 
 def _implied(
-    ctx: EffectiveContext, index: PolicyIndex, resource_id: str, action: Action
+    ctx: EffectiveContext,
+    index: PolicyIndex,
+    resource_id: str,
+    action: Action,
+    capabilities: DeviceCapabilities,
 ) -> dict[str, Grant]:
-    """``metadata.read`` follows from every other action granted and not denied."""
+    """``metadata.read`` follows from ``state.read`` or a write the device can do (design §4.1).
+
+    Granted and not denied, also under ``needs_review``; ``history.read`` and writes the device
+    cannot do show nothing.
+    """
     if action is not Action.METADATA_READ:
         return {}
     return {
         grant_id: grant
         for other in Action
-        if other is not action and not index.denied(ctx, resource_id, other)
+        # capabilities.actions holds only the writes the device can do, never history
+        if (other is Action.STATE_READ or other in capabilities.actions)
+        and not index.denied(ctx, resource_id, other)
         for grant_id, grant in index.grants(ctx, resource_id, other).items()
     }
 
@@ -218,6 +244,25 @@ def _number_code(
     return None, allowing
 
 
+def _cover_end_code(
+    ctx: EffectiveContext, index: PolicyIndex, resource_id: str, action: Action
+) -> DecisionCode | None:
+    """The end ``cover.open`` or ``cover.close`` drives to inside the position range (as E7).
+
+    The set_position grants' intervals count unless set_position is denied, then its fences;
+    with neither a grant nor a fence for the position there is nothing to check.
+    """
+    end, position = _COVER_ENDS[action], Action.COVER_SET_POSITION
+    if not index.denied(ctx, resource_id, position):
+        cuts = index.grant_intervals(ctx, resource_id, position)
+        if cuts and not any(interval.contains(end) for cut in cuts.values() for interval in cut):
+            return DecisionCode.PARAM_OUT_OF_RANGE
+    bounds = [fence.parameters.position_pct for fence in index.fences(ctx, resource_id, position)]
+    if any(bound is not None and not bound.contains(end) for bound in bounds):
+        return DecisionCode.FENCE_VIOLATION
+    return None
+
+
 def _on_step(interval: Interval, value: Decimal) -> bool:
     try:
         return interval.on_step(value)
@@ -227,4 +272,4 @@ def _on_step(interval: Interval, value: Decimal) -> bool:
 
 def _canonical(value: Decimal) -> str:
     """One spelling per number: ``22`` for 22.0 and 2E+1, ``5`` for 05, ``0`` for -0.0."""
-    return format(value.normalize(), "f") if value else "0"
+    return format(value.normalize(_CONTEXT), "f") if value else "0"

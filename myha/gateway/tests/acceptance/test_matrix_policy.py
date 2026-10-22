@@ -19,6 +19,8 @@ from myha_gateway.policy.decide import Decision, decide
 from myha_gateway.policy.index import PolicyIndex
 from tests.helpers import (
     DURING_STAY,
+    LIVING_ROOM,
+    ROOM_203,
     ROOM_GUEST_GRANTS,
     STAY_END,
     STAY_START,
@@ -42,8 +44,13 @@ def check(
     view: StateView | None = None,
     execute: bool = False,
 ) -> Decision:
-    """The decision for the guest of room 203 during the stay, unless told otherwise."""
+    """The decision for the guest of room 203 during the stay, unless told otherwise.
+
+    Without ``view``, a known resource shows its fixture state; an unknown one has none.
+    """
     context = guest_context() if ctx is None else ctx
+    if view is None and resource in ROOM_203 | LIVING_ROOM:
+        view = fixture_view(resource)
     return decide(context, index, resource, action, params or {}, now, view, execute=execute)
 
 
@@ -234,6 +241,39 @@ def test_a17_cover_position_requires_both_directions() -> None:
     assert position(40) is Code.NO_GRANT
 
 
+def test_a17b_open_and_close_stay_inside_the_position_range() -> None:
+    """cover.open drives to 100, cover.close to 0: a position range must allow that end."""
+    at_most_half = {
+        "scope_type": "stay",
+        "scope_id": "stay_203",
+        "action": "cover.set_position",
+        "parameters": {"position_pct": {"min": "0", "max": "50"}},
+    }
+    fenced = guest_context(at_most_half)
+
+    def move(action: str, params: dict[str, int] | None = None, **kwargs: Any) -> Code:
+        return check(action, params, resource="res_203_blind", **kwargs).code
+
+    assert (move("cover.open"), move("cover.close")) == (Code.GRANTED, Code.GRANTED)  # no rule
+    assert move("cover.open", ctx=fenced) is Code.FENCE_VIOLATION
+    assert move("cover.close", ctx=fenced) is Code.GRANTED
+    assert move("cover.set_position", {"position_pct": 40}, ctx=fenced) is Code.GRANTED
+    assert move("cover.stop", ctx=fenced) is Code.GRANTED  # stopping moves nowhere
+    middle = {
+        "resources": ["res_203_blind"],
+        "actions": ["cover.set_position"],
+        "parameters": {"position_pct": {"intervals": [{"min": "20", "max": "80", "step": "1"}]}},
+    }
+    ends = {"resources": ["res_203_blind"], "actions": ["cover.open", "cover.close"]}
+    ranged = room203_index(grants=[middle, ends])
+    assert move("cover.open", index=ranged) is Code.PARAM_OUT_OF_RANGE
+    assert move("cover.close", index=ranged) is Code.PARAM_OUT_OF_RANGE
+    # without a set_position grant the fence alone bounds the ends, as for the mode rule
+    no_position = room203_index(grants=[ends])
+    assert move("cover.open", index=no_position, ctx=fenced) is Code.FENCE_VIOLATION
+    assert move("cover.close", index=no_position, ctx=fenced) is Code.GRANTED
+
+
 AC_GRANTS = (
     temperature_grant(("19", "24", "0.5"), resource="res_lr_ac"),
     {
@@ -330,6 +370,9 @@ def test_time_untrusted_blocks_stays_only() -> None:
     guest = check("light.on", ctx=guest_context(time_trusted=False))
     assert (guest.code, guest.public_code) == (Code.TIME_UNTRUSTED, "UPSTREAM_UNAVAILABLE")
     assert check("light.on", ctx=resident_context(time_trusted=False)).code is Code.GRANTED
+    # a resident's session expiry is a window too, yet only a stay needs trusted time
+    expiring = resident_context(time_trusted=False, not_after=STAY_END)
+    assert check("light.on", ctx=expiring).code is Code.GRANTED
 
 
 def test_preview_context_rejected_on_execute() -> None:

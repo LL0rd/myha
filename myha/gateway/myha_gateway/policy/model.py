@@ -96,6 +96,11 @@ PARAM_SCHEMA: Mapping[Action, type[BaseModel]] = {action: NoParams for action in
 }
 
 
+def parameter_name(action: Action) -> str | None:
+    """The one parameter ``action`` takes, such as ``target_c``; ``None`` if it takes none."""
+    return next(iter(PARAM_SCHEMA[action].model_fields), None)
+
+
 class ParamSchemaError(ValueError):
     """Request parameters that do not match the schema of the action (``PARAM_SCHEMA``)."""
 

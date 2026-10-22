@@ -201,7 +201,8 @@ def _resource(
     )
     confirmed = capabilities.hvac_modes & {"off", "cool", "heat"} if modes is None else modes
     capabilities = replace(capabilities, confirmed_modes=frozenset(confirmed))
-    status = status or ("blocked" if capabilities.blocked_reason else "confirmed")
+    if status is None:  # "" is a status too: an unknown one, which decide must refuse
+        status = "blocked" if capabilities.blocked_reason else "confirmed"
     return ResourceRef(resource_id, unit_id, kind, status, capabilities)
 
 

@@ -3,13 +3,13 @@
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any
 
 import pytest
 
 from myha_gateway.adapters.base import Action, StateView
-from myha_gateway.policy.codes import EVALUATION_ORDER, PUBLIC_CODE
+from myha_gateway.policy.codes import EVALUATION_ORDER, PUBLIC_CODE, PublicError
 from myha_gateway.policy.codes import DecisionCode as Code
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.decide import Decision, decide
@@ -149,6 +149,32 @@ def test_a_revoked_or_expired_session_is_inactive() -> None:
     assert run(index, "res_203_light", "state.read", ctx=resident_context(not_before=NOW)).allowed
 
 
+@pytest.mark.parametrize("status", ["pending", "", "Blocked"])
+def test_an_unknown_binding_status_hides_the_resource(status: str) -> None:
+    index = room203_index(status={"res_203_light": status})  # type: ignore[dict-item]
+    for action in ("metadata.read", "state.read", "light.on"):
+        decision = run(index, "res_203_light", action)
+        assert (decision.code, decision.public_code) == (Code.RESOURCE_UNCONFIRMED, "NOT_FOUND")
+
+
+def test_without_a_state_view_writes_count_as_locked() -> None:
+    """The client locks after every reconnect, which is exactly when the state is missing."""
+    index = room203_index()
+
+    def unseen(action: str) -> Code:
+        return decide(guest_context(), index, "res_203_light", action, {}, NOW, None).code
+
+    assert unseen("light.on") is Code.ADAPTER_LOCKED
+    assert unseen("state.read") is Code.GRANTED
+
+
+def test_now_must_be_timezone_aware() -> None:
+    naive = NOW.replace(tzinfo=None)
+    for ctx in (guest_context(), resident_context()):  # a resident has no window to compare
+        with pytest.raises(ValueError, match="timezone-aware"):
+            decide(ctx, room203_index(), "res_203_light", "state.read", {}, naive, None)
+
+
 # --- implicit metadata.read ---
 
 
@@ -169,6 +195,18 @@ def test_metadata_read_is_not_implied_by_denied_actions_and_can_be_denied_itself
     no_labels = {"resources": ["res_203_light"], "actions": ["metadata.read"]}
     hidden = room203_index(grants=[grant("res_203_light", "light.on")], denies=[no_labels])
     assert run(hidden, "res_203_light", "metadata.read").code is Code.DENIED_BY_RULE
+
+
+def test_metadata_read_follows_only_from_state_read_or_a_write_the_device_can_do() -> None:
+    history = room203_index(grants=[grant("res_203_light", "history.read")], denies=[])
+    assert run(history, "res_203_light", "metadata.read").code is Code.NO_GRANT
+    dimming = room203_index(grants=[grant("res_203_bedside", "light.set_level")])  # on/off only
+    assert run(dimming, "res_203_bedside", "metadata.read").code is Code.NO_GRANT
+    review = room203_index(
+        grants=[grant("res_203_light", "light.off")], status={"res_203_light": "needs_review"}
+    )
+    assert run(review, "res_203_light", "metadata.read").code is Code.GRANTED  # read-only now
+    assert run(review, "res_203_light", "light.off").code is Code.RESOURCE_NEEDS_REVIEW
 
 
 # --- normalized parameters and matched grants ---
@@ -201,6 +239,24 @@ def test_normalized_params_keep_ints_and_stay_empty_without_a_valid_body() -> No
     as_float = run(index, "res_203_light", "light.set_level", {"level_pct": 4e1})
     assert (as_float.code, as_float.normalized_params) == (Code.PARAM_SCHEMA, {})
     assert run(index, "res_lr_x", "light.set_level", {"level_pct": 40}).normalized_params == {}
+
+
+def test_normalization_ignores_the_callers_decimal_context() -> None:
+    index = room203_index()
+    with localcontext(prec=2):  # would round 21.5 to 22
+        decision = run(index, "res_203_trv", "climate.set_temperature", {"target_c": "21.5"})
+    assert (decision.code, decision.normalized_params["target_c"]) == (Code.GRANTED, "21.5")
+
+
+def test_a_decision_is_read_only() -> None:
+    index = room203_index()
+    level = run(index, "res_203_light", "light.set_level", {"level_pct": 40})
+    with pytest.raises(TypeError):
+        level.normalized_params["level_pct"] = 100  # type: ignore[index]
+    denial = run(index, "res_203_light", "light.set_level", {"level_pct": 101})
+    with pytest.raises(TypeError):
+        denial.normalized_params["level_pct"] = 100  # type: ignore[index]
+    assert denial.public_code is PublicError.INVALID_PARAMETERS
 
 
 def test_matched_names_every_contributing_grant_once() -> None:
@@ -473,3 +529,85 @@ def test_granted_but_nothing_admissible_is_out_of_range_or_fenced_never_no_grant
     assert inside_grant.code is Code.FENCE_VIOLATION
     outside = run(index, "res_203_trv", "climate.set_temperature", {"target_c": "26"}, above)
     assert outside.code is Code.PARAM_OUT_OF_RANGE
+
+
+# --- several fences, non-finite targets and the modes against the effective capability ---
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_every_fence_narrows_whatever_their_order(reverse: bool) -> None:
+    def fence(action: str, scope: tuple[str, str | None], **rule: Any) -> dict[str, Any]:
+        return {"scope_type": scope[0], "scope_id": scope[1], "action": action, "parameters": rule}
+
+    fences = [
+        fence("climate.set_temperature", ("instance", None), target_c={"min": "0", "max": "24"}),
+        fence("climate.set_temperature", ("unit", "unit_lr"), target_c={"min": "0", "max": "22"}),
+        fence("climate.set_mode", ("instance", None), mode={"allowed": ["off", "heat"]}),
+        fence("climate.set_mode", ("principal", "prn_res"), mode={"allowed": ["off", "cool"]}),
+    ]
+    ctx = resident_context(*(reversed(fences) if reverse else fences))
+    index = room203_index(
+        grants=[grant("res_lr_ac", "climate.set_temperature", "climate.set_mode")]
+    )
+
+    def code(action: str, **params: str) -> Code:
+        return run(index, "res_lr_ac", action, params, ctx).code
+
+    assert code("climate.set_temperature", target_c="23") is Code.FENCE_VIOLATION
+    assert code("climate.set_temperature", target_c="22") is Code.GRANTED
+    assert code("climate.set_mode", mode="heat") is Code.FENCE_VIOLATION
+    assert code("climate.set_mode", mode="off") is Code.GRANTED
+
+
+@pytest.mark.parametrize("target", ["NaN", "sNaN", "Infinity", "-Infinity"])
+def test_a_non_finite_target_counts_as_outside(target: str) -> None:
+    temperature = grant("res_lr_ac", "climate.set_temperature", target_c=interval("19", "24", "1"))
+    index = room203_index(grants=[temperature, grant("res_lr_ac", "climate.set_mode")])
+    view = fixture_view("res_lr_ac", target_c=Decimal(target))
+    params = {"mode": "heat"}
+    decision = decide(resident_context(), index, "res_lr_ac", "climate.set_mode", params, NOW, view)
+    assert decision.code is Code.MODE_WOULD_BYPASS_FENCE
+
+
+@pytest.mark.parametrize(
+    ("grants", "fence_modes", "confirmed"),
+    [
+        ([grant("res_lr_ac", "climate.set_mode")], [], None),
+        (
+            [grant("res_lr_ac", "climate.set_mode", mode={"allowed": ["off", "heat"]})],
+            [["off", "cool"]],
+            None,
+        ),
+        (
+            [
+                grant("res_lr_ac", "climate.set_mode", mode={"allowed": ["off"]}),
+                grant("res_lr_ac", "climate.set_mode", mode={"allowed": ["cool"]}),
+            ],
+            [],
+            None,
+        ),
+        ([grant("res_lr_ac", "climate.set_mode")], [], ("heat",)),
+        ([grant("res_lr_ac", "climate.set_mode")], [], ()),
+    ],
+)
+def test_modes_allowed_are_exactly_the_effective_capability(
+    grants: list[dict[str, Any]], fence_modes: list[list[str]], confirmed: tuple[str, ...] | None
+) -> None:
+    index = room203_index(
+        grants=grants, modes=None if confirmed is None else {"res_lr_ac": confirmed}
+    )
+    ctx = resident_context(
+        *(
+            {
+                "scope_type": "instance",
+                "action": "climate.set_mode",
+                "parameters": {"mode": {"allowed": allowed}},
+            }
+            for allowed in fence_modes
+        )
+    )
+    capability = index.effective_capability(ctx, "res_lr_ac", Action.CLIMATE_SET_MODE)
+    assert capability is not None
+    for mode in ("off", "cool", "heat", "dry"):
+        decision = run(index, "res_lr_ac", "climate.set_mode", {"mode": mode}, ctx)
+        assert decision.allowed is (mode in capability.allowed), f"{mode}: {decision.code}"
