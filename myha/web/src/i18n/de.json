@@ -7,7 +7,7 @@
   "status.expired": "Zugang beendet",
   "notice.stale": "Die Bedienung ist pausiert, bis die Verbindung zurück ist. Angezeigte Werte können veraltet sein.",
   "notice.waiting": "Ihr Aufenthalt hat noch nicht begonnen. Die Bedienung wird mit Beginn freigeschaltet.",
-  "notice.waiting_until": "Ihr Aufenthalt hat noch nicht begonnen. Die Bedienung wird am {time} freigeschaltet.",
+  "notice.waiting_until": "Ihr Aufenthalt hat noch nicht begonnen. Die Bedienung wird ab {time} freigeschaltet.",
   "notice.expired": "Dieser Zugang ist beendet.",
   "command.accepted": "Wird geprüft und gesendet…",
   "command.sent": "Von der Zentrale angenommen · wartet auf das Gerät",
@@ -64,5 +64,12 @@
   "theme.light": "Hell",
   "theme.dark": "Dunkel",
   "theme.contrast": "Hoher Kontrast",
-  "language.label": "Sprache"
+  "language.label": "Sprache",
+  "join.code_valid_until": "Code gültig bis {time}",
+  "join.access_ends": "Zugang endet {time}",
+  "notice.stale_cleared": "Die Verbindung ist seit einer Weile unterbrochen. Die Werte wurden entfernt, die Bedienung ist gesperrt, bis sie zurück ist.",
+  "dashboard.empty": "Noch nichts zu bedienen. Ihre Geräte erscheinen hier, sobald Ihr Aufenthalt beginnt.",
+  "dashboard.retry": "Erneut versuchen",
+  "language.de": "Deutsch",
+  "language.en": "English"
 }

@@ -3,8 +3,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ThemeProvider, useTheme } from "./ThemeProvider";
 import { ThemeSwitch } from "./ThemeSwitch";
 
+// A fake prefers-color-scheme query whose answer the test can flip.
 function prefersDark(dark: boolean) {
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: dark && query === "(prefers-color-scheme: dark)" }));
+  const listeners = new Set<() => void>();
+  const mq = {
+    matches: dark,
+    addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+    removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+  };
+  vi.stubGlobal("matchMedia", () => mq);
+  return (next: boolean) => {
+    mq.matches = next;
+    listeners.forEach((fn) => fn());
+  };
 }
 
 afterEach(() => {
@@ -15,25 +26,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("follows the system preference while nothing is stored", () => {
-  prefersDark(true);
-  expect(renderHook(() => useTheme()).result.current.theme).toBe("dark");
-  prefersDark(false);
-  expect(renderHook(() => useTheme()).result.current.theme).toBe("light");
-  // The CSS keeps following the system live, so nothing is pinned on <html>.
+it("follows the system preference live while nothing is stored", () => {
+  const flip = prefersDark(true);
+  const { result } = renderHook(() => useTheme());
+  expect(result.current.theme).toBe("system");
+  expect(result.current.resolved).toBe("dark");
+  act(() => flip(false));
+  expect(result.current.resolved).toBe("light");
+  // The CSS follows the system by itself, so nothing is pinned on <html>.
   expect(document.documentElement.dataset.theme).toBeUndefined();
 });
 
 it("a stored choice beats the system preference", () => {
   prefersDark(true);
   localStorage.setItem("myha.theme", "contrast");
-  expect(renderHook(() => useTheme()).result.current.theme).toBe("contrast");
+  const { result } = renderHook(() => useTheme());
+  expect(result.current.theme).toBe("contrast");
+  expect(result.current.resolved).toBe("contrast");
   expect(document.documentElement.dataset.theme).toBe("contrast");
 });
 
 it("the switch applies and persists the choice for everyone under the provider", () => {
   prefersDark(false);
-  const Shown = () => <output>{useTheme().theme}</output>;
+  const Shown = () => <output>{useTheme().resolved}</output>;
   render(
     <ThemeProvider>
       <ThemeSwitch />
@@ -47,6 +62,19 @@ it("the switch applies and persists the choice for everyone under the provider",
   expect(localStorage.getItem("myha.theme")).toBe("dark");
 });
 
+it("choosing system clears the stored choice and data-theme", () => {
+  const flip = prefersDark(false);
+  localStorage.setItem("myha.theme", "dark");
+  const { result } = renderHook(() => useTheme());
+  act(() => result.current.setTheme("system"));
+  expect(localStorage.getItem("myha.theme")).toBeNull();
+  expect(document.documentElement.dataset.theme).toBeUndefined();
+  expect(result.current.theme).toBe("system");
+  expect(result.current.resolved).toBe("light");
+  act(() => flip(true));
+  expect(result.current.resolved).toBe("dark");
+});
+
 it("works when storage is blocked", () => {
   prefersDark(false);
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
@@ -55,8 +83,13 @@ it("works when storage is blocked", () => {
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw new Error("blocked");
   });
+  vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
   const { result } = renderHook(() => useTheme());
-  expect(result.current.theme).toBe("light");
+  expect(result.current.resolved).toBe("light");
   act(() => result.current.setTheme("contrast"));
-  expect(result.current.theme).toBe("contrast");
+  expect(result.current.resolved).toBe("contrast");
+  act(() => result.current.setTheme("system"));
+  expect(result.current.theme).toBe("system");
 });

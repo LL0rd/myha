@@ -1,49 +1,62 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, useSyncExternalStore, type ReactNode } from "react";
 
-export const themes = ["light", "dark", "contrast"] as const;
+export const themes = ["system", "light", "dark", "contrast"] as const;
 export type Theme = (typeof themes)[number];
+export type ResolvedTheme = Exclude<Theme, "system">;
 
 interface ThemeState {
+  /** The choice; "system" while nothing is stored. */
   theme: Theme;
+  /** What is shown: the stored choice, else the system preference. */
+  resolved: ResolvedTheme;
   setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeState | null>(null);
 const KEY = "myha.theme";
+const QUERY = "(prefers-color-scheme: dark)";
 
-function stored(): Theme | null {
+const media = () => (typeof window.matchMedia === "function" ? window.matchMedia(QUERY) : null);
+const systemTheme = (): ResolvedTheme => (media()?.matches ? "dark" : "light");
+function subscribeSystem(onChange: () => void) {
+  const mq = media();
+  mq?.addEventListener("change", onChange);
+  return () => mq?.removeEventListener("change", onChange);
+}
+
+function stored(): Theme {
   try {
     const v = localStorage.getItem(KEY);
-    return themes.indexOf(v as Theme) >= 0 ? (v as Theme) : null;
+    return v !== "system" && themes.indexOf(v as Theme) >= 0 ? (v as Theme) : "system";
   } catch {
-    return null; // storage blocked (private mode)
+    return "system"; // storage blocked (private mode)
   }
 }
 
-const systemTheme = (): Theme =>
-  typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+// "system" leaves <html> without data-theme, so tokens.css follows the OS live.
+function apply(theme: Theme) {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+}
 
-const apply = (theme: Theme) => {
-  document.documentElement.dataset.theme = theme;
-};
-
-// Stored choice, else the system preference. Without a choice <html> carries no data-theme, so tokens.css follows the system live.
 function useThemeState(): ThemeState {
   const [theme, set] = useState<Theme>(() => {
     const choice = stored();
-    if (choice) apply(choice);
-    return choice ?? systemTheme();
+    apply(choice);
+    return choice;
   });
+  const system = useSyncExternalStore(subscribeSystem, systemTheme);
   const setTheme = (next: Theme) => {
     apply(next);
     try {
-      localStorage.setItem(KEY, next);
+      if (next === "system") localStorage.removeItem(KEY);
+      else localStorage.setItem(KEY, next);
     } catch {
       // not persisted in private mode; the choice holds for this page
     }
     set(next);
   };
-  return { theme, setTheme };
+  return { theme, resolved: theme === "system" ? system : theme, setTheme };
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {

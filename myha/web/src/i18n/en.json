@@ -64,5 +64,12 @@
   "theme.light": "Light",
   "theme.dark": "Dark",
   "theme.contrast": "High contrast",
-  "language.label": "Language"
+  "language.label": "Language",
+  "join.code_valid_until": "Code valid until {time}",
+  "join.access_ends": "Access ends {time}",
+  "notice.stale_cleared": "The connection has been lost for a while. Values were removed and controls are locked until it is back.",
+  "dashboard.empty": "Nothing to control yet. Your devices appear here once your stay begins.",
+  "dashboard.retry": "Try again",
+  "language.de": "Deutsch",
+  "language.en": "English"
 }
