@@ -1,14 +1,15 @@
 """The audit writer: one ``audit_event`` row per event, never a secret (design §5, §9).
 
-Folding repeated denials into ``aggregate_count`` comes later; for now every event is a row.
+With ``aggregate=True`` a denial folds into the row of the same minute and fold key instead.
 """
 
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from myha_gateway.db.models import AuditEvent as AuditRow
@@ -71,13 +72,43 @@ class AuditEvent:
             raise ValueError("anon_key is longer than 128 characters")
 
 
-async def audit(session: AsyncSession, event: AuditEvent) -> None:
-    """Add the event to the caller's write session; the caller's transaction commits it."""
+async def audit(session: AsyncSession, event: AuditEvent, *, aggregate: bool = False) -> None:
+    """Add the event to the caller's write session; the caller's transaction commits it.
+
+    ``aggregate`` folds a denial (any result but ``ok``) into the row with the same fold key in
+    the same UTC minute, counting it in ``aggregate_count``; that row keeps its first ``ts``.
+    The fold key is ``(session_id, operation, result, reason_code)``, or ``anon_key`` for an
+    anonymous event (no session): SQL ``=`` never matches NULL, so those need a NULL-free key.
+    """
     _check_keys(event.normalized_params)  # the mapping may have changed since the event was made
+    now = datetime.now(UTC)
+    if aggregate and event.result != "ok":
+        if event.session_id is None and event.anon_key is None:
+            raise ValueError("an anonymous denial folds only with an anon_key")
+        minute = now.replace(second=0, microsecond=0)
+        same = [AuditRow.ts >= minute, AuditRow.ts < minute + timedelta(minutes=1)]
+        if event.session_id is None:
+            same.append(AuditRow.anon_key == event.anon_key)
+        else:
+            same += [
+                AuditRow.session_id == event.session_id,
+                AuditRow.operation == event.operation,
+                AuditRow.result == event.result,
+                AuditRow.reason_code.is_not_distinct_from(event.reason_code),
+            ]
+        first = select(AuditRow.id).where(*same).order_by(AuditRow.id).limit(1).scalar_subquery()
+        folded = await session.execute(
+            update(AuditRow)
+            .where(AuditRow.id == first)
+            .values(aggregate_count=AuditRow.aggregate_count + 1)
+            .returning(AuditRow.id)
+        )
+        if folded.first() is not None:
+            return
     params = None if event.normalized_params is None else dict(event.normalized_params)
     session.add(
         AuditRow(
-            ts=datetime.now(UTC),
+            ts=now,
             actor=event.actor,
             effective_principal=event.effective_principal,
             session_id=event.session_id,
