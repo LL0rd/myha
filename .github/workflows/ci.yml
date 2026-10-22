@@ -38,6 +38,8 @@ jobs:
       - run: uv run ruff check ../../scripts
       - run: uv run mypy --strict ../../scripts/install-on-ha.py
       - run: uv run pytest -q --cov=myha_gateway --cov-report=term
+      # Coverage gate (design §11) on the data of the run above: policy and auth need 85 %.
+      - run: uv run coverage report --fail-under=85 --include="myha_gateway/policy/*,myha_gateway/auth/*"
 
   web:
     runs-on: ubuntu-latest
