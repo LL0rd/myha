@@ -16,7 +16,7 @@ Pre-alpha. myHA is under active development and cannot be installed yet.
 
 Once a first release is available:
 
-1. In Home Assistant OS, go to **Settings → Apps → App Store**.
+1. In Home Assistant OS, go to **Settings → Apps** and select **Install app**.
 2. Open the **⋮** menu, select **Repositories** and add `https://github.com/LL0rd/myha`.
 3. Install **myHA** from the store and start it.
 
