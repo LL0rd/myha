@@ -206,7 +206,7 @@ async def test_admin_probe_echoes_identity_headers_from_trusted_peer(ctx):
 ```
 
 - [ ] **Step 2:** rot.
-- [ ] **Step 3: Implementieren.** `AppContext` (dataclass: `settings`, später `engine`, `ha`, `bus`, `policy`; `create()` classmethod; Property `public_ready`). `errors.py`: `ApiError(status, code, message, details=None)` + Handler → `{"error": {...}}`; FastAPI-Validation-Fehler → `400 INVALID_PARAMETERS` (öffentlich) bzw. mit Details (Admin). `create_public_app(ctx)`: FastAPI ohne Docs, Router `health` (`GET /healthz` → `{"status","client_ip","x_forwarded_for"}`). `create_admin_app(ctx)`: `PeerGuardMiddleware` (403 bei falschem Peer; wird in WP4 durch `require_admin` ergänzt), Router `probe` (`GET /api/v1/admin/probe` → `{"peer","headers":{nur x-remote-user-*, x-ingress-path, x-forwarded-*, x-real-ip}}`). `__main__.py` (argparse): `serve` startet `uvicorn.Server` für Admin und, wenn `ctx.public_ready`, für Public (`proxy_headers=False`, `server_header=False`, `ws_max_size=65536`), beide via `asyncio.gather`; `public_ready` = `settings.public_enabled` (ab WP4 zusätzlich Instanzkonfiguration; `probe_mode` wirkt nur über den Settings-Validator aus Task 0.3). Ein Hintergrundtask prüft alle 2 s, ob `public_ready` später wahr wird, und startet den Public-Server nach. `probe` (CLI) gibt `GET {supervisor_url}/info` (Status + Version), Env-Variablen**namen** und Pfadprüfungen aus.
+- [ ] **Step 3: Implementieren.** `AppContext` (dataclass: `settings`, später `engine`, `ha`, `bus`, `policy`; `create()` classmethod; Property `public_ready`). `errors.py`: `ApiError(status, code, message, details=None)` + Handler → `{"error": {...}}`; FastAPI-Validation-Fehler → `400 INVALID_PARAMETERS` (öffentlich) bzw. mit Details (Admin). `create_public_app(ctx)`: FastAPI ohne Docs, Router `health` (`GET /healthz` → `{"status","client_ip","x_forwarded_for"}`). `create_admin_app(ctx)`: `PeerGuardMiddleware` (403 bei falschem Peer; wird in WP4 durch `require_admin` ergänzt), Router `probe` (`GET /api/v1/admin/probe` → `{"peer","headers":{nur x-remote-user-*, x-ingress-path, x-forwarded-*, x-real-ip}}`). `__main__.py` (argparse): `serve` ruft zuerst `setup_logging(settings.log_level)` auf und startet `uvicorn.Server` für Admin und, wenn `ctx.public_ready`, für Public (`proxy_headers=False`, `server_header=False`, `ws_max_size=65536`, **`log_config=None`**, damit uvicorns Logger an den redigierenden Root-Handler propagieren; Test: eine Access-Log-Zeile mit `?token=…` erscheint redigiert), beide via `asyncio.gather`; `public_ready` = `settings.public_enabled` (ab WP4 zusätzlich Instanzkonfiguration; `probe_mode` wirkt nur über den Settings-Validator aus Task 0.3). Ein Hintergrundtask prüft alle 2 s, ob `public_ready` später wahr wird, und startet den Public-Server nach. `probe` (CLI) gibt `GET {supervisor_url}/info` (Status + Version), Env-Variablen**namen** und Pfadprüfungen aus.
 - [ ] **Step 4:** grün; lokal `MYHA_DATA_DIR=.dev/data MYHA_PUBLIC_ENABLED=1 MYHA_PUBLIC_ORIGIN=http://localhost:8443 uv run myha-gateway serve` → `curl -s localhost:8443/healthz`. Commit `feat(gateway): admin and public listeners with probe endpoints`.
 
 ### Task 0.5: Web-Gerüst (Vite, zwei getrennte Bundles)
@@ -294,10 +294,9 @@ ENV PATH="/opt/myha/venv/bin:${PATH}" MYHA_WEB_DIST=/opt/myha/web
 ```bash
 #!/command/with-contenv bashio
 # shellcheck shell=bash
+# log_level and probe_mode are read by the gateway itself from /data/options.json (Task 0.3).
 export MYHA_DATA_DIR=/data
-export MYHA_LOG_LEVEL="$(bashio::config 'log_level' 'info')"
 if bashio::config.true 'probe_mode'; then
-  export MYHA_PROBE_MODE=1
   bashio::log.warning "probe_mode is enabled: public listener exposed for the S0 probe"
 fi
 bashio::log.info "Starting myHA gateway"
