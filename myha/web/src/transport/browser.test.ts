@@ -3,7 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ApiError } from ".";
 import { browserTransport } from "./browser";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function stubFetch(response: { ok?: boolean; status?: number; type?: ResponseType; body?: unknown; text?: string }) {
   const fetchMock = vi.fn<typeof fetch>(
@@ -89,7 +92,17 @@ it("passes the caller's signal, else gives up after 15 s as a TimeoutError", asy
   expect(timeout).toHaveBeenCalledWith(15_000);
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
-  timeout.mockRestore();
+});
+
+it("a timeout while reading the body is a TimeoutError too", async () => {
+  const controller = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  const json = async () => {
+    controller.abort();
+    throw new DOMException("aborted", "AbortError");
+  };
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => ({ ok: true, status: 200, type: "basic", json }) as unknown as Response));
+  await expect(browserTransport().request("/api/v1/me")).rejects.toMatchObject({ name: "TimeoutError" });
 });
 
 it("returns nothing for 204", async () => {

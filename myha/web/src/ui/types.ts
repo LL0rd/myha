@@ -3,7 +3,8 @@ import type { actions, kinds } from "../api/schema";
 
 export type Kind = (typeof kinds)[number];
 
-export type Action = (typeof actions)[number];
+/** The write actions; the read actions never come with a control. */
+export type Action = Exclude<(typeof actions)[number], `${string}.read`>;
 
 /** Decimal strings as the API sends them, e.g. "18.0"; allowed values lie on origin + k * step. */
 export interface Interval {

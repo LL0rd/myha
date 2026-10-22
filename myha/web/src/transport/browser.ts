@@ -18,6 +18,9 @@ export function browserTransport(csrf: () => string | null = () => null): Transp
       const token = csrf();
       if (token && (method !== "GET" || sensitive)) headers["X-MyHA-CSRF"] = token;
       if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+      const active = signal ?? timeoutSignal(REQUEST_TIMEOUT_MS);
+      // Our own timeout surfaces as TimeoutError, whether it hits the request or the body read.
+      const timedOut = () => !signal && active.aborted;
       let response: Response;
       try {
         response = await fetch(path, {
@@ -26,12 +29,10 @@ export function browserTransport(csrf: () => string | null = () => null): Transp
           body: body === undefined ? undefined : JSON.stringify(body),
           credentials: "include",
           redirect: "manual", // the API never redirects; a redirect is an attack or a proxy error
-          signal: signal ?? timeoutSignal(REQUEST_TIMEOUT_MS),
+          signal: active,
         });
       } catch (error) {
-        // The fallback signal aborts without a reason: report it as the timeout it is.
-        if (!signal && error instanceof Error && error.name === "AbortError") throw new DOMException("request timed out", "TimeoutError");
-        throw error;
+        throw timedOut() ? new DOMException("request timed out", "TimeoutError") : error;
       }
       if (response.type === "opaqueredirect") throw new ApiError(0, null, "unexpected redirect");
       if (!response.ok) {
@@ -42,7 +43,8 @@ export function browserTransport(csrf: () => string | null = () => null): Transp
       if (response.status === 204) return undefined;
       try {
         return (await response.json()) as unknown;
-      } catch {
+      } catch (error) {
+        if (active.aborted) throw timedOut() ? new DOMException("request timed out", "TimeoutError") : error;
         throw new ApiError(response.status, null, "invalid response");
       }
     },
