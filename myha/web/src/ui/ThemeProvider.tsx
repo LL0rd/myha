@@ -1,18 +1,9 @@
-import { createContext, useContext, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useSyncExternalStore } from "react";
 
 export const themes = ["system", "light", "dark", "contrast"] as const;
 export type Theme = (typeof themes)[number];
 export type ResolvedTheme = Exclude<Theme, "system">;
 
-interface ThemeState {
-  /** The choice; "system" while nothing is stored. */
-  theme: Theme;
-  /** What is shown: the stored choice, else the system preference. */
-  resolved: ResolvedTheme;
-  setTheme: (theme: Theme) => void;
-}
-
-const ThemeContext = createContext<ThemeState | null>(null);
 const KEY = "myha.theme";
 const QUERY = "(prefers-color-scheme: dark)";
 
@@ -39,32 +30,36 @@ function apply(theme: Theme) {
   else document.documentElement.dataset.theme = theme;
 }
 
-function useThemeState(): ThemeState {
-  const [theme, set] = useState<Theme>(() => {
-    const choice = stored();
-    apply(choice);
-    return choice;
-  });
+// One theme for the whole page, like the language in src/i18n: no provider, every caller shares it.
+let current: Theme | null = null;
+const listeners = new Set<() => void>();
+function getTheme(): Theme {
+  if (current === null) {
+    current = stored();
+    apply(current);
+  }
+  return current;
+}
+function subscribe(onChange: () => void) {
+  listeners.add(onChange);
+  return () => listeners.delete(onChange);
+}
+
+export function setTheme(next: Theme) {
+  current = next;
+  apply(next);
+  try {
+    if (next === "system") localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, next);
+  } catch {
+    // not persisted in private mode; the choice holds for this page
+  }
+  listeners.forEach((fn) => fn());
+}
+
+/** `theme` is the choice ("system" while nothing is stored); `resolved` is what is shown. */
+export function useTheme(): { theme: Theme; resolved: ResolvedTheme; setTheme: (theme: Theme) => void } {
+  const theme = useSyncExternalStore(subscribe, getTheme);
   const system = useSyncExternalStore(subscribeSystem, systemTheme);
-  const setTheme = (next: Theme) => {
-    apply(next);
-    try {
-      if (next === "system") localStorage.removeItem(KEY);
-      else localStorage.setItem(KEY, next);
-    } catch {
-      // not persisted in private mode; the choice holds for this page
-    }
-    set(next);
-  };
   return { theme, resolved: theme === "system" ? system : theme, setTheme };
-}
-
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  return <ThemeContext.Provider value={useThemeState()}>{children}</ThemeContext.Provider>;
-}
-
-/** The shared theme; without a ThemeProvider above, a theme state of the caller's own. */
-export function useTheme(): ThemeState {
-  const own = useThemeState();
-  return useContext(ThemeContext) ?? own;
 }

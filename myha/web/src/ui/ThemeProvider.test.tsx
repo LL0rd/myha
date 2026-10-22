@@ -1,7 +1,11 @@
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
-import { ThemeProvider, useTheme } from "./ThemeProvider";
-import { ThemeSwitch } from "./ThemeSwitch";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+// The theme is page-wide module state: every test loads a fresh copy.
+async function load() {
+  vi.resetModules();
+  return { ...(await import("./ThemeProvider")), ...(await import("./ThemeSwitch")) };
+}
 
 // A fake prefers-color-scheme query whose answer the test can flip.
 function prefersDark(dark: boolean) {
@@ -18,16 +22,27 @@ function prefersDark(dark: boolean) {
   };
 }
 
-afterEach(() => {
-  cleanup();
+function blockStorage() {
+  for (const method of ["getItem", "setItem", "removeItem"] as const)
+    vi.spyOn(Storage.prototype, method).mockImplementation(() => {
+      throw new Error("blocked");
+    });
+}
+
+beforeEach(() => {
   localStorage.clear();
   delete document.documentElement.dataset.theme;
+});
+
+afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-it("follows the system preference live while nothing is stored", () => {
+it("follows the system preference live while nothing is stored", async () => {
   const flip = prefersDark(true);
+  const { useTheme } = await load();
   const { result } = renderHook(() => useTheme());
   expect(result.current.theme).toBe("system");
   expect(result.current.resolved).toBe("dark");
@@ -37,23 +52,25 @@ it("follows the system preference live while nothing is stored", () => {
   expect(document.documentElement.dataset.theme).toBeUndefined();
 });
 
-it("a stored choice beats the system preference", () => {
+it("a stored choice beats the system preference", async () => {
   prefersDark(true);
   localStorage.setItem("myha.theme", "contrast");
+  const { useTheme } = await load();
   const { result } = renderHook(() => useTheme());
   expect(result.current.theme).toBe("contrast");
   expect(result.current.resolved).toBe("contrast");
   expect(document.documentElement.dataset.theme).toBe("contrast");
 });
 
-it("the switch applies and persists the choice for everyone under the provider", () => {
+it("the switch applies and persists the choice for every user", async () => {
   prefersDark(false);
+  const { useTheme, ThemeSwitch } = await load();
   const Shown = () => <output>{useTheme().resolved}</output>;
   render(
-    <ThemeProvider>
+    <>
       <ThemeSwitch />
       <Shown />
-    </ThemeProvider>,
+    </>,
   );
   act(() => screen.getByRole("button", { name: "dark" }).click());
   expect(screen.getByRole("status").textContent).toBe("dark");
@@ -62,9 +79,10 @@ it("the switch applies and persists the choice for everyone under the provider",
   expect(localStorage.getItem("myha.theme")).toBe("dark");
 });
 
-it("choosing system clears the stored choice and data-theme", () => {
+it("choosing system clears the stored choice and data-theme", async () => {
   const flip = prefersDark(false);
   localStorage.setItem("myha.theme", "dark");
+  const { useTheme } = await load();
   const { result } = renderHook(() => useTheme());
   act(() => result.current.setTheme("system"));
   expect(localStorage.getItem("myha.theme")).toBeNull();
@@ -75,21 +93,16 @@ it("choosing system clears the stored choice and data-theme", () => {
   expect(result.current.resolved).toBe("dark");
 });
 
-it("works when storage is blocked", () => {
+it("a component mounted later keeps the choice, even with storage blocked", async () => {
   prefersDark(false);
-  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-    throw new Error("blocked");
-  });
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("blocked");
-  });
-  vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
-    throw new Error("blocked");
-  });
-  const { result } = renderHook(() => useTheme());
-  expect(result.current.resolved).toBe("light");
-  act(() => result.current.setTheme("contrast"));
-  expect(result.current.resolved).toBe("contrast");
-  act(() => result.current.setTheme("system"));
-  expect(result.current.theme).toBe("system");
+  blockStorage();
+  const { useTheme } = await load();
+  const first = renderHook(() => useTheme());
+  act(() => first.result.current.setTheme("contrast"));
+  const late = renderHook(() => useTheme());
+  expect(late.result.current.theme).toBe("contrast");
+  expect(first.result.current.theme).toBe("contrast");
+  expect(document.documentElement.dataset.theme).toBe("contrast");
+  act(() => late.result.current.setTheme("system"));
+  expect(first.result.current.theme).toBe("system");
 });

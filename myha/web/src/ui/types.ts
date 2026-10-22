@@ -72,6 +72,7 @@ export interface Command {
   resource_id: string;
   action: Action;
   status: CommandState;
+  created_at: string;
   updated_at: string;
 }
 

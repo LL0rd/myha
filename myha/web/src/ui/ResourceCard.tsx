@@ -1,5 +1,5 @@
 import type { Icon } from "@tabler/icons-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CommandStatus } from "./CommandStatus";
 import type { Strings } from "./GuestPanel";
 import styles from "./guest-panel.module.css";
@@ -57,7 +57,18 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
   const send = (action: Action, params: ActionParams = {}) => onAction(id, action, params);
   const [target, setTarget] = usePending(state?.target_c ?? null, command);
   const [level, setLevel] = usePending(state?.level_pct ?? null, command);
-  const dragged = useRef(false);
+  const sliderRef = useRef<HTMLInputElement>(null);
+  // The native change event fires once per finished gesture (mouse, touch, keyboard); React's onChange fires on every input.
+  useEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+    const commit = () => {
+      send("light.set_level", { level_pct: Number(el.value) });
+      if (simulate) setLevel(null); // a simulation changes nothing, so the shown level snaps back
+    };
+    el.addEventListener("change", commit);
+    return () => el.removeEventListener("change", commit);
+  });
 
   const button = (action: Action, text: string, Icon: Icon, variant: "primary" | "secondary", params?: ActionParams, pressed?: boolean) =>
     can(action) || simulate ? (
@@ -78,7 +89,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
   let stateText: string;
   let buttons: (JSX.Element | null)[] = [];
   let climate: JSX.Element | null = null;
-  let slider: JSX.Element | null = null;
+  let sliderRow: JSX.Element | null = null;
 
   if (!state) stateText = t.notShared;
   else if (state.availability === "offline") stateText = t.unavailable;
@@ -96,13 +107,8 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
       const min = Math.min(...intervals.map((i) => Number(i.min)));
       const max = Math.max(...intervals.map((i) => Number(i.max)));
       const value = level ?? state?.level_pct ?? min;
-      const release = (e: { currentTarget: HTMLInputElement }) => {
-        if (!dragged.current) return;
-        dragged.current = false;
-        send("light.set_level", { level_pct: Number(e.currentTarget.value) });
-      };
       // shortcut: one slider over the hull of all intervals with the first step; gaps between intervals are left to the server check.
-      slider = (
+      sliderRow = (
         <div className={styles.slider}>
           <actionIcon.level size={20} aria-hidden="true" className={styles.muted} />
           <input
@@ -113,12 +119,8 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
             value={value}
             aria-label={t.brightness}
             disabled={!live}
-            onChange={(e) => {
-              dragged.current = true;
-              setLevel(Number(e.currentTarget.value));
-            }}
-            onPointerUp={release}
-            onKeyUp={release}
+            ref={sliderRef}
+            onChange={(e) => setLevel(Number(e.currentTarget.value))}
           />
           <span className={styles.level}>{value} %</span>
         </div>
@@ -192,7 +194,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
           {buttons.length > 0 && <div className={styles.buttons}>{buttons}</div>}
         </div>
       )}
-      {slider}
+      {sliderRow}
       <div className={styles.live} role="status" aria-live="polite">
         {command && <CommandStatus status={command.status} text={t.command[command.status]} />}
       </div>

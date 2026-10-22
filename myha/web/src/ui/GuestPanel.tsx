@@ -73,7 +73,8 @@ export function GuestPanel({
   const latest = new Map<string, Command>();
   for (const c of commands) {
     const seen = latest.get(c.resource_id);
-    if (!seen || c.updated_at >= seen.updated_at) latest.set(c.resource_id, c);
+    // By creation: an older command timing out to "unknown" must not hide a newer one.
+    if (!seen || Date.parse(c.created_at) >= Date.parse(seen.created_at)) latest.set(c.resource_id, c);
   }
   const notice = t.notice[status];
   return (

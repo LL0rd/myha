@@ -76,14 +76,26 @@ it("sends the next step as a decimal string and shows it right away", async () =
   expect((screen.getByRole("button", { name: "Raise target" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
-it("sends the brightness once the slider is released", () => {
+it("sends the brightness once the slider gesture ends", () => {
   const onAction = vi.fn();
   render(<GuestPanel title="Room 203" rooms={rooms()} status="online" onAction={onAction} />);
-  const slider = screen.getByRole("slider", { name: "Brightness" });
-  fireEvent.change(slider, { target: { value: "40" } });
+  const slider = screen.getByRole("slider", { name: "Brightness" }) as HTMLInputElement;
+  fireEvent.input(slider, { target: { value: "40" } });
   expect(onAction).not.toHaveBeenCalled();
-  fireEvent.pointerUp(slider);
+  fireEvent(slider, new Event("change", { bubbles: true }));
+  expect(onAction).toHaveBeenCalledTimes(1);
   expect(onAction).toHaveBeenCalledWith("res_light", "light.set_level", { level_pct: 40 });
+  expect(slider.value).toBe("40");
+});
+
+it("a simulated brightness change snaps back", () => {
+  const onAction = vi.fn();
+  render(<GuestPanel title="Room 203" rooms={rooms()} status="online" simulate onAction={onAction} />);
+  const slider = screen.getByRole("slider", { name: "Brightness" }) as HTMLInputElement;
+  fireEvent.input(slider, { target: { value: "40" } });
+  fireEvent(slider, new Event("change", { bubbles: true }));
+  expect(onAction).toHaveBeenCalledWith("res_light", "light.set_level", { level_pct: 40 });
+  expect(slider.value).toBe("60");
 });
 
 it("expired disables every control", () => {
@@ -103,13 +115,24 @@ it("explain shows the rules", () => {
 
 it("announces the latest command of a resource politely", () => {
   const commands: Command[] = [
-    { id: "c1", resource_id: "res_cover", action: "cover.open", status: "confirmed", updated_at: "2026-10-22T10:00:00Z" },
-    { id: "c2", resource_id: "res_cover", action: "cover.close", status: "sent", updated_at: "2026-10-22T10:01:00Z" },
+    { id: "c1", resource_id: "res_cover", action: "cover.open", status: "confirmed", created_at: "2026-10-22T10:00:00Z", updated_at: "2026-10-22T10:00:01Z" },
+    { id: "c2", resource_id: "res_cover", action: "cover.close", status: "sent", created_at: "2026-10-22T10:01:00Z", updated_at: "2026-10-22T10:01:00.5Z" },
   ];
   render(<GuestPanel title="Room 203" rooms={rooms()} status="online" commands={commands} onAction={() => {}} />);
   const live = card("Blind").getByText(/waiting for the device/).closest("[aria-live]");
   expect(live?.getAttribute("aria-live")).toBe("polite");
   expect(card("Blind").queryByText(/Confirmed/)).toBeNull();
+});
+
+it("an older command timing out does not hide a newer one", () => {
+  const commands: Command[] = [
+    // The older command changed last; mixed fraction digits as pydantic writes them.
+    { id: "new", resource_id: "res_cover", action: "cover.open", status: "confirmed", created_at: "2026-10-22T10:00:05.25Z", updated_at: "2026-10-22T10:00:06Z" },
+    { id: "old", resource_id: "res_cover", action: "cover.close", status: "unknown", created_at: "2026-10-22T10:00:02Z", updated_at: "2026-10-22T10:00:12Z" },
+  ];
+  render(<GuestPanel title="Room 203" rooms={rooms()} status="online" commands={commands} onAction={() => {}} />);
+  expect(card("Blind").getByText("Confirmed")).toBeTruthy();
+  expect(card("Blind").queryByText(/Result unclear/)).toBeNull();
 });
 
 it("simulation shows denied actions and keeps the shown target", async () => {
