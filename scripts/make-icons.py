@@ -1,7 +1,8 @@
 """Draw the add-on icon (128x128) and logo (250x100) into myha/.
 
-Run from the repository root: uv run --with pillow python scripts/make-icons.py
-Deterministic: fixed geometry and Pillow's bundled font, no system fonts.
+Run from the repository root: uv run --with pillow==13.0.0 python scripts/make-icons.py
+Deterministic for a given Pillow version: fixed geometry and Pillow's bundled font, no system
+fonts. The committed PNGs come from Pillow 13.0.0.
 """
 
 from pathlib import Path

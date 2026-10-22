@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23-2026.10.1
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /src/web
+# The pnpm version must match packageManager in web/package.json.
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -14,10 +15,10 @@ FROM ${BUILD_FROM} AS runtime
 ENV UV_PROJECT_ENVIRONMENT=/opt/myha/venv UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_PYTHON=/usr/local/bin/python3 UV_NO_CACHE=1
 WORKDIR /opt/myha/gateway
 COPY gateway/pyproject.toml gateway/uv.lock gateway/.python-version ./
-# shortcut: no compiler; every locked runtime dependency ships musllinux wheels for amd64 and
-# aarch64. Add `apk add --virtual .build build-base libffi-dev` here if one ever needs a source build.
+# shortcut: no compiler; --no-build fails loudly if a dependency ever lacks a musllinux wheel.
+# Then drop --no-build and add `apk add --virtual .build build-base libffi-dev` to this step.
 RUN --mount=from=ghcr.io/astral-sh/uv:0.10,source=/uv,target=/bin/uv \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-dev --no-install-project --no-build
 COPY gateway/ ./
 RUN --mount=from=ghcr.io/astral-sh/uv:0.10,source=/uv,target=/bin/uv \
     uv sync --frozen --no-dev
