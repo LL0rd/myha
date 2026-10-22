@@ -95,7 +95,7 @@ myha/                          ← Git-Root und HA-App-Repository
 │   │   ├── index.html         ← Gast/Bewohner/Display-Einstieg
 │   │   ├── admin.html         ← Admin-UI unter Ingress-Prefix
 │   │   └── src/{ui,guest,admin,api,i18n,transport}
-│   └── simulator/             ← Fake HA Core + Supervisor für Dev und Tests
+│   │   └── myha_simulator/    ← Fake HA Core + Supervisor für Dev und Tests (gleiches uv-Projekt)
 ├── tests/e2e/                 ← Playwright
 ├── scripts/                   ← dev.sh, build-image.sh, install-on-ha.py
 ├── docs/                      ← setup.md, security.md, restore.md, device-matrix.md, s0-report.md, adr/, reference/, superpowers/
