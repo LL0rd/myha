@@ -196,6 +196,9 @@ async def test_settings_override_opens_plain_http_with_its_origin(
         assert ctx.public_origin == "http://guest.test:8443"  # the only origin source from now on
         r = await healthz(f"http://127.0.0.1:{port_of(servers[1])}")
         assert r.status_code == 200 and r.json()["client_ip"] == "127.0.0.1"
+        # Only the public listener caps connections; the admin one must stay reachable.
+        assert servers[0].config.limit_concurrency is None
+        assert servers[1].config.limit_concurrency == 200
 
 
 async def test_public_listener_refuses_an_oversized_header_block(

@@ -19,7 +19,11 @@ PUBLIC_RESTART = (5.0, 60.0)  # seconds before a failed public listener restarts
 
 
 def _server(
-    app: FastAPI, host: str, port: int, tls: tuple[str, str] | None = None
+    app: FastAPI,
+    host: str,
+    port: int,
+    tls: tuple[str, str] | None = None,
+    limit_concurrency: int | None = None,
 ) -> uvicorn.Server:
     """uvicorn server that trusts no proxy header and logs through the redacting root handler."""
     certfile, keyfile = tls or (None, None)
@@ -37,7 +41,7 @@ def _server(
         # Plan 2 adds the deadline and the body cap
         http="h11",
         h11_max_incomplete_event_size=16 * 1024,
-        limit_concurrency=200,  # beyond: 503 instead of unbounded tasks
+        limit_concurrency=limit_concurrency,  # beyond: 503 instead of unbounded tasks
         timeout_keep_alive=5,
         ws_max_size=65536,
         log_config=None,
@@ -52,9 +56,10 @@ def _server(
 def _public_server(ctx: AppContext) -> uvicorn.Server:
     """The public listener as ``ctx`` decided it: HTTPS with the instance's files, else HTTP."""
     settings = ctx.settings
-    return _server(
-        create_public_app(ctx), settings.public_bind, settings.public_port, ctx.public_tls
-    )
+    app = create_public_app(ctx)
+    # Public only: on the admin listener, foreign peers could fill the limit with half-open
+    # connections and lock the ingress out with 503 before the peer guard runs.
+    return _server(app, settings.public_bind, settings.public_port, ctx.public_tls, 200)
 
 
 async def _serve(
