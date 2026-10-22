@@ -31,6 +31,11 @@ ignore = ["S101"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S311"]
 
+[tool.coverage.run]
+# SQLAlchemy's async sessions switch greenlets inside every await; without this the tracer
+# loses the lines after them.
+concurrency = ["greenlet", "thread"]
+
 [tool.mypy]
 python_version = "3.13"
 strict = true
