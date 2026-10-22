@@ -16,6 +16,7 @@ from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
+from myha_gateway.events import ws
 from myha_gateway.ha.supervisor import SupervisorUnavailable
 from myha_gateway.limits import BodyLimitMiddleware
 from myha_gateway.services.timeguard import TimeGuard, system_audit
@@ -123,7 +124,7 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     """Guest-facing app: no admin route, never trusts forwarding headers."""
     settings = ctx.settings
     app = _app(ctx, validation_details=False)
-    for module in (health, config, auth, me, ws_ticket, dashboard):
+    for module in (health, config, auth, me, ws_ticket, dashboard, ws):
         app.include_router(module.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
     # WebSockets only to the public origin itself: wss://host, ws://host for the http override.

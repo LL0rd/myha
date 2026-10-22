@@ -14,9 +14,10 @@ from sqlalchemy import select
 
 from myha_gateway.api.admin import preview
 from myha_gateway.auth.admin import csrf_token
+from myha_gateway.db import bump_policy_version, write_session
 from myha_gateway.db import models as db
-from myha_gateway.db import write_session
 from myha_gateway.deps import AppContext
+from myha_gateway.policy.index import PolicyIndex
 from myha_gateway.services.stays import create_stay
 from myha_simulator.fixtures import USERS
 from tests.acceptance.conftest import OWNER, Clocks
@@ -179,6 +180,13 @@ async def test_a29_hypothetical_future_time_changes_only_policy(
     # The time given at creation is the preview's default; ?at= still overrides it.
     planned = await open_preview(client, {"stay_id": stay.id}, at=later)
     assert (await dashboard(client, planned))["dashboard"]["status"] == "online"
+    (created,) = [
+        e
+        for e in await rows(ctx, db.AuditEvent)
+        if e.operation == "preview.create" and e.session_id == planned
+    ]
+    assert created.normalized_params is not None
+    assert datetime.fromisoformat(created.normalized_params["at"]) == datetime.fromisoformat(later)
     after = (now + timedelta(days=5)).isoformat()
     assert (await dashboard(client, planned, at=after))["dashboard"]["status"] == "expired"
 
@@ -338,8 +346,39 @@ async def test_preview_other_admin_cannot_use(
         assert expired is not None
         expired.not_after = datetime.now(UTC)
     assert (await client.get(f"{PREVIEW}/{preview_id}/dashboard")).status_code == 404
+    revoked_id = await open_preview(client, {"stay_id": await seed_stay(ctx)})
+    async with write_session(ctx.engine) as session:
+        revoked = await session.get(db.Session, revoked_id)
+        assert revoked is not None
+        revoked.revoked_at, revoked.revoke_reason = datetime.now(UTC), "revoked"
+    r = await client.get(f"{PREVIEW}/{revoked_id}/dashboard")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
     # Without the CSRF proof neither creating nor simulating passes.
     del client.headers["X-MyHA-CSRF"]
     assert (await client.post(PREVIEW, json={"target": {"group_id": "x"}})).status_code == 403
     r = await client.post(f"{PREVIEW}/{preview_id}/simulate", json=body)
     assert r.status_code == 403
+
+
+async def test_policy_change_during_a_preview_call_answers_conflict(
+    client: httpx.AsyncClient, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Context and index of different policy versions decide nothing: 409, the UI retries."""
+    preview_id = await open_preview(client, {"stay_id": await seed_stay(ctx)})
+    index = ctx.policy.index
+
+    async def changed_meanwhile(now: datetime) -> PolicyIndex:
+        async with write_session(ctx.engine) as session:  # a publish between the two reads
+            await bump_policy_version(session)
+        return await index(now)
+
+    monkeypatch.setattr(ctx.policy, "index", changed_meanwhile)
+    r = await client.get(f"{PREVIEW}/{preview_id}/dashboard")
+    assert r.status_code == 409
+    assert r.json()["error"]["details"] == {"reason": "policy_changed"}
+    body = {"resource_id": "res_203_light", "action": "light.on", "parameters": {}}
+    assert (await client.post(f"{PREVIEW}/{preview_id}/simulate", json=body)).status_code == 409
+    assert [e for e in await rows(ctx, db.AuditEvent) if e.operation == "preview.simulate"] == []
+
+    monkeypatch.setattr(ctx.policy, "index", index)
+    assert (await dashboard(client, preview_id))["dashboard"]["status"] == "online"

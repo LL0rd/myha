@@ -57,6 +57,6 @@ async def test_ha_events_count_only_while_connected() -> None:
     assert drain(queue) == [
         ConnectionStatus("online", 2),
         StateChanged("light.b"),
-        ConnectionStatus("stale", 2),
+        ConnectionStatus("offline", 2),
     ]
     assert (bus.connected, bus.generation) == (False, 2)

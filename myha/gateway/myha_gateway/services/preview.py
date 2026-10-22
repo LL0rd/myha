@@ -155,7 +155,11 @@ async def create_preview(
             effective_principal=row.principal_id,
             session_id=row.id,
             policy_version=context.policy_version,
-            normalized_params={"purpose": "preview", "target": dict(target)},
+            normalized_params={
+                "purpose": "preview",
+                "target": dict(target),
+                "at": None if at is None else at.isoformat(),
+            },
         )
         await audit(session, event)
     return row, token

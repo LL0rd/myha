@@ -106,7 +106,7 @@ class ClientConnection:
             message = json.loads(text) if len(text.encode()) <= MAX_FRAME else None
             if isinstance(message, dict) and message.get("type") == "auth":
                 ticket = message.get("ticket")
-        except (TimeoutError, ValueError):
+        except (TimeoutError, KeyError, ValueError):  # KeyError: a binary frame (Starlette)
             pass
         session_id = await self._authenticate(ticket) if isinstance(ticket, str) else None
         if session_id is None:
@@ -144,6 +144,9 @@ class ClientConnection:
                 "dashboard": view.model_dump(mode="json", exclude_unset=True),
             }
         )
+        # After every snapshot: a client that (re)connects learns whether controls work now.
+        status = "online" if self._app.bus.connected else "offline"
+        await self._send({"type": "connection.status", "status": status})
 
     async def _serve(self, queue: asyncio.Queue[Event]) -> None:
         loop = asyncio.get_running_loop()
@@ -186,11 +189,11 @@ class ClientConnection:
                     stay_id is not None and stay_id == self._ctx.stay_id
                 ):
                     await self._end(reason)
+            case ConnectionStatus(status="online"):  # Core sends no events for the gap
+                await self._load()
+                await self._snapshot()
             case ConnectionStatus(status=status):
                 await self._send({"type": "connection.status", "status": status})
-                if status == "online":  # Core sends no events for what changed in the gap
-                    await self._load()
-                    await self._snapshot()
             case CommandUpdated(session_id=session_id, command=command):
                 if session_id == self._session_id:
                     await self._send({"type": "command.updated", "command": dict(command)})

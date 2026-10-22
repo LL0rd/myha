@@ -37,7 +37,7 @@ class SessionRevoked:
 
 @dataclass(frozen=True)
 class ConnectionStatus:
-    status: Literal["online", "stale"]  # of the Home Assistant connection
+    status: Literal["online", "offline"]  # of the Home Assistant connection
     generation: int
 
 
@@ -86,4 +86,5 @@ class EventBus:
     async def on_status(self, status: ha.ConnectionStatus) -> None:
         """Connections answer ``online`` with a fresh snapshot: Core sends nothing for the gap."""
         self.connected, self.generation = status.connected, status.generation
-        self.publish(ConnectionStatus("online" if status.connected else "stale", status.generation))
+        state: Literal["online", "offline"] = "online" if status.connected else "offline"
+        self.publish(ConnectionStatus(state, status.generation))
