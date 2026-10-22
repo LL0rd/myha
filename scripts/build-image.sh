@@ -2,6 +2,7 @@
 # Build the amd64 add-on image, then smoke-test it twice: the gateway on its own, then through s6.
 # Usage: scripts/build-image.sh                           build myha-local:dev, then smoke-test it
 #        scripts/build-image.sh --smoke-only <image-tag>  only smoke-test an existing image
+# SMOKE_PORT (default 18443) is the host port of the first smoke test; parallel runs need their own.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ $# -eq 0 ]; then
@@ -16,30 +17,40 @@ else
   exit 2
 fi
 
+port=${SMOKE_PORT:-18443}
+
 # Print the container's logs, then stop with a message.
 fail() { docker logs "$1" 2>&1 || true; echo "smoke test failed: $2" >&2; exit 1; }
 
 # 1. Gateway alone: --entrypoint bypasses /init (s6). Created before the start so the trap
 # removes it even if the start fails; no --rm, so a crashed container keeps its logs.
 gw=$(docker create --entrypoint /opt/myha/venv/bin/myha-gateway \
-  -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
-  --tmpfs /data -p 127.0.0.1:18443:8443 "$image" serve)
+  -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN="http://127.0.0.1:$port" \
+  --tmpfs /data -p "127.0.0.1:$port:8443" "$image" serve)
 trap 'docker rm -f "$gw" >/dev/null 2>&1 || true' EXIT
 docker start "$gw" >/dev/null
 for _ in $(seq 1 30); do
-  curl -fs --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz >/dev/null && break
+  curl -fs --connect-timeout 2 --max-time 3 "http://127.0.0.1:$port/healthz" >/dev/null && break
   sleep 1
 done
-curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz \
+curl -fsS --connect-timeout 2 --max-time 3 "http://127.0.0.1:$port/healthz" \
   || fail "$gw" "no /healthz within 30 s"
 echo
-headers=$(curl -fsSI --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/ | tr -d '\r') \
+headers=$(curl -fsSI --connect-timeout 2 --max-time 3 "http://127.0.0.1:$port/" | tr -d '\r') \
   || fail "$gw" "HEAD / failed"
 grep -iE "^(content-security-policy|cache-control):" <<<"$headers" || true
 grep -qiE "^content-security-policy: (.*; )?default-src 'self'(;|$)" <<<"$headers" \
   || fail "$gw" "CSP without default-src 'self'"
 grep -qix "cache-control: no-store" <<<"$headers" || fail "$gw" "entry page without no-store"
 docker exec "$gw" test -f /opt/myha/web/admin/admin.html || fail "$gw" "admin bundle missing"
+# The simulator is a dev and test tool and must not ship. docker exec runs in the image's
+# working directory, so python -c also finds a source copy lying there.
+py=/opt/myha/venv/bin/python
+docker exec "$gw" "$py" -c "import myha_gateway" || fail "$gw" "myha_gateway not importable"
+if docker exec "$gw" "$py" -c "import myha_simulator" 2>/dev/null; then
+  fail "$gw" "myha_simulator is in the image"
+fi
+echo "image: myha_gateway imports, myha_simulator does not"
 
 # 2. Through /init: s6 starts the service, the gateway comes up, docker stop ends with exit 0.
 # Waits for the gateway itself: s6 reports "successfully started" as soon as run is spawned.

@@ -37,9 +37,10 @@ MYHA_DATA_DIR="$ROOT/.dev/data" MYHA_HA_WS_URL=ws://127.0.0.1:8123/api/websocket
 pids+=("$!")
 
 # BROWSER=none overrides --open in dev:admin; without --clearScreen false each Vite wipes the terminal.
-BROWSER=none pnpm --dir myha/web dev --clearScreen false &
+# --strictPort: a taken port ends the script instead of moving Vite away from the URLs below.
+BROWSER=none pnpm --dir myha/web dev --clearScreen false --strictPort &
 pids+=("$!")
-BROWSER=none pnpm --dir myha/web dev:admin --clearScreen false &
+BROWSER=none pnpm --dir myha/web dev:admin --clearScreen false --strictPort &
 pids+=("$!")
 
 echo "guest    http://localhost:5173/"

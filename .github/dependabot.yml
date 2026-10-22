@@ -1,0 +1,41 @@
+# Weekly version updates. Minor and patch updates arrive as one pull request per ecosystem,
+# major updates one by one.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: uv
+    directory: /myha/gateway
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # pnpm projects use the npm ecosystem; Dependabot updates pnpm-lock.yaml.
+  - package-ecosystem: npm
+    directory: /myha/web
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Reads the FROM lines of the Dockerfile. The base image pins in build.yaml stay manual.
+  - package-ecosystem: docker
+    directory: /myha
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]

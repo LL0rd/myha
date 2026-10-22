@@ -13,3 +13,4 @@
 **/*.sqlite
 **/*.sqlite-*
 gateway/tests
+gateway/myha_simulator
