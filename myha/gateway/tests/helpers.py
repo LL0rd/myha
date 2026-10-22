@@ -1,4 +1,4 @@
-"""Helpers shared by the integration tests."""
+"""Helpers shared by the unit, integration and acceptance tests."""
 
 import asyncio
 import json

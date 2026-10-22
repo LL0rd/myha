@@ -73,7 +73,7 @@ Gast / Bewohner / Tablet (Browser oder native App) ──HTTPS/WSS──▶ Publ
 ```
 
 - **Ein Prozess, zwei ASGI-Apps.** `uvicorn` startet beide Server im selben Event-Loop (zwei `uvicorn.Server`-Instanzen mit `asyncio.gather`). Ressourcen (DB-Engine, HAClient, EventBus, Settings) werden genau einmal erzeugt und per Dependency Injection geteilt. Kein zweiter Worker.
-- **Admin-Listener** bindet `0.0.0.0:8099` im Container (der Port ist nicht am Host veröffentlicht); jede Anfrage durchläuft `IngressGuard` (Peer-IP, Header-Eindeutigkeit, Rollenprüfung nach E5). `proxy_headers=False`.
+- **Admin-Listener** bindet `0.0.0.0:8099` im Container (der Port ist nicht am Host veröffentlicht); jede Anfrage durchläuft die Peer-Prüfung (`PeerGuardMiddleware`), jede Admin-API-Route zusätzlich `require_admin` (`AdminGuard`: Header-Eindeutigkeit, Supervisor-Version, Rollenprüfung nach E5). `proxy_headers=False`.
 - **Public-Listener** startet erst, wenn `instance.public_origin` gesetzt und die gewählte Betriebsart gültig ist (`tls`: Zertifikat lesbar; `proxy`: CIDRs gesetzt). Vorher antwortet der Port gar nicht.
 - **HAClient** hält genau eine WS-Verbindung zum Core, abonniert `state_changed`, lädt Snapshot und Registries, führt `call_service` mit Kontext-ID aus, meldet Verbindungszustand und prüft die Zeitplausibilität (E26). Nach Reconnect: Snapshot neu laden, Generation erhöhen, Schreibadapter bis zur Revalidierung von `get_config.unit_system` sperren (`adapter_locked`).
 - **EventBus** verteilt Upstream-Ereignisse in-process an alle Client-Verbindungen; jede Verbindung projiziert mit *ihrer* Session und der aktuellen Policyversion. Sperrung, Checkout und Publish erzeugen Bus-Ereignisse, auf die Verbindungen mit Snapshot-Neuaufbau oder Schließen reagieren.
@@ -128,7 +128,7 @@ Die gemeinsame Web-UI wird **nicht** kopiert, sondern aus dem Submodule gebaut (
 | Modul | Verantwortung | Wichtige Schnittstelle |
 |---|---|---|
 | `settings` | Pydantic-Settings aus Env/`/data/options.json`, Pfade, Defaults | `Settings` |
-| `app` | Erzeugt `AdminApp`, `PublicApp`, Lifespan (Migration → Restore-Check → HAClient → Listener) | `create_admin_app()`, `create_public_app()`, `main()` |
+| `app` | Erzeugt `AdminApp`, `PublicApp`, Lifespan (Restore-Check → Migration → Instanzzeile → HAClient → Listener) | `create_admin_app()`, `create_public_app()`, `main()` |
 | `db` | SQLAlchemy 2 (async, `aiosqlite`), WAL mit `synchronous=FULL` (ein Stromausfall darf keinen Widerruf, Checkout, Redeem oder Refresh-Wechsel zurückrollen; ein fsync je Schreib-Commit), `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout` 5 s, Schreibtransaktionen `BEGIN IMMEDIATE`, Alembic (App und CLI migrieren mit derselben Engine, atomar) | `Session`, Modelle |
 | `ha.client` | WS-Verbindung, Reconnect mit Backoff, `get_states`, Registries, `subscribe_events`, `call_service`, `get_config`, Zeitplausibilität, `adapter_locked` | `HAClient`, `HAState`, `ServiceResult(context_id)` |
 | `ha.supervisor` | `GET http://supervisor/info`, Versionsvergleich, `addons/self/info` (Ingress-URL) | `SupervisorInfo` |
@@ -136,7 +136,7 @@ Die gemeinsame Web-UI wird **nicht** kopiert, sondern aus dem Submodule gebaut (
 | `policy` | `PolicyIndex`, effektiver Kontext, `decide`, effektive Parameterbereiche | `decide(ctx, resource, action, params, now, state_view) -> Decision` |
 | `projection` | Typisierte Produktobjekte je Kontext (Positivliste Felder), Räume ohne sichtbare Ressourcen entfernen, Capabilities nur für erlaubte Schreibaktionen | `project_dashboard(ctx, snapshot)`, `project_resource(...)` |
 | `events` | `EventBus`, Verbindungsregistry, Generation/Sequenz, Snapshot-Neuaufbau, Schließen bei Widerruf | `EventBus.publish`, `ClientConnection` |
-| `auth.admin` | `IngressGuard`, Rollenprüfung (E5), CSRF-Nachweis (E24) | `require_admin(fresh: bool)` |
+| `auth.admin` | `AdminGuard` (Peer, Header, Supervisor-Version), Rollenprüfung (E5), CSRF-Nachweis (E24) | `require_admin(fresh: bool)` |
 | `auth.public` | Invite-Redeem, Bewohner-Login (Argon2id, Rate Limit, gleichartige Fehler), Display-Pairing, Browser-Cookie, native Access/Refresh-Familien, WS-Tickets, Renewal, Trustprofil | `require_session(purpose="access")` |
 | `commands` | Idempotenz, Statusmaschine `accepted → sent → confirmed/failed/unknown`, Bestätigung über beobachtete Zustände (Timeout 10 s), Wiederherstellung als `unknown` nach Neustart | `CommandService.submit` |
 | `stays` | Aufenthalte, Einladungen, Checkout, Verlängerung, Zimmerwechsel, Rollout; alle Widerrufe transaktional | `StayService` |

@@ -46,7 +46,6 @@ against:
 - **Browser hardening.** A strict Content Security Policy without external sources,
   `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`
   for API answers and entry pages. The public listener never serves admin code.
-<!-- TODO part 2: decide() and the startup sequence with the public listener switch -->
 
 ## Decided, not implemented yet
 
