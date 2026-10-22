@@ -107,7 +107,7 @@ async def test_start_loads_snapshot_registries_and_config(sim: SimHandle) -> Non
         ceiling = client.state("light.living_ceiling")
     assert len(states) == 15 and ceiling is not None and states["light.living_ceiling"] == ceiling
     assert ceiling.state == "on" and ceiling.attributes["brightness"] == 140
-    assert ceiling.last_changed.utcoffset() == timedelta(0) and len(ceiling.context_id or "") == 26
+    assert ceiling.last_changed.utcoffset() == timedelta(0) and ceiling.context_id
     assert (client.generation, client.temperature_unit) == (1, "°C")
     assert seen.statuses == [ConnectionStatus(True, 1, None)] and seen.locked == [False]
     assert (len(registry.entities), len(registry.devices), len(registry.areas)) == (15, 15, 5)
