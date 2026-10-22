@@ -1147,6 +1147,10 @@ def test_the_capability_offers_nothing_the_device_or_its_review_rules_out() -> N
     assert light_capability(Action.STATE_READ, "needs_review") is not None
     assert light_capability(Action.LIGHT_ON, "needs_review") is None
     assert light_capability(Action.HISTORY_READ) is None
+    assert (
+        light_capability(Action.STATE_READ, "pending") is None
+    )  # a status this code does not know
+    assert light_capability(Action.LIGHT_ON, "pending") is None
 
 
 def test_check_ranges_are_the_unsnapped_grant_parts_inside_device_and_fences() -> None:
@@ -1205,3 +1209,20 @@ def test_a_joint_step_of_exactly_one_million_offers_nothing() -> None:
     # 5^12 and 2^12 * 5^4 millionths meet the schema's tenths on exactly 10^12 millionths
     rule = temperature_rule({"min": "-10", "max": "10", "step": "244.140625"})
     assert trv_temperatures(rule, climate(low="-10", high="10", step="2.56")) == ()
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "written"),
+    [
+        ("8", "30", ["8", "30"]),
+        ("7.1", "29.999", ["7.1", "29.99"]),
+        ("8.000", "30.000", ["8", "30"]),
+    ],
+)
+def test_check_ranges_write_device_limits_plainly(low: str, high: str, written: list[str]) -> None:
+    modes_only = RoleBinding("room_guest", 1, frozenset({"unit_lr"}))  # set_mode on res_lr_ac
+    wide = ctx(modes_only, fences=(fence(parameters={"target_c": {"min": "0", "max": "50"}}),))
+    ref = replace(RESOURCES["res_lr_ac"], capabilities=climate(low=low, high=high))
+    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {ref.id: ref}, {"unit_lr": {ref.id}})
+    ranges = index.check_ranges(wide, ref.id)
+    assert ranges is not None and [str(limit) for limit in ranges[0]] == written

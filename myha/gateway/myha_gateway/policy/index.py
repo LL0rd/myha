@@ -260,15 +260,12 @@ class PolicyIndex:
 
 
 def _offered(resource: ResourceRef, action: Action) -> bool:
-    """Whether the resource can offer the action: not blocked, no history (never in the MVP),
-    and for writes a device that can do it and a binding that awaits no review."""
+    """Whether the resource can offer the action: reads while confirmed or under review, writes
+    only while confirmed and when the device can do them, history never (MVP)."""
+    if action is Action.HISTORY_READ or resource.status not in ("confirmed", "needs_review"):
+        return False
     write = action in WRITE_ACTIONS
-    return not (
-        resource.status == "blocked"
-        or action is Action.HISTORY_READ
-        or (write and action not in resource.capabilities.actions)
-        or (write and resource.status == "needs_review")
-    )
+    return not write or (resource.status == "confirmed" and action in resource.capabilities.actions)
 
 
 def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
@@ -311,10 +308,20 @@ def _limits(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, Decim
         if limit is not None and not (limit.is_finite() and -_FAR < limit < _FAR):
             return None  # NaN would raise when compared; infinity means no usable limit
     if device_low is not None:
-        low = max(low, device_low.quantize(_CENT, ROUND_CEILING, _CONTEXT))
+        low = max(low, _cents(device_low, ROUND_CEILING))
     if device_high is not None:
-        high = min(high, device_high.quantize(_CENT, ROUND_FLOOR, _CONTEXT))
+        high = min(high, _cents(device_high, ROUND_FLOOR))
     return low, high
+
+
+def _cents(value: Decimal, rounding: str) -> Decimal:
+    """``value`` rounded to cents and written plainly: 8.00 is 8, 7.10 is 7.1, 30.00 is 30.
+
+    ``normalize()`` alone would write 30 as 3E+1.
+    """
+    cents = value.quantize(_CENT, rounding, _CONTEXT)
+    whole = cents.to_integral_value(context=_CONTEXT)
+    return whole if cents == whole else cents.normalize(_CONTEXT)
 
 
 def _on_grid(
