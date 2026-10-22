@@ -55,7 +55,7 @@ def guest_session(session_id: str = "ses_guest", **fields: Any) -> db.Session:
     window = {
         "stay_id": "stay_203",
         "unit_ids": ["unit_203"],
-        "not_before": NOW - DAY,
+        "not_before": NOW - 2 * DAY,  # the stay starts later; its start opens the window
         "not_after": NOW + DAY,
     }
     return session(session_id, "prn_guest", **(window | fields))
@@ -308,6 +308,20 @@ def test_only_a_confirmed_stay_is_active_and_a_preview_also_shows_a_draft(
     assert preview.session_active is for_preview
 
 
+@pytest.mark.parametrize(
+    ("status", "active"), [("active", True), ("disabled", False), ("x", False)]
+)
+def test_only_an_active_principal_has_an_active_session(status: str, active: bool) -> None:
+    resident = db.Principal(id="prn_res", type="resident", status=status)
+    assert for_session(session(), resident).session_active is active
+    visitor = db.Principal(id="prn_guest", type="guest", status=status, stay_id="stay_203")
+    assert for_session(guest_session(), visitor, the_stay=stay()).session_active is active
+    preview = build_context_for_preview(
+        {"principal_id": "prn_res"}, principal=resident, instance=INSTANCE, at=NOW
+    )
+    assert preview.session_active is active
+
+
 def test_revoked_resident_session_is_inactive() -> None:
     assert not for_session(session(revoked_at=NOW), principal()).session_active
 
@@ -429,6 +443,15 @@ def test_group_preview_is_a_hypothetical_member_bound_only_by_the_group() -> Non
         ),
         assignment("grp_other", "other", ["unit_x"], group=True),
         assignment("prn_res", "resident", ["unit_lr"]),
+        db.Assignment(
+            id="asg_none",
+            subject_type="principal",
+            subject_id=None,
+            role_template_id="nobody",
+            role_version=1,
+            unit_ids=["unit_x"],
+            status="active",
+        ),
     ]
     ctx = build_context_for_preview(
         {"group_id": "grp_family"},
@@ -512,7 +535,15 @@ def test_unknown_preview_targets_are_refused(target: dict[str, str]) -> None:
         ({"stay_id": "stay_other"}, {"stay": stay()}),
         ({"stay_id": "stay_203"}, {}),
         ({"invite_id": "inv_1"}, {"stay": stay()}),
-        ({"invite_id": "inv_1"}, {"invite": db.Invite(id="inv_2", stay_id="stay_203")}),
+        (
+            {"invite_id": "inv_1"},
+            {"invite": db.Invite(id="inv_2", stay_id="stay_203"), "stay": stay()},
+        ),
+        ({"principal_id": "prn_guest"}, {"principal": guest(), "stay": stay(id="stay_other")}),
+        (
+            {"principal_id": "prn_res", "session_id": "ses_1"},
+            {"principal": principal(), "session": session(purpose="preview")},
+        ),
         (
             {"invite_id": "inv_1"},
             {"invite": db.Invite(id="inv_1", stay_id="stay_other"), "stay": stay()},
@@ -566,7 +597,7 @@ RESOURCES = {
         ResourceRef("res_203_light", "unit_203", "light", "confirmed", LIGHT),
         ResourceRef("res_203_hum", "unit_203", "sensor", "blocked", BLOCKED),
         ResourceRef("res_lr_ac", "unit_lr", "climate", "confirmed", climate(frozenset())),
-        ResourceRef("res_lr_ac2", "unit_lr", "climate", "needs_review", climate(MODES)),
+        ResourceRef("res_lr_ac2", "unit_lr", "climate", "confirmed", climate(MODES)),
     ]
 }
 UNITS = {
@@ -743,7 +774,6 @@ def test_a_device_without_limits_is_clipped_by_the_schema_grants_and_fences() ->
         interval("0", "22"),
         interval("5", "22", "1"),
     )
-    assert living_temperatures(LIGHT) == living_temperatures(climate(low=None, high=None))
 
 
 def test_raw_device_limits_snap_inwards_onto_the_grid() -> None:
@@ -763,6 +793,10 @@ def test_raw_device_limits_snap_inwards_onto_the_grid() -> None:
         ("1E+40", None),
         ("8", "1000000"),
         ("-1000000", "30"),
+        ("NaN", "30"),
+        ("8", "Infinity"),
+        ("-Infinity", None),
+        ("sNaN", "30"),
     ],
 )
 def test_a_device_limit_the_rule_format_cannot_hold_offers_nothing(
@@ -1049,8 +1083,67 @@ def test_session_fences_narrow_only_their_own_session() -> None:
 def test_the_index_is_read_only_and_answers_repeatably() -> None:
     with pytest.raises(TypeError):
         INDEX.units["unit_x"] = frozenset()  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        INDEX.units = {}  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        INDEX.resources = {}  # type: ignore[misc]
     fenced = ctx(STAY_BINDING, fences=(fence(),))
     first = INDEX.effective_capability(fenced, "res_203_trv", Action.CLIMATE_SET_TEMPERATURE)
     again = INDEX.effective_capability(fenced, "res_203_trv", Action.CLIMATE_SET_TEMPERATURE)
     assert first == again
     assert temperatures(ctx(STAY_BINDING)) == (interval("18", "20"), interval("22", "24"))
+
+
+@pytest.mark.parametrize(
+    ("resources", "units"),
+    [
+        ({"res_x": RESOURCES["res_203_trv"]}, {"unit_203": frozenset({"res_203_trv"})}),
+        ({"res_203_trv": RESOURCES["res_203_trv"]}, {}),
+        ({"res_203_trv": RESOURCES["res_203_trv"]}, {"unit_lr": frozenset({"res_203_trv"})}),
+        (
+            {"res_203_trv": RESOURCES["res_203_trv"]},
+            {"unit_203": frozenset({"res_203_trv", "res_203_light"})},
+        ),
+        (
+            {"res_203_trv": RESOURCES["res_203_trv"]},
+            {"unit_203": frozenset({"res_203_trv"}), "unit_lr": frozenset({"res_203_trv"})},
+        ),
+    ],
+)
+def test_resources_and_units_must_agree(
+    resources: dict[str, ResourceRef], units: dict[str, frozenset[str]]
+) -> None:
+    with pytest.raises(ValueError):
+        PolicyIndex({}, resources, units)
+
+
+def test_a_unit_without_resources_is_fine() -> None:
+    index = PolicyIndex({}, {}, {"unit_empty": frozenset()})
+    assert index.units == {"unit_empty": frozenset()}
+
+
+def light_capability(
+    action: Action, status: str = "confirmed", capabilities: DeviceCapabilities = LIGHT
+) -> EffectiveCapability | None:
+    grant = {
+        "resources": ["res_203_light"],
+        "actions": ["state.read", "history.read", "light.on", "light.set_level"],
+    }
+    ref = ResourceRef("res_203_light", "unit_203", "light", status, capabilities)  # type: ignore[arg-type]
+    index = PolicyIndex(
+        {("room_guest", 1): RoleRules.model_validate({"grants": [grant]})},
+        {ref.id: ref},
+        {"unit_203": frozenset({ref.id})},
+    )
+    return index.effective_capability(ctx(STAY_BINDING), ref.id, action)
+
+
+def test_the_capability_offers_nothing_the_device_or_its_review_rules_out() -> None:
+    assert light_capability(Action.STATE_READ) == EffectiveCapability(matched=("room_guest@1:0",))
+    on_off = DeviceCapabilities("light", frozenset({Action.LIGHT_ON, Action.LIGHT_OFF}))
+    assert light_capability(Action.LIGHT_SET_LEVEL, capabilities=on_off) is None
+    assert light_capability(Action.LIGHT_ON, capabilities=on_off) is not None
+    assert light_capability(Action.STATE_READ, "blocked") is None
+    assert light_capability(Action.STATE_READ, "needs_review") is not None
+    assert light_capability(Action.LIGHT_ON, "needs_review") is None
+    assert light_capability(Action.HISTORY_READ) is None

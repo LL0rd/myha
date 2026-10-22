@@ -116,6 +116,8 @@ def build_context_for_preview(
         raise ValueError("the principal does not match the preview target")
     if session is not None and session.principal_id != principal.id:
         raise ValueError("the session belongs to another principal")
+    if session is not None and session.purpose != "access":
+        raise ValueError(f"no preview of a session with purpose {session.purpose!r}")
     if (None if session is None else session.id) != target.get("session_id"):
         raise ValueError("the session does not match the preview target")
     return _principal_context(
@@ -134,24 +136,27 @@ def _principal_context(
     now: datetime,
     purpose: Purpose,
 ) -> EffectiveContext:
+    """A real principal; one that is not active has no active session (plan 2 also revokes)."""
     if principal.type == "guest":  # exactly the stay's binding; invites carry no role
         if stay is None or stay.id != principal.stay_id:
             raise ValueError("a guest acts only through the stay of its invitation")
         if session is not None and session.stay_id != stay.id:
             raise ValueError("the session belongs to another stay")
-        return _guest_context(principal.id, principal.id, stay, session, fences, instance, purpose)
-    if principal.type not in ("resident", "display"):
+        ctx = _guest_context(principal.id, principal.id, stay, session, fences, instance, purpose)
+    elif principal.type in ("resident", "display"):
+        groups = {
+            membership.group_id
+            for membership in memberships
+            if membership.principal_id == principal.id
+            and membership.valid_from <= now
+            and (membership.valid_to is None or now < membership.valid_to)
+        }
+        ctx = _member_context(
+            principal.id, principal.id, groups, session, assignments, fences, instance, purpose
+        )
+    else:
         raise ValueError(f"unknown principal type {principal.type!r}")
-    groups = {
-        membership.group_id
-        for membership in memberships
-        if membership.principal_id == principal.id
-        and membership.valid_from <= now
-        and (membership.valid_to is None or now < membership.valid_to)
-    }
-    return _member_context(
-        principal.id, principal.id, groups, session, assignments, fences, instance, purpose
-    )
+    return ctx if principal.status == "active" else replace(ctx, session_active=False)
 
 
 def _member_context(
@@ -165,7 +170,9 @@ def _member_context(
     purpose: Purpose,
 ) -> EffectiveContext:
     """Residents, displays and the hypothetical member of a group: their active assignments."""
-    subjects = {("principal", principal_id)} | {("group", group_id) for group_id in group_ids}
+    subjects = {("group", group_id) for group_id in group_ids}
+    if principal_id is not None:
+        subjects.add(("principal", principal_id))
     bindings = (
         RoleBinding(row.role_template_id, row.role_version, frozenset(row.unit_ids))
         for row in assignments
@@ -175,7 +182,7 @@ def _member_context(
     return EffectiveContext(
         principal_ref=ref,
         role_bindings=_capped(bindings, session),
-        fences=_fences(fences, principal=principal_id, session=session_id),
+        fences=_fences(fences, principal=principal_id, stay=None, session=session_id),
         not_before=None if session is None else session.not_before,
         not_after=None if session is None else session.not_after,
         stay_id=None,
@@ -224,12 +231,15 @@ def _capped(bindings: Iterable[RoleBinding], session: db.Session | None) -> tupl
     )
 
 
-def _fences(rows: Iterable[db.Fence], **own: str | None) -> tuple[Fence, ...]:
+def _fences(
+    rows: Iterable[db.Fence], *, principal: str | None, stay: str | None, session: str | None
+) -> tuple[Fence, ...]:
     """Instance and unit fences plus those of the context's own principal, stay and session.
 
     Every row is parsed, so a broken fence fails the context instead of being skipped.
     """
-    mine = {(scope, scope_id) for scope, scope_id in own.items() if scope_id is not None}
+    own = (("principal", principal), ("stay", stay), ("session", session))
+    mine = {(scope, scope_id) for scope, scope_id in own if scope_id is not None}
     parsed = (Fence.model_validate(row, from_attributes=True) for row in rows)
     return tuple(
         fence

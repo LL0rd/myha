@@ -7,7 +7,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Context, Decimal
 from types import MappingProxyType
 from typing import Literal, get_args
 
-from myha_gateway.adapters.base import Action, DeviceCapabilities
+from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.model import PARAM_SCHEMA, Bound, Fence, Grant, Interval, Mode, RoleRules
 
@@ -47,18 +47,28 @@ class EffectiveCapability:
     matched: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True, eq=False)
 class PolicyIndex:
-    """Rules, resources and units of one policy version; built once and never changed."""
+    """Rules, resources and units of one policy version; built once and never changed.
 
-    def __init__(
-        self,
-        role_versions: Mapping[tuple[str, int], RoleRules],
-        resources: Mapping[str, ResourceRef],
-        units: Mapping[str, frozenset[str]],  # unit_id -> resource ids
-    ) -> None:
-        self._role_versions = MappingProxyType(dict(role_versions))
-        self._resources = MappingProxyType(dict(resources))
-        self.units: Mapping[str, frozenset[str]] = MappingProxyType(dict(units))
+    ``units`` lists every resource under its own unit and nothing else; a unit may be empty.
+    """
+
+    role_versions: Mapping[tuple[str, int], RoleRules]
+    resources: Mapping[str, ResourceRef]
+    units: Mapping[str, frozenset[str]]  # unit_id -> resource ids
+
+    def __post_init__(self) -> None:
+        # read-only copies: the caller's mappings may change later, the index never does
+        object.__setattr__(self, "role_versions", MappingProxyType(dict(self.role_versions)))
+        object.__setattr__(self, "resources", MappingProxyType(dict(self.resources)))
+        units = MappingProxyType({unit: frozenset(ids) for unit, ids in self.units.items()})
+        object.__setattr__(self, "units", units)
+        if any(key != ref.id for key, ref in self.resources.items()):
+            raise ValueError("a resource is filed under another id")
+        listed = {(unit, resource_id) for unit, ids in units.items() for resource_id in ids}
+        if listed != {(ref.unit_id, ref.id) for ref in self.resources.values()}:
+            raise ValueError("units must list every resource under its own unit and nothing else")
 
     def rules_for(self, ctx: EffectiveContext) -> list[tuple[RoleBinding, RoleRules]]:
         """The rules of each binding.
@@ -68,7 +78,7 @@ class PolicyIndex:
         """
         found = []
         for binding in ctx.role_bindings:
-            rules = self._role_versions.get((binding.role_template_id, binding.role_version))
+            rules = self.role_versions.get((binding.role_template_id, binding.role_version))
             if rules is None:
                 name = f"{binding.role_template_id}@{binding.role_version}"
                 raise ValueError(f"unknown role version {name}")
@@ -76,7 +86,7 @@ class PolicyIndex:
         return found
 
     def resource(self, resource_id: str) -> ResourceRef | None:
-        return self._resources.get(resource_id)
+        return self.resources.get(resource_id)
 
     def in_scope(self, ctx: EffectiveContext, resource_id: str) -> bool:
         """Whether the resource's unit belongs to a binding; its status is the decision's."""
@@ -125,10 +135,17 @@ class PolicyIndex:
     def effective_capability(
         self, ctx: EffectiveContext, resource_id: str, action: Action
     ) -> EffectiveCapability | None:
-        """Grants cut by fences and the device; ``None`` if no grant covers it or a deny does."""
+        """What the context may do with the action on the resource, for projection and UI.
+
+        Grants cut by fences and the device. ``None`` when no grant covers the action, a deny
+        names it, or the resource cannot offer it (see ``_offered``); decide() reports those
+        cases with codes of its own and in its own order.
+        """
         resource = self.resource(resource_id)
+        if resource is None or not _offered(resource, action):
+            return None
         grants = self.grants(ctx, resource_id, action)
-        if resource is None or not grants or self.denied(ctx, resource_id, action):
+        if not grants or self.denied(ctx, resource_id, action):
             return None
         matched = tuple(grants)
         fences = self.fences(ctx, resource_id, action)
@@ -148,14 +165,14 @@ class PolicyIndex:
             confirmed = resource.capabilities.confirmed_modes
             return EffectiveCapability(allowed=allowed & confirmed, matched=matched)
         bounds: list[Bound] = [b for fence in fences if (b := getattr(fence.parameters, name))]
+        # all fences at once: they narrow the range, the grid stays the grant's
+        fenced = (max(b.min for b in bounds), min(b.max for b in bounds)) if bounds else None
         intervals: dict[Interval, None] = {}  # ordered set: identical intervals appear once
         for cut in self.grant_intervals(ctx, resource_id, action).values():
             for interval in cut:
-                fenced: Interval | None = interval
-                for bound in bounds:  # a fence narrows the range, the grid stays the grant's
-                    fenced = None if fenced is None else _on_grid(fenced, (), bound.min, bound.max)
-                if fenced is not None:
-                    intervals[fenced] = None
+                kept = interval if fenced is None else _on_grid(interval, (), *fenced)
+                if kept is not None:
+                    intervals[kept] = None
         return EffectiveCapability(intervals=tuple(intervals), matched=matched)
 
     def grant_intervals(
@@ -215,6 +232,18 @@ class PolicyIndex:
         return max(limits[0], *(b.min for b in bounds)), min(limits[1], *(b.max for b in bounds))
 
 
+def _offered(resource: ResourceRef, action: Action) -> bool:
+    """Whether the resource can offer the action: not blocked, no history (never in the MVP),
+    and for writes a device that can do it and a binding that awaits no review."""
+    write = action in WRITE_ACTIONS
+    return not (
+        resource.status == "blocked"
+        or action is Action.HISTORY_READ
+        or (write and action not in resource.capabilities.actions)
+        or (write and resource.status == "needs_review")
+    )
+
+
 def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
     """A grant without a rule for ``name``: all the request schema accepts, before the grid."""
     low, high, step = _SCHEMA[name]
@@ -233,15 +262,16 @@ def _grid_steps(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, .
 def _limits(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, Decimal] | None:
     """The range the request schema and the device accept, device limits rounded inwards.
 
-    Raw device numbers are only compared, never made rule decimals; a limit of 1e6 or more fits
-    no rule decimal at all, so the result is ``None`` and nothing is offered (fail closed).
+    Raw device numbers are only compared, never made rule decimals; a limit that is not finite
+    or reaches 1e6 fits no rule decimal, so the result is ``None`` and nothing is offered.
     """
     low, high, _ = _SCHEMA[name]
     if name != "target_c":
         return low, high
     device_low, device_high = capabilities.target_c_min, capabilities.target_c_max
-    if any(limit is not None and not -_FAR < limit < _FAR for limit in (device_low, device_high)):
-        return None
+    for limit in (device_low, device_high):
+        if limit is not None and not (limit.is_finite() and -_FAR < limit < _FAR):
+            return None  # NaN would raise when compared; infinity means no usable limit
     if device_low is not None:
         low = max(low, device_low.quantize(_CENT, ROUND_CEILING, _CONTEXT))
     if device_high is not None:
