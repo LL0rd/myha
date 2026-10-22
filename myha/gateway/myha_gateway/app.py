@@ -17,6 +17,7 @@ from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
 from myha_gateway.ha.supervisor import SupervisorUnavailable
+from myha_gateway.limits import BodyLimitMiddleware
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,7 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     origin = ctx.public_origin
     connect = "'self'" if origin is None else f"'self' {origin.replace('http', 'ws', 1)}"
     csp = content_security_policy(frame_ancestors="'none'", connect=connect)
+    app.add_middleware(BodyLimitMiddleware)  # inside the header middleware: its 413 gets them
     app.add_middleware(SecurityHeadersMiddleware, csp=csp)
     return app
 

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
+from myha_gateway.limits import HeaderDeadlineProtocol
 from myha_gateway.logsetup import setup_logging
 from myha_gateway.settings import Settings
 
@@ -24,6 +25,7 @@ def _server(
     port: int,
     tls: tuple[str, str] | None = None,
     limit_concurrency: int | None = None,
+    http: type[asyncio.Protocol] | str = "h11",
 ) -> uvicorn.Server:
     """uvicorn server that trusts no proxy header and logs through the redacting root handler."""
     certfile, keyfile = tls or (None, None)
@@ -36,10 +38,9 @@ def _server(
         proxy_headers=False,
         server_header=False,
         # h11 caps an incomplete header block at 16 KiB: 400 and a close.
-        # shortcut: a block that arrives complete in one read (up to 256 KiB) still passes,
-        # there is no deadline for a slowly sent block (slowloris) and no JSON body cap yet;
-        # Plan 2 adds the deadline and the body cap
-        http="h11",
+        # shortcut: a block that arrives complete in one read (up to 256 KiB) still passes;
+        # cap it in the protocol if a large single read ever matters
+        http=http,
         h11_max_incomplete_event_size=16 * 1024,
         limit_concurrency=limit_concurrency,  # beyond: 503 instead of unbounded tasks
         timeout_keep_alive=5,
@@ -58,8 +59,16 @@ def _public_server(ctx: AppContext) -> uvicorn.Server:
     settings = ctx.settings
     app = create_public_app(ctx)
     # Public only: on the admin listener, foreign peers could fill the limit with half-open
-    # connections and lock the ingress out with 503 before the peer guard runs.
-    return _server(app, settings.public_bind, settings.public_port, ctx.public_tls, 200)
+    # connections and lock the ingress out with 503 before the peer guard runs. Here the
+    # header deadline frees the slots that half-open connections take.
+    return _server(
+        app,
+        settings.public_bind,
+        settings.public_port,
+        ctx.public_tls,
+        limit_concurrency=200,
+        http=HeaderDeadlineProtocol,
+    )
 
 
 async def _serve(
