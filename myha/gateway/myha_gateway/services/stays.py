@@ -106,7 +106,8 @@ async def issue_invites(
 
     ``redeem_minutes`` up to ``MAX_REDEEM_MINUTES``, which the API checks.
     An unrevoked invitation holds its slot while it is still redeemable, or once redeemed while
-    the session it created is not revoked; an expired, never redeemed one frees it (A51).
+    the session it created is neither revoked nor expired; an expired, never redeemed one frees
+    it (A51).
     """
     if origin is None:
         raise ApiError(409, "CONFLICT", "Public origin not configured", {"reason": "no_origin"})
@@ -115,7 +116,7 @@ async def issue_invites(
         raise ApiError(409, "CONFLICT", "Stay is closed", {"reason": closed})
     holding = or_(
         and_(Invite.consumed_at.is_(None), Invite.redeem_until > now),
-        and_(SessionRow.id.is_not(None), SessionRow.revoked_at.is_(None)),
+        and_(SessionRow.revoked_at.is_(None), SessionRow.not_after > now),
     )
     query = (
         select(Invite.device_slot)

@@ -100,6 +100,19 @@ async def test_seed_needs_home_assistant(ctx: AppContext) -> None:
         await seed_room203(ctx.engine, ctx.ha, ORIGIN)
 
 
+async def test_seed_with_a_fixture_entity_missing_writes_nothing(
+    ctx: AppContext, sim: SimHandle
+) -> None:
+    before = await dump(ctx)
+    await sim.control.post("entity/remove", {"entity_id": "climate.living_ac"})
+    async with asyncio.timeout(5):
+        while ctx.ha.state("climate.living_ac") is not None:  # noqa: ASYNC110 (no HA event)
+            await asyncio.sleep(0.01)
+    with pytest.raises(RuntimeError, match=r"climate\.living_ac missing"):
+        await seed_room203(ctx.engine, ctx.ha, ORIGIN)
+    assert await dump(ctx) == before
+
+
 async def run_cli(env: dict[str, str]) -> tuple[int, str, str]:
     """``myha-gateway dev-seed room203`` in its own process; the test loop serves the simulator."""
     process = await asyncio.create_subprocess_exec(

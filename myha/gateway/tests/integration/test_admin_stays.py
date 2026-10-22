@@ -255,8 +255,9 @@ async def set_invite(ctx: AppContext, invite_id: str, **values: Any) -> None:
         await session.execute(update(db.Invite).where(db.Invite.id == invite_id).values(**values))
 
 
+@pytest.mark.parametrize("ending", ["revoked_at", "not_after"])
 async def test_slot_held_only_by_redeemable_or_live_invites(
-    ctx: AppContext, client: httpx.AsyncClient
+    ctx: AppContext, client: httpx.AsyncClient, ending: str
 ) -> None:
     stay = (await create(client)).json()
     url = f"{STAYS}/{stay['id']}/invites"
@@ -288,8 +289,8 @@ async def test_slot_held_only_by_redeemable_or_live_invites(
 
     async with write_session(ctx.engine) as session:
         query = update(db.Session).where(db.Session.id == "ses_guest")
-        await session.execute(query.values(revoked_at=now()))
-    r = await client.post(url, json={"count": 1})
+        await session.execute(query.values({ending: now() - timedelta(seconds=1)}))
+    r = await client.post(url, json={"count": 1})  # the session was revoked or has expired
     assert [i["device_slot"] for i in r.json()["invites"]] == [2]
 
 
@@ -317,9 +318,9 @@ async def test_unknown_or_closed_stay(ctx: AppContext, client: httpx.AsyncClient
     r = await client.post(f"{STAYS}/{stay['id']}/invites", json={"count": 1})
     assert code(r) == (409, "CONFLICT") and r.json()["error"]["details"]["reason"] == "cancelled"
 
-    ends = now() + timedelta(seconds=1)
-    draft = (await create(client, ends_at=ends.isoformat())).json()
-    await asyncio.sleep(1.1)
+    starts = now() - timedelta(days=2)
+    window = {"starts_at": starts.isoformat(), "ends_at": (starts + timedelta(days=1)).isoformat()}
+    draft = (await create(client, **window)).json()
     r = await client.post(f"{STAYS}/{draft['id']}/invites", json={"count": 1})
     assert r.json()["error"]["details"]["reason"] == "ended"  # a draft past its end
 
