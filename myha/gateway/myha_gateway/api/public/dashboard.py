@@ -31,13 +31,12 @@ async def dashboard(
     current: Annotated[SessionContext, Depends(require_session(purpose="access"))],
 ) -> DashboardResponse:
     ctx, now, session_id = app_context(request), utcnow(), current.session.id
-    found = await ctx.policy.context_for_session(session_id, now)
+    async with ctx.sessions() as session:  # one snapshot for context, index and layout
+        found = await ctx.policy.context_for_session(session_id, now, session)
+        layout = await load_layout(session)
     if found is None:  # revoked and removed since the session check
         raise ApiError(401, "UNAUTHENTICATED", "Not authenticated")
     effective, index = found
-    # shortcut: a second read; the layout only names and orders, visibility is the index's
-    async with ctx.sessions() as session:
-        layout = await load_layout(session)
     try:
         view = project_dashboard(effective, index, ctx.policy.state_view, layout, now)
     except Exception:

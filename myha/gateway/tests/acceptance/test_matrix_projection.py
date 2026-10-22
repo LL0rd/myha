@@ -21,7 +21,9 @@ from myha_gateway.db import models as db
 from myha_gateway.db import session_factory, write_session
 from myha_gateway.deps import AppContext
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
+from myha_gateway.policy.decide import decide
 from myha_gateway.policy.index import PolicyIndex
+from myha_gateway.policy.model import parameter_name
 from myha_gateway.projection.dashboard import (
     Card,
     UnitLayout,
@@ -242,6 +244,30 @@ def test_locked_adapter_offers_no_write_controls() -> None:
 LEVEL = {"intervals": [{"min": "0", "max": "100", "step": "1", "origin": "0"}]}
 
 
+def assert_offers_are_allowed(
+    view: DashboardView, ctx: EffectiveContext, index: PolicyIndex
+) -> int:
+    """Every offered interval edge and mode is one decide allows; returns how many it checked."""
+    checked = 0
+    for resource_id, res in resources(view).items():
+        for action, capability in res.get("capabilities", {}).items():
+            name = parameter_name(Action(action))
+            values: list[Any] = list(capability.get("allowed", []))
+            for edge in capability.get("intervals", []):
+                values += [edge["min"], edge["max"]]
+            if name in ("level_pct", "position_pct"):
+                values = [int(value) for value in values]
+            params_list = [{name: value} for value in values] if name else [{}]
+            for params in params_list:
+                state = fixture_view(resource_id)
+                found = decide(
+                    ctx, index, resource_id, action, params, DURING_STAY, state, execute=False
+                )
+                assert found.allowed, (resource_id, action, params, found.code)
+                checked += 1
+    return checked
+
+
 def test_capabilities_reflect_fence() -> None:
     plain = project()
     assert capabilities(plain, "res_203_trv") == {
@@ -259,19 +285,19 @@ def test_capabilities_reflect_fence() -> None:
     }
     assert "capabilities" not in resources(plain)["res_203_hum"]  # read only
     assert "capabilities" not in resources(plain)["res_203_bedside"]  # no write granted
+    assert assert_offers_are_allowed(plain, guest_context(), room203_index()) > 10
 
     def unit_fence(action: str, **parameters: Any) -> dict[str, Any]:
         scope = {"scope_type": "unit", "scope_id": "unit_203"}
         return scope | {"action": action, "parameters": parameters}
 
-    fenced = project(
-        guest_context(
-            unit_fence("climate.set_temperature", target_c={"min": "20", "max": "22.2"}),
-            unit_fence("climate.set_mode", mode={"allowed": ["off"]}),
-            unit_fence("cover.set_position", position_pct={"min": "0", "max": "50"}),
-            unit_fence("light.set_level", level_pct={"min": "10", "max": "40"}),
-        )
+    fenced_ctx = guest_context(
+        unit_fence("climate.set_temperature", target_c={"min": "20", "max": "22.2"}),
+        unit_fence("climate.set_mode", mode={"allowed": ["off"]}),
+        unit_fence("cover.set_position", position_pct={"min": "0", "max": "50"}),
+        unit_fence("light.set_level", level_pct={"min": "10", "max": "40"}),
     )
+    fenced = project(fenced_ctx)
     assert capabilities(fenced, "res_203_trv") == {
         "climate.set_temperature": {
             "intervals": [{"min": "20.0", "max": "22.0", "step": "0.5", "origin": "0.0"}]
@@ -286,6 +312,7 @@ def test_capabilities_reflect_fence() -> None:
     assert capabilities(fenced, "res_203_light")["light.set_level"] == {
         "intervals": [{"min": "10", "max": "40", "step": "1", "origin": "0"}]
     }
+    assert assert_offers_are_allowed(fenced, fenced_ctx, room203_index()) > 5
     # a fence that leaves no value and no mode removes the control
     closed = project(
         guest_context(
@@ -457,3 +484,43 @@ async def test_session_gone_since_the_check_is_unauthenticated(
     monkeypatch.setattr(world.ctx.policy, "context_for_session", gone)
     r = await get_dashboard(world, world.secrets[0])
     assert (r.status_code, r.json()["error"]["code"]) == (401, "UNAUTHENTICATED")
+
+
+def test_layout_unit_differs_from_index_unit_stays_hidden() -> None:
+    # the layout was read apart from the index: the light moved to the living room in it
+    moved = Card("res_203_light", "Label res_203_light", None)
+    room_203 = UnitLayout("unit_203", "Name unit_203", LAYOUT[0].cards[1:])
+    living = UnitLayout("unit_lr", "Name unit_lr", (moved, *LAYOUT[1].cards))
+    body = public(project(layout=(room_203, living)))
+    assert [room["id"] for room in body["rooms"]] == ["unit_203"]
+    assert "Name unit_lr" not in json.dumps(body)
+    assert "res_203_light" not in resources(project(layout=(room_203, living)))
+
+
+@pytest.mark.parametrize(
+    ("resource_id", "actions", "denied", "expected"),
+    [
+        ("res_203_light", ["light.set_level", "light.on"], [], [("1", "100")]),
+        ("res_203_light", ["light.set_level", "light.off"], [], [("0", "0")]),
+        (
+            "res_203_light",
+            ["light.set_level", "light.on", "light.off"],
+            ["light.off"],
+            [("1", "100")],
+        ),
+        ("res_203_blind", ["cover.set_position", "cover.open"], [], [("100", "100")]),
+        ("res_203_blind", ["cover.set_position", "cover.close"], [], [("0", "0")]),
+        ("res_203_blind", ["cover.set_position"], [], []),
+    ],
+)
+def test_offered_intervals_respect_companion_grants(
+    resource_id: str, actions: list[str], denied: list[str], expected: list[tuple[str, str]]
+) -> None:
+    grants = [{"resources": [resource_id], "actions": ["state.read", *actions]}]
+    denies = [{"resources": [resource_id], "actions": denied}] if denied else []
+    index = room203_index(grants=grants, denies=denies)
+    view = project(index=index)
+    action = actions[0]
+    offered = capabilities(view, resource_id).get(action, {}).get("intervals", [])
+    assert [(edge["min"], edge["max"]) for edge in offered] == expected
+    assert_offers_are_allowed(view, guest_context(), index)

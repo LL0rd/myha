@@ -65,70 +65,74 @@ class PolicyLoader:
             return await self._index(session, version)
 
     async def context_for_session(
-        self, session_id: str, now: datetime
+        self, session_id: str, now: datetime, session: AsyncSession | None = None
     ) -> tuple[EffectiveContext, PolicyIndex] | None:
         """The session's context and the index of the same policy version; ``None`` if unknown.
 
         One read transaction, so both stem from one snapshot; ``policy_version`` and
         ``time_trusted`` come from the database, never from the start snapshot of the instance.
+        With ``session`` it reads in the caller's transaction, so the caller's other reads,
+        such as the dashboard layout, see the same snapshot.
         Raises ``ValueError`` for rows that do not belong together (see ``context.py``).
         """
-        async with self._sessions() as session:
-            version, trusted = await _instance(session)
-            row = await session.get(db.Session, session_id)
-            if row is None:
-                return None
-            principal = None
-            if row.principal_id is not None:
-                principal = await session.get(db.Principal, row.principal_id)
-            principal_id = None if principal is None else principal.id
-            stay_id = None if principal is None else principal.stay_id
-            stay = None if stay_id is None else await session.get(db.Stay, stay_id)
-            memberships = await _all(
-                session,
-                select(db.Membership)
-                .where(db.Membership.principal_id == principal_id)
-                .order_by(db.Membership.id),
-            )
-            groups = [membership.group_id for membership in memberships]
-            assignments = await _all(
-                session,
-                select(db.Assignment)
-                .where(
-                    or_(
-                        and_(
-                            db.Assignment.subject_type == "principal",
-                            db.Assignment.subject_id == principal_id,
-                        ),
-                        and_(
-                            db.Assignment.subject_type == "group",
-                            db.Assignment.subject_id.in_(groups),
-                        ),
-                    )
+        if session is None:
+            async with self._sessions() as fresh:
+                return await self.context_for_session(session_id, now, fresh)
+        version, trusted = await _instance(session)
+        row = await session.get(db.Session, session_id)
+        if row is None:
+            return None
+        principal = None
+        if row.principal_id is not None:
+            principal = await session.get(db.Principal, row.principal_id)
+        principal_id = None if principal is None else principal.id
+        stay_id = None if principal is None else principal.stay_id
+        stay = None if stay_id is None else await session.get(db.Stay, stay_id)
+        memberships = await _all(
+            session,
+            select(db.Membership)
+            .where(db.Membership.principal_id == principal_id)
+            .order_by(db.Membership.id),
+        )
+        groups = [membership.group_id for membership in memberships]
+        assignments = await _all(
+            session,
+            select(db.Assignment)
+            .where(
+                or_(
+                    and_(
+                        db.Assignment.subject_type == "principal",
+                        db.Assignment.subject_id == principal_id,
+                    ),
+                    and_(
+                        db.Assignment.subject_type == "group",
+                        db.Assignment.subject_id.in_(groups),
+                    ),
                 )
-                .order_by(db.Assignment.id),
             )
-            own = (("principal", principal_id), ("stay", stay_id), ("session", row.id))
-            fences = await _all(
-                session,
-                select(db.Fence)
-                .where(
-                    or_(
-                        db.Fence.scope_type.in_(("instance", "unit")),
-                        *(
-                            and_(db.Fence.scope_type == scope, db.Fence.scope_id == scope_id)
-                            for scope, scope_id in own
-                            if scope_id is not None
-                        ),
-                    )
+            .order_by(db.Assignment.id),
+        )
+        own = (("principal", principal_id), ("stay", stay_id), ("session", row.id))
+        fences = await _all(
+            session,
+            select(db.Fence)
+            .where(
+                or_(
+                    db.Fence.scope_type.in_(("instance", "unit")),
+                    *(
+                        and_(db.Fence.scope_type == scope, db.Fence.scope_id == scope_id)
+                        for scope, scope_id in own
+                        if scope_id is not None
+                    ),
                 )
-                .order_by(db.Fence.id),
             )
-            instance = db.Instance(policy_version=version, time_trusted=trusted)
-            ctx = build_context_for_session(
-                row, principal, assignments, memberships, stay, fences, instance, now
-            )
-            return ctx, await self._index(session, version)
+            .order_by(db.Fence.id),
+        )
+        instance = db.Instance(policy_version=version, time_trusted=trusted)
+        ctx = build_context_for_session(
+            row, principal, assignments, memberships, stay, fences, instance, now
+        )
+        return ctx, await self._index(session, version)
 
     def state_view(self, resource_id: str) -> StateView | None:
         """The adapter's view of a bound entity, locked as ``adapter_locked`` says."""

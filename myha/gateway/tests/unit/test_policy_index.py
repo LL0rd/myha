@@ -17,7 +17,7 @@ from myha_gateway.policy.context import (
     build_context_for_preview,
     build_context_for_session,
 )
-from myha_gateway.policy.index import EffectiveCapability, PolicyIndex, ResourceRef
+from myha_gateway.policy.index import EffectiveCapability, PolicyIndex, ResourceRef, _trim
 from myha_gateway.policy.model import Bound, Fence, Interval, RoleRules
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
@@ -972,8 +972,9 @@ def test_percent_without_rule_is_zero_to_hundred_in_whole_steps() -> None:
     capability = INDEX.effective_capability(
         ctx(STAY_BINDING), "res_203_light", Action.LIGHT_SET_LEVEL
     )
+    # 0 would switch off, and ROOM_GUEST does not grant light.off: decide refuses it (A17)
     assert capability == EffectiveCapability(
-        intervals=(interval("0", "100", "1"),), matched=("room_guest@1:3",)
+        intervals=(interval("1", "100", "1"),), matched=("room_guest@1:3",)
     )
 
 
@@ -983,7 +984,7 @@ def test_percent_rules_are_clipped_to_zero_to_hundred() -> None:
             "grants": [
                 {
                     "resources": ["res_203_light"],
-                    "actions": ["light.set_level"],
+                    "actions": ["light.set_level", "light.on", "light.off"],
                     "parameters": {
                         "level_pct": {"intervals": [{"min": "-10", "max": "150", "step": "5"}]}
                     },
@@ -1340,3 +1341,59 @@ def test_a_resource_kind_must_match_its_capabilities() -> None:
     odd = replace(RESOURCES["res_203_trv"], kind="light")
     with pytest.raises(ValueError, match="kind"):
         index_of({}, {odd.id: odd}, {"unit_203": {odd.id}})
+
+
+@pytest.mark.parametrize(
+    ("resource_id", "action", "companions", "denied", "expected"),
+    [
+        ("res_203_light", "light.set_level", ["light.on", "light.off"], [], [("0", "100")]),
+        ("res_203_light", "light.set_level", ["light.on"], [], [("1", "100")]),
+        ("res_203_light", "light.set_level", ["light.off"], [], [("0", "0")]),
+        ("res_203_light", "light.set_level", [], [], []),
+        (
+            "res_203_light",
+            "light.set_level",
+            ["light.on", "light.off"],
+            ["light.off"],
+            [("1", "100")],
+        ),
+        ("res_203_blind", "cover.set_position", ["cover.open", "cover.close"], [], [("0", "100")]),
+        ("res_203_blind", "cover.set_position", ["cover.open"], [], [("100", "100")]),
+        ("res_203_blind", "cover.set_position", ["cover.close"], [], [("0", "0")]),
+        ("res_203_blind", "cover.set_position", [], [], []),
+        (
+            "res_203_blind",
+            "cover.set_position",
+            ["cover.open", "cover.close"],
+            ["cover.open"],
+            [("0", "0")],
+        ),
+    ],
+)
+def test_percent_intervals_need_the_companion_actions(
+    resource_id: str,
+    action: str,
+    companions: list[str],
+    denied: list[str],
+    expected: list[tuple[str, str]],
+) -> None:
+    """set_level 0 needs light.off, above 0 light.on; set_position below 100 cover.close, above
+    0 cover.open (adapters' required_actions): an offered value is one decide allows."""
+    grant = {"resources": [resource_id], "actions": [action, *companions]}
+    denies = [{"resources": [resource_id], "actions": denied}] if denied else []
+    rules = RoleRules.model_validate({"grants": [grant], "denies": denies})
+    blind = ResourceRef(BLIND, "unit_203", "cover", "confirmed", COVER)
+    units = UNITS | {"unit_203": UNITS["unit_203"] | {BLIND}}
+    index = index_of({("room_guest", 1): rules}, RESOURCES | {BLIND: blind}, units)
+    capability = index.effective_capability(ctx(STAY_BINDING), resource_id, Action(action))
+    assert capability is not None
+    assert capability.intervals == tuple(interval(low, high, "1") for low, high in expected)
+
+
+def test_trim_cuts_each_part_of_a_percentage() -> None:
+    whole = interval("0", "100", "5")
+    assert _trim(whole, True, True, True) == [whole]
+    assert _trim(whole, False, True, False) == [interval("5", "95", "5")]
+    assert _trim(whole, True, False, True) == [interval("0", "0", "5"), interval("100", "100", "5")]
+    assert _trim(interval("10", "100", "5"), True, False, False) == []  # 0 lies outside
+    assert _trim(interval("0", "5", "5"), False, True, True) == [interval("5", "5", "5")]

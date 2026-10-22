@@ -83,12 +83,14 @@ async def load_layout(session: AsyncSession) -> tuple[UnitLayout, ...]:
         row.unit_id: _rank(row.layout)
         for row in (await session.scalars(select(db.Dashboard))).all()
     }
+    by_unit: dict[str, list[Card]] = {}
+    for unit_id, resource_id, label, icon in cards:
+        by_unit.setdefault(unit_id, []).append(Card(resource_id, label, icon))
     result = []
     for unit_id, name in units:
         rank = ranks.get(unit_id, {})
-        own = [Card(rid, label, icon) for unit, rid, label, icon in cards if unit == unit_id]
-        own.sort(key=lambda card: rank.get(card.resource_id, len(rank)))  # stable
-        result.append(UnitLayout(unit_id, name, tuple(own)))
+        own = sorted(by_unit.get(unit_id, ()), key=lambda c: rank.get(c.resource_id, len(rank)))
+        result.append(UnitLayout(unit_id, name, tuple(own)))  # sorted() is stable
     return tuple(result)
 
 
@@ -119,6 +121,8 @@ def project_dashboard(
 ) -> DashboardView:
     """The rooms of ``layout`` with at least one resource ``ctx`` may see; none unless online.
 
+    A card counts only under the unit the index files its resource under, so a layout read
+    apart from the index never puts a resource into a room the context may not see.
     Raises what ``decide`` raises, such as ``ValueError`` for another policy version.
     """
     status = dashboard_status(ctx, now)
@@ -126,8 +130,11 @@ def project_dashboard(
         return DashboardView(status=status, rooms=())
     rooms = []
     for unit in layout:
+        members = index.units.get(unit.id, frozenset())
         found = (
-            project_resource(ctx, index, views(card.resource_id), card, now) for card in unit.cards
+            project_resource(ctx, index, views(card.resource_id), card, now)
+            for card in unit.cards
+            if card.resource_id in members
         )
         shown = tuple(resource for resource in found if resource is not None)
         if shown:

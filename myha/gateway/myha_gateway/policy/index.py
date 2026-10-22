@@ -9,6 +9,7 @@ from typing import Literal, get_args
 
 from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities
 from myha_gateway.adapters.climate import DEFAULT_STEP
+from myha_gateway.adapters.registry import adapter_for
 from myha_gateway.policy.codes import DecisionCode
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.model import Bound, Fence, Grant, Interval, Mode, RoleRules, parameter_name
@@ -25,6 +26,9 @@ _FAR = 1_000_000  # rule decimals have at most six integer digits ...
 _MICRO = 1_000_000  # ... and six decimals, so each is a whole number of millionths
 _CONTEXT = Context(prec=28)  # independent of the caller's decimal context
 _ENDS: Mapping[Action, Decimal] = {Action.COVER_OPEN: Decimal(100), Action.COVER_CLOSE: Decimal(0)}
+# Probes for the parts of a percentage: 0, strictly between, 100. The adapters' companion
+# actions (required_actions) change only at the ends of the range, so one probe each suffices.
+_PERCENT_PROBES = (0, 50, 100)
 
 
 @dataclass(frozen=True)
@@ -180,7 +184,27 @@ class PolicyIndex:
                 kept = interval if fenced is None else _on_grid(interval, (), *fenced)
                 if kept is not None:
                     intervals[kept] = None
+        if name in ("level_pct", "position_pct"):
+            zero, between, full = (
+                self._companions_allowed(ctx, resource, action, name, probe)
+                for probe in _PERCENT_PROBES
+            )
+            trimmed = (part for kept in intervals for part in _trim(kept, zero, between, full))
+            intervals = dict.fromkeys(trimmed)
         return EffectiveCapability(intervals=tuple(intervals), matched=matched)
+
+    def _companions_allowed(
+        self, ctx: EffectiveContext, resource: ResourceRef, action: Action, name: str, value: int
+    ) -> bool:
+        """Whether decide's check of the companion actions passes for ``value``: granted and
+        not denied, such as ``light.off`` for level 0 or ``cover.close`` below 100."""
+        needed = adapter_for(resource.capabilities.kind).required_actions(action, {name: value}) - {
+            action
+        }
+        return all(
+            self.grants(ctx, resource.id, need) and not self.denied(ctx, resource.id, need)
+            for need in needed
+        )
 
     def grant_intervals(
         self, ctx: EffectiveContext, resource_id: str, action: Action
@@ -290,6 +314,20 @@ def _cut(
         parts = [(low, high)] if rule is None else [(i.min, i.max) for i in rule.intervals]
         spans += [(max(a, low), min(b, high)) for a, b in parts]
     return [(a, b) for a, b in spans if a <= b]
+
+
+def _trim(interval: Interval, zero: bool, between: bool, full: bool) -> list[Interval]:
+    """The parts of a snapped percentage interval that remain: 0 only if ``zero``, the values
+    strictly between 0 and 100 only if ``between``, 100 only if ``full``."""
+    low, high, step, origin = interval.min, interval.max, interval.step, interval.origin
+    if not between:  # the ends alone, each a single value; snapped bounds lie on the grid
+        ends = [end for end, ok in ((Decimal(0), zero), (Decimal(100), full)) if ok]
+        return [Interval(min=e, max=e, step=step, origin=origin) for e in ends if e in (low, high)]
+    if low == 0 and not zero:
+        low += step
+    if high == 100 and not full:
+        high -= step
+    return [Interval(min=low, max=high, step=step, origin=origin)] if low <= high else []
 
 
 def _offered(resource: ResourceRef, action: Action) -> bool:
