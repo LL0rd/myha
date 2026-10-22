@@ -155,7 +155,7 @@ packages = ["myha_gateway", "myha_simulator"]
 | `public_enabled: bool` | `False` | **Dev/Test-Override:** erzwingt Public-Listener auch ohne Instanzkonfiguration; dann gilt `tls_mode=proxy` ohne vertrauenswürdige Proxies (reines HTTP) und `public_origin` aus `MYHA_PUBLIC_ORIGIN` |
 | `public_origin: str \| None` | `None` | nur zusammen mit `public_enabled`; sonst kommt der Origin aus `instance.public_origin` |
 
-Regel in `Settings.model_validator`: `public_enabled and not public_origin` → `ValueError` („MYHA_PUBLIC_ORIGIN required with MYHA_PUBLIC_ENABLED“), außer `probe_mode` ist gesetzt (dann `public_origin = f"http://probe.invalid:{public_port}"`, weil die Probe nur `/healthz` nutzt).
+Regeln in `Settings.model_validator`: (1) `probe_mode` erzwingt `public_enabled = True` und setzt, falls leer, `public_origin = f"http://probe.invalid:{public_port}"` (die Probe nutzt nur `/healthz`); (2) danach gilt `public_enabled and not public_origin` → `ValueError` („MYHA_PUBLIC_ORIGIN required with MYHA_PUBLIC_ENABLED“). Alle späteren Stellen (`public_ready`, CSP-Builder, `ctx.public_origin`) hängen nur an `public_enabled`/`public_origin`, nie direkt an `probe_mode`, damit Task 1.6 den Probe-Modus rückstandsfrei entfernen kann.
 
 - [ ] **Step 2: Tests zuerst** (`test_settings.py`: Defaults; `options.json` setzt `log_level` und `probe_mode`; `public_enabled` ohne Origin → Fehler; mit `probe_mode` ok. `test_logsetup.py`: `RedactionFilter` ersetzt `Bearer <x>`, `(secret|token|password|authorization)[=:]\s*\S+`, und 43+-stellige base64url-Strings durch `<redacted>`. `test_ids.py`: `new_id("res")` → `res_` + 12 hex; `new_secret()` ≥ 43 Zeichen; `hash_secret` 64 hex; `constant_time_equal`).
 - [ ] **Step 3:** rot → implementieren → grün. Commit `feat(gateway): settings with dev overrides, log redaction and id helpers`.
@@ -318,7 +318,7 @@ docker buildx build --load --platform linux/amd64 \
 tmp=$(mktemp -d)
 cid=$(docker run -d --rm --entrypoint /opt/myha/venv/bin/myha-gateway \
   -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
-  -v "$tmp:/data" -p 18443:8443 myha-local:dev serve)
+  --tmpfs /data -p 18443:8443 myha-local:dev serve)
 trap 'docker stop "$cid" >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:18443/healthz && exit 0; sleep 1; done
 docker logs "$cid"; exit 1
@@ -348,7 +348,9 @@ Der `--entrypoint` umgeht `/init` (s6) absichtlich; der s6-Pfad wird in WP1 auf 
 
 ---
 
-## WP1 – S0-Real-Probe (parallel zu WP2–WP4; mutierende Schritte führt Fable nach Dimitris Zustimmung aus)
+## WP1 – S0-Real-Probe
+
+**Ablauf und Isolation:** Die Code-Tasks dieses Pakets (1.1, 1.2 Steps 1–3, 1.4 Step 1) laufen **direkt nach WP0 und vor WP2**, sequenziell im selben Checkout. Danach wird der Stand als Branch `s0-probe` gepusht (`git branch s0-probe && git push origin s0-probe`); die Referenzinstallation bezieht die Probe-App von `https://github.com/LL0rd/myha#s0-probe`, unabhängig vom Fortschritt auf `main`. Nur die Schritte auf dem echten HA (Fable, nach Dimitris Zustimmung) und der Android-Spike im privaten Repo (1.5) laufen parallel zu WP2–WP4. Task 1.6 räumt auf `main` auf und löscht den Branch.
 
 ### Task 1.1: Supervisor-Skript
 
@@ -358,17 +360,19 @@ Der `--entrypoint` umgeht `/init` (s6) absichtlich; der s6-Pfad wird in WP1 auf 
 - [ ] **Step 1: Verhalten.** Generisches Entwicklerwerkzeug: liest `HA_URL` (z. B. `http://homeassistant.local:8123`) und `HA_TOKEN` (langlebiger Zugriffstoken eines HA-Admins) aus der Umgebung, optional `--repo` (Default `https://github.com/LL0rd/myha`); leitet `ws://<host>/api/websocket` ab; Token nie ausgeben. Nichts im Skript verweist auf eine bestimmte Installation; Fable setzt die Variablen lokal aus einer ungetrackten Datei `.dev/ha.env` (im `.gitignore`). WS-Hilfsfunktion:
 
 ```python
-async def sup(ws, i, endpoint, method="get", data=None, timeout=None):
+HA_DEFAULT = object()   # Sentinel: Feld weglassen → HA Core nimmt 10 s
+
+async def sup(ws, i, endpoint, method="get", data=None, timeout=HA_DEFAULT):
     msg = {"id": i, "type": "supervisor/api", "endpoint": endpoint, "method": method}
     if data is not None: msg["data"] = data
-    if timeout is not None: msg["timeout"] = timeout      # None = kein Timeout (für install/rebuild)
+    if timeout is not HA_DEFAULT: msg["timeout"] = timeout   # ausdrücklich null senden = kein Timeout (install/rebuild/update/backup)
     await ws.send(json.dumps(msg))
     while True:
         r = json.loads(await ws.recv())
         if r.get("id") == i: return r
 ```
 
-Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Installationsstatus des Add-ons mit Slug-Suffix `_myha`), `add-repo` (`POST /store/repositories {"repository": "https://github.com/LL0rd/myha"}`), `reload` (`POST /store/reload`), `install` (`POST /store/addons/<slug>/install`, `timeout=None`), `rebuild` (`POST /addons/<slug>/rebuild`, `timeout=None`), `update` (`POST /store/addons/<slug>/update`), `start`/`stop`/`restart`, `options <json>` (`POST /addons/<slug>/options {"options": {...}}`), `network <hostport>` (`POST /addons/<slug>/options {"network": {"8443/tcp": <hostport>}}`), `logs` (**REST-Proxy** `GET http://<host>/api/hassio/addons/<slug>/logs` mit Bearer, Text; falls 401: Hinweis, Logs in der HA-GUI zu lesen), `backup-new` (`POST /backups/new/partial {"name": "myha-probe", "addons": [slug]}` → `data.slug`), `backup-download <backup-slug> <out.tar>` (REST-Proxy `GET /api/hassio/backups/<slug>/download`), `ingress-get <path>` (`POST /ingress/session` → `data.session`; dann REST `GET http://<host>/api/hassio_ingress/<ingress_token>/<path>` mit Cookie `ingress_session=<session>`; `ingress_token` aus `GET /addons/<slug>/info` → `data.ingress_entry`). Mutierende Befehle fragen `[y/N]`, außer `--yes` ist gesetzt (nur Fable verwendet `--yes`).
+Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Installationsstatus des Add-ons mit Slug-Suffix `_myha`), `add-repo [--repo URL]` (`POST /store/repositories {"repository": URL}`; für die S0-Probe `https://github.com/LL0rd/myha#s0-probe`, der Supervisor akzeptiert Branch-Suffixe), `reload` (`POST /store/reload`), `install` (`POST /store/addons/<slug>/install`, `timeout=None` ausdrücklich; danach `GET /addons/<slug>/info` pollen bis `state` vorhanden), `rebuild` (`POST /addons/<slug>/rebuild`, `timeout=None`), `update` (`POST /store/addons/<slug>/update`, `timeout=None`), `start`/`stop`/`restart`, `options <json>` (`POST /addons/<slug>/options {"options": {...}}`), `network <hostport>` (`POST /addons/<slug>/options {"network": {"8443/tcp": <hostport>}}`), `logs` (**REST-Proxy** `GET http://<host>/api/hassio/addons/<slug>/logs` mit Bearer, Text; falls 401: Hinweis, Logs in der HA-GUI zu lesen), `backup-new` (`POST /backups/new/partial {"name": "myha-probe", "addons": [slug]}`, `timeout=None` → `data.slug`), `backup-download <backup-slug> <out.tar>` (REST-Proxy `GET /api/hassio/backups/<slug>/download`), `ingress-get <path>` (`POST /ingress/session` → `data.session`; `GET /addons/<slug>/info` → `data.ingress_entry` (bereits `/api/hassio_ingress/<token>`); dann REST `GET http://<host>{ingress_entry}/<path>` mit Cookie `ingress_session=<session>`). Mutierende Befehle fragen `[y/N]`, außer `--yes` ist gesetzt (nur Fable verwendet `--yes`).
 - [ ] **Step 2:** `uv run scripts/install-on-ha.py status` zeigt die Supervisor-Version. Commit `chore: supervisor install and probe script`.
 
 ### Task 1.2: Probe-Endpunkte erweitern (Subagent) und auf dem HA installieren (Fable)
@@ -380,7 +384,7 @@ Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Instal
 - [ ] **Step 1: Test für `supervisor.py`** (`httpx.MockTransport`): `GET {supervisor_url}/info` → `{"result":"ok","data":{"supervisor":"2026.10.3","channel":"stable"}}` → `SupervisorInfo(version="2026.10.3", channel="stable")`; `is_at_least("2026.10.3")` wahr, `"2026.10.2"` falsch; `host_info()` → `dt_synchronized` oder `None` bei 401/403; `self_info()` → `ingress_entry`; HTTP 401 auf `/info` → `SupervisorUnavailable`.
 - [ ] **Step 2:** Implementieren (Bearer aus `settings.supervisor_token`; Versionsvergleich über `tuple(int)`).
 - [ ] **Step 3:** `GET /api/v1/admin/probe` liefert zusätzlich `supervisor_info`, `host_info`, `self_info` (Erfolg oder Fehlertext), `env_names`, `cwd_listing_of_data` (nur Namen). Public `GET /healthz` liefert `client_ip`, `x_forwarded_for`, `x_real_ip`. Im `probe_mode` loggt das Gateway beim Start: Supervisor-Version, `/host/info`-Ergebnis, Argon2-Messung (Task 1.4), legt `/data/state/probe-live.marker` an.
-- [ ] **Step 4 (Fable, nach Dimitris Zustimmung):** Push; `uv run scripts/install-on-ha.py --yes add-repo && reload && install && options '{"log_level":"debug","probe_mode":true}' && network 8443 && start`; `ingress-get api/v1/admin/probe`; von diesem Rechner `curl http://<HA-LAN-IP>:8443/healthz` und, falls IPv6 vorhanden, `curl -6`; `logs`.
+- [ ] **Step 4 (Fable, nach Dimitris Zustimmung):** Branch `s0-probe` pushen; `set -a; source .dev/ha.env; set +a` (ungetrackt: `HA_URL`, `HA_TOKEN`); `uv run scripts/install-on-ha.py --yes add-repo --repo 'https://github.com/LL0rd/myha#s0-probe'`, `reload`, `install`, `options '{"log_level":"debug","probe_mode":true}'`, `network 8443`, `start` (einzeln aufrufen, jeweils Ergebnis prüfen); `ingress-get api/v1/admin/probe`; von diesem Rechner `curl http://<HA-LAN-IP>:8443/healthz` und, falls IPv6 vorhanden, `curl -6`; `logs`.
 - [ ] **Step 5:** `docs/s0-report.md` (ohne LAN-IPs, Tokens, User-IDs): Supervisor-Version, Peer-IP, vorhandene Identitätsheader (inkl. `X-Remote-User-Groups` ja/nein), `/info` ohne `hassio_api` ja/nein, `/host/info` Ergebnis (falls 401/403: Test mit `hassio_api: true`, `hassio_role: default` wiederholen und E26 festhalten), Client-IP am Public-Port (echte LAN-IP oder Docker-Gateway), IPv6, s6-Warnungen im Log, Containerstart in Sekunden, Image-Größe. Commit `docs: S0 probe results`.
 
 ### Task 1.3: Backup-Hooks real prüfen (Fable)
@@ -398,7 +402,7 @@ Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Instal
 ### Task 1.5: Android-Transport-Spike (privates Repo, parallelisierbar)
 
 **Files (in `/home/dimitri/Projekte/myha-apps`):**
-- Create: `spikes/transport-android/` (Gradle 8.x mit Wrapper, Kotlin JVM-Projekt, Foojay-Toolchain-Resolver, JDK 17 Toolchain, OkHttp 4.12, JUnit 5), `spikes/tls-testserver/server.py` (PEP 723: `websockets`; HTTPS `/ping` + WS-Echo mit zwei umschaltbaren Zertifikaten), `spikes/tls-testserver/make-certs.sh`, `spikes/README.md`
+- Create: `spikes/transport-android/` (Gradle 9.x mit Wrapper – Gradle 8 startet nicht auf dem lokalen Default-JDK 26; Kotlin JVM-Projekt, Foojay-Toolchain-Resolver, JDK 17 Toolchain für den Code, OkHttp 4.12, JUnit 5), `spikes/tls-testserver/server.py` (PEP 723: `websockets`; HTTPS `/ping` + WS-Echo mit zwei umschaltbaren Zertifikaten), `spikes/tls-testserver/make-certs.sh`, `spikes/README.md`
 
 - [ ] **Step 1:** Zertifikate: eigene Test-CA, zwei Serverschlüssel (A, B) für `localhost`; SPKI-Pins (`openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`).
 - [ ] **Step 2:** JUnit-Tests (starten den Python-Server je Test über `ProcessBuilder`): richtiger Pin → `/ping` 200 und WS-Echo; falscher Pin → beide `SSLPeerUnverifiedException`; falscher Hostname → beide scheitern; Pinwechsel A→B: alter Client wird geschlossen (`connectionPool.evictAll()` + WS `close`), neuer Client mit Pin B verbindet, Pin A wird abgelehnt; Redirect (`302` auf anderen Host) wird nicht gefolgt (`followRedirects(false)`). Test-CA nur über einen eigenen `X509TrustManager` für den Test; kein `trust all`.
@@ -406,8 +410,9 @@ Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Instal
 
 ### Task 1.6: S0-Bericht abschließen (Fable)
 
-- [ ] **Step 1:** `docs/s0-report.md` vervollständigen (Tabelle Annahme → Ergebnis → Konsequenz); Design §14 aktualisieren; `probe_mode` aus `config.yaml`/Run-Skript/Settings entfernen und den Probe-Endpunkt löschen (Commit `chore: remove S0 probe mode`).
-- [ ] **Step 2:** Commit `docs: complete S0 report`. Kein Gate für WP2–WP4; Gate für Teilplan 2 (Masterplan).
+- [ ] **Step 1:** `docs/s0-report.md` vervollständigen (Tabelle Annahme → Ergebnis → Konsequenz, inkl. Hinweis auf die `build.yaml`-Deprecation-Warnung des Supervisors, falls beobachtet); Design §14 aktualisieren.
+- [ ] **Step 2: Aufräumen auf `main` (ein Commit `chore: remove S0 probe mode`), vollständige Liste:** `api/admin/probe.py` samt Router-Registrierung und Tests löschen (`api/admin/session.py` bleibt); `probe_mode` aus `Settings` inklusive Validator-Zweig (`public_enabled` behält den eigenen Validator); `MYHA_PROBE_MODE` und `probe_mode`-Zweig im Run-Skript; `probe_mode` aus `config.yaml`-Schema; `probe-live.marker` und Argon2-Startlog aus `app.py`; `healthz` behält nur `status` und `client_ip`. Danach `uv run pytest -q` grün; Branch `s0-probe` löschen (`git push origin --delete s0-probe`), nachdem das Add-on auf der Referenzinstallation deinstalliert oder auf das `main`-Repository umgestellt wurde.
+- [ ] **Step 3:** Commit `docs: complete S0 report`. Kein Gate für WP2–WP4; Gate für Teilplan 2 (Masterplan).
 
 ---
 
@@ -429,7 +434,7 @@ Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Instal
 | `cover.room_203_blind` | `area_203` | `zha` | `supported_features 15, current_position 100`, `open` |
 | `sensor.room_203_humidity` | `area_203` | `zha` | `46`, `%`, `device_class humidity` |
 | `light.living_ceiling` | `area_living` | `govee` | `["color_temp","rgb"]`, `brightness 140`, on |
-| `switch.living_floor_lamp` | `area_living` | `shelly` | off |
+| `switch.living_floor_lamp` | **kein eigener Bereich; erbt `area_living` über das Gerät** | `shelly` | off (prüft die HA-Semantik „Entity-Bereich oder Gerätebereich“) |
 | `climate.living_ac` | `area_living` | `midea` | `hvac_modes [auto,cool,dry,fan_only,heat,off]`, `8/30/1`, `temperature 22, current 24`, `cool` |
 | `cover.kitchen_blind` | `area_kitchen` | `zha` | `supported_features 11`, `closed` |
 | `light.hallway` | `area_hall` | `shelly` | `["onoff"]`, on |
@@ -441,7 +446,7 @@ Subcommands: `status` (`/supervisor/info` Version, `/store/repositories`, Instal
 
 Areas: `area_203` „Room 203“, `area_204` „Room 204“, `area_living` „Living room“, `area_kitchen` „Kitchen“, `area_hall` „Hallway“. Users (`config/auth/list`): `owner1` („Owner“, `is_owner`, `system-admin`), `user1` („Regular user“, `system-users`), `sup` („Supervisor“, `system-admin`, `system_generated`). Config: `unit_system.temperature "°C"`, `time_zone "Europe/Sofia"`, `version "2026.10.2"`. Tokens: `sim-token` (admin), `sim-user-token` (nicht admin).
 
-- [ ] **Step 2: Server** (FastAPI, `websockets`-kompatibel über Starlette-WS): `WS /api/websocket` mit `auth_required → auth → auth_ok|auth_invalid`; Befehle `get_states`, `get_config`, `subscribe_events` (nur `state_changed`), `unsubscribe_events`, `call_service` (light/switch/climate/cover realistisch, `state_changed` an Abonnenten, `result` mit `context`), `config/entity_registry/list`, `config/device_registry/list`, `config/area_registry/list`, `config/auth/list` (nur Admin-Token; Verhalten je `auth_list_mode`), `ping`→`pong`; unbekannt → `{"success": false, "error": {"code": "unknown_command"}}`. HTTP: `GET /info` (Bearer; Version aus `supervisor_version`, Default `2026.10.3`), `GET /host/info` (Default 403; `host_info_mode` → `ok` liefert `dt_synchronized true`), `GET /addons/self/info` (`ingress_entry "/api/hassio_ingress/simtoken"`).
+- [ ] **Step 2: Server** (FastAPI, `websockets`-kompatibel über Starlette-WS): `WS /api/websocket` mit `auth_required → auth → auth_ok|auth_invalid`; Befehle `get_states`, `get_config`, `subscribe_events` (`state_changed`, `entity_registry_updated`, `device_registry_updated`, `area_registry_updated`; Registry-Steuerbefehle lösen die passenden Events aus), `unsubscribe_events`, `call_service` (light/switch/climate/cover realistisch, `state_changed` an Abonnenten, `result` mit `context`), `config/entity_registry/list`, `config/device_registry/list`, `config/area_registry/list`, `config/auth/list` (nur Admin-Token; Verhalten je `auth_list_mode`), `ping`→`pong`; unbekannt → `{"success": false, "error": {"code": "unknown_command"}}`. HTTP: `GET /info` (Bearer; Version aus `supervisor_version`, Default `2026.10.3`), `GET /host/info` (Default 403; `host_info_mode` → `ok` liefert `dt_synchronized true`), `GET /addons/self/info` (`ingress_entry "/api/hassio_ingress/simtoken"`).
   **Steuer-API** (`/_sim/...`, nur lokal):
 
 | Endpunkt | Wirkung |
@@ -482,13 +487,13 @@ class HAClient:
     connected: bool; generation: int; adapter_locked: bool; temperature_unit: str | None
     def state(self, entity_id: str) -> HAState | None
     def all_states(self) -> dict[str, HAState]
-    def registry(self) -> Registry                       # entities (unique_id, device_id, area_id, platform), devices, areas
+    def registry(self) -> Registry                       # entities (unique_id, device_id, area_id, platform), devices, areas; Registry.effective_area(entity_id) = entity.area_id or device.area_id
     async def call_service(self, domain: str, service: str, entity_id: str, data: dict[str, Any]) -> ServiceResult   # HAServiceError bei success=false
     async def auth_list(self) -> list[HAUser]            # config/auth/list ohne Cache; HAProtocolError bei fehlenden Feldern
     def last_event_skew_seconds(self) -> float | None    # nur Diagnose
 ```
 
-- [ ] **Step 2: Tests (rot):** Snapshot enthält `light.living_ceiling`; Event-Callback nach `_sim/state`; `call_service` liefert `context_id`; nach `drop-connections` Reconnect < 3 s, `generation` +1, `adapter_locked` bis `get_config` wahr, danach falsch; `on_status` meldet `disconnected`/`connected`; `auth_list` liefert 3 Nutzer, mit `schema_missing_groups` → `HAProtocolError`; `fail-next-service` → `HAServiceError`; Registry nach `registry/rename` aktualisiert (Client lädt Registries bei `entity_registry_updated`-Event oder alle 5 min neu – im Simulator wird `entity_registry_updated` nach Registry-Änderungen gesendet und `subscribe_events` dafür unterstützt).
+- [ ] **Step 2: Tests (rot):** Snapshot enthält `light.living_ceiling`; Event-Callback nach `_sim/state`; `call_service` liefert `context_id`; nach `drop-connections` Reconnect < 3 s, `generation` +1, `adapter_locked` bis `get_config` wahr, danach falsch; `on_status` meldet `disconnected`/`connected`; `auth_list` liefert 3 Nutzer, mit `schema_missing_groups` → `HAProtocolError`; `fail-next-service` → `HAServiceError`; Registry nach `registry/rename` aktualisiert (Client abonniert `entity_registry_updated`, `device_registry_updated`, `area_registry_updated` und lädt die Registries daraufhin neu, zusätzlich alle 5 min); `effective_area("switch.living_floor_lamp") == "area_living"` über das Gerät.
 - [ ] **Step 3:** Implementieren (`websockets`, Request-IDs monoton, `Future` je ID, `ping` alle 20 s, `max_size` 16 MiB – in S0 gegen reale `get_states`-Größe prüfen, Token nie loggen).
 - [ ] **Step 4:** Commit `feat(gateway): resilient Home Assistant websocket client`.
 
@@ -503,7 +508,7 @@ class HAClient:
 - Test: `tests/unit/test_db.py`
 
 - [ ] **Step 1: Tests:** Pragmas `journal_mode=wal`, `foreign_keys=1`, `secure_delete=1`; `run_migrations(engine)` erzeugt alle Tabellen aus Design §5; FK durchgesetzt; `instance`-Singleton beim ersten Start mit `id`, `short_id` (8 Zeichen), `server_secret`, `policy_version=1`, `security_generation=1`, `session_limits`-Defaults (`guest_browser_days 30, resident_browser_days 30, resident_refresh_days 30, display_days 365, native_access_minutes 15`), `audit_retention_days 30`, `time_trusted=1`, `last_seen_clock`.
-- [ ] **Step 2: Modelle** exakt nach Design §5 inklusive `instance.last_seen_clock`, `command.body_hash`, `resource_binding.unique_id`; Unique-Indizes: `credential.username_normalized`, `session.token_hash`, `invite.secret_hash`, `(command.session_id, command.idempotency_key)`, `refresh_token.token_hash`, `ws_ticket.ticket_hash`, `pairing_request.poll_token_hash`. JSON-Spalten als `JSON`; Zeitpunkte als ISO-8601-`Z`-Strings über `TypeDecorator` ↔ `datetime(UTC)`; `version` (Integer, Default 1) auf admin-editierbaren Tabellen. Schreibtransaktionen beginnen mit `BEGIN IMMEDIATE` (Engine-Event), damit parallele Redeems nicht in `database is locked` laufen.
+- [ ] **Step 2: Modelle** exakt nach Design §5 inklusive `instance.last_seen_clock`, `command.body_hash`, `resource_binding.unique_id`; Unique-Indizes: `credential.username_normalized`, `session.token_hash`, `invite.secret_hash`, `(command.session_id, command.idempotency_key)`, `refresh_token.token_hash`, `ws_ticket.ticket_hash`, `pairing_request.poll_token_hash`. JSON-Spalten als `JSON`; Zeitpunkte als ISO-8601-`Z`-Strings über `TypeDecorator` ↔ `datetime(UTC)`; `version` (Integer, Default 1) auf admin-editierbaren Tabellen. Für Schreibsessions stellt `db.write_session()` eine Session bereit, deren Transaktion mit `BEGIN IMMEDIATE` beginnt (reine Lesesessions bleiben `DEFERRED`), damit parallele Redeems nicht in `database is locked` laufen.
 - [ ] **Step 3:** Alembic async-Env (`run_sync`), Migration 0001 per Autogenerate, manuell geprüft.
 - [ ] **Step 4:** Commit `feat(gateway): sqlite schema, pragmas and initial migration`.
 
@@ -539,7 +544,7 @@ class StateView:
     availability: Literal["online","offline","unknown"]; adapter_locked: bool
     power: str | None = None; level_pct: int | None = None
     target_c: Decimal | None = None; current_c: Decimal | None = None; hvac_mode: str | None = None
-    position_pct: int | None = None; value: str | None = None; unit: str | None = None
+    position_pct: int | None = None; cover_state: str | None = None; value: str | None = None; unit: str | None = None
     observed_at: datetime | None = None
 
 @dataclass(frozen=True)
@@ -668,8 +673,8 @@ Reihenfolge exakt Design §4.1; `RESOURCE_UNCONFIRMED` für `blocked`/nie bestä
 ### Task 4.1: IngressGuard mit Rollenprüfung und CSRF
 
 **Files:**
-- Create: `myha_gateway/auth/admin.py`
-- Modify: `myha_gateway/app.py` (ersetzt `PeerGuardMiddleware`), `api/admin/probe.py` → zusätzlich `GET /api/v1/admin/session`
+- Create: `myha_gateway/auth/admin.py`, `myha_gateway/api/admin/session.py` (`GET /api/v1/admin/session`)
+- Modify: `myha_gateway/app.py` (`PeerGuardMiddleware` bleibt als äußere Schicht für alle Admin-Pfade inklusive statischer Dateien; `require_admin` kommt zusätzlich je Route)
 - Test: `tests/acceptance/test_matrix_admin.py`, `tests/unit/test_admin_csrf.py` (Tests nutzen die `sim`-Fixture und eine `admin_client`-Fixture mit Peer `172.30.32.2` und Header `X-Remote-User-Id: owner1`)
 
 - [ ] **Step 1: Verhalten.** `require_admin(fresh: bool)` als Dependency: (1) Peer == `trusted_ingress_peer` sonst `403 UNAUTHENTICATED`; (2) genau ein `X-Remote-User-Id`-Header (`request.headers.getlist`), sonst 403; (3) Supervisor-Version ≥ Minimum (Ergebnis 60 s gecacht; zu alt oder nicht erreichbar → `503 UPSTREAM_UNAVAILABLE`, `details.reason="supervisor_version"|"supervisor_unreachable"`); (4) `ha.auth_list()` → Nutzer exakt per `id`; `is_active and (is_owner or "system-admin" in group_ids)`; `fresh=False`: Ergebnis 5 s gecacht (Schlüssel user_id); `fresh=True`: immer neu; `HAProtocolError`/Verbindungsfehler/Nutzer unbekannt → 403 ohne Rückfall (A05). `AdminIdentity(user_id, name, display_name, groups_header)`. Mutationen (`POST/PUT/PATCH/DELETE`) und sensible GETs (Design E5) verwenden `fresh=True` und `require_csrf`: `X-MyHA-CSRF == hmac_sha256(server_secret, f"{user_id}|{ingress_path}|{YYYY-MM-DD}")` für heute oder gestern (UTC), `Sec-Fetch-Site` falls vorhanden `same-origin`. `GET /api/v1/admin/session` → `{user: {id, name}, csrf_token, supervisor_version, core_version, setup_state, time_trusted}`.
@@ -682,7 +687,7 @@ Reihenfolge exakt Design §4.1; `RESOURCE_UNCONFIRMED` für `blocked`/nie bestä
 - Modify: `myha_gateway/app.py`, `__main__.py`, `deps.py`
 - Test: `tests/integration/test_startup.py`
 
-- [ ] **Step 1: Verhalten.** Lifespan: Migrationen → Restore-Check (`backup_dir/restore.sqlite` vorhanden → `ctx.restore_mode=True`; Logik in Teilplan 3) → `instance` laden → HAClient starten (Fehler blockieren den Admin-Listener nicht) → Admin-Listener → Public-Listener, wenn `public_ready`: `settings.public_enabled or settings.probe_mode or (instance.public_origin and instance.tls_mode in ("tls","proxy") and gültig)` und nicht `restore_mode`. Effektiver Origin: `settings.public_origin` bei Override, sonst `instance.public_origin`; `ctx.public_origin` ist die einzige Quelle für Origin-Prüfungen und `join_url`. Bind immer `0.0.0.0` (Container); im Override-Modus reines HTTP.
+- [ ] **Step 1: Verhalten.** Lifespan: Migrationen → Restore-Check (`backup_dir/restore.sqlite` vorhanden → `ctx.restore_mode=True`; Logik in Teilplan 3) → `instance` laden → HAClient starten (Fehler blockieren den Admin-Listener nicht) → Admin-Listener → Public-Listener, wenn `public_ready`: `settings.public_enabled or (instance.public_origin and instance.tls_mode in ("tls","proxy") and gültig)` und nicht `restore_mode`. Effektiver Origin: `settings.public_origin` bei Override, sonst `instance.public_origin`; `ctx.public_origin` ist die einzige Quelle für Origin-Prüfungen und `join_url`. Bind immer `0.0.0.0` (Container); im Override-Modus reines HTTP.
 - [ ] **Step 2: Tests:** ohne Origin kein Public-Server; mit Override offen; `restore.sqlite` → `restore_mode`, Public geschlossen; `ctx.public_origin` entspricht dem Override.
 - [ ] **Step 3:** Commit `feat(gateway): startup sequence and conditional public listener`.
 
