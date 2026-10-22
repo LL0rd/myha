@@ -1,6 +1,6 @@
 # myHA – Design-Dokument
 
-**Stand:** 2026-10-22 · **Status:** Entwurf zur Freigabe · **Sprache:** Deutsch (Code, Identifier und Repo-Doku: Englisch)
+**Stand:** 2026-10-22 (Revision 2 nach Spec-Review) · **Status:** Entwurf zur Freigabe · **Sprache:** Deutsch (Code, Identifier und Repo-Doku: Englisch)
 
 Dieses Dokument legt fest, *wie* myHA gebaut wird. Es baut auf der Produkt- und Implementierungsspezifikation von ChatGPT auf (`docs/reference/2026-10-22-ha-access-ui-spezifikation-chatgpt.md`, im Folgenden „Spez“) und dem Claude-Design-Mockup (`docs/reference/design/`). Wo die Spez etwas verbindlich vorgibt, wird es hier nicht wiederholt, sondern referenziert. Wo die Spez offen war oder sich mit der realen Umgebung reibt, steht hier die Entscheidung mit Begründung.
 
@@ -12,12 +12,12 @@ myHA ist eine Home-Assistant-App (HAOS-Add-on) mit eigener Administration im HA-
 
 | Phase | Ergebnis | Verbindliches Ende |
 |---|---|---|
-| S0 Nachweise | Admin-Identität über Ingress, Supervisor-Mindestversion, zwei Listener, HA-Lese-/Schreibadapter, Backup-Hook-Probe, Transport-Spike Android | Keine unbelegte Annahme trägt das weitere Design |
+| S0 Nachweise | Minimal-App real auf Dimitris HA: Ingress-Identität und Peer, Supervisor-`/info` ohne `hassio_api`, Client-IP am Public-Port, Backup-Hooks mit Archivprüfung; Android-Transport-Spike (OkHttp HTTPS/WSS mit Pin); HA-Lese-/Schreibadapter gegen Simulator | Keine unbelegte Annahme trägt das weitere Design; Ergebnisse in `docs/s0-report.md` |
 | M1 Vertikaler Kern | Ein Raum (Wohnzimmer), ein Govee-Licht, eine Klimaanlage; Principal/Gruppe/Policy; Browserlogin; Fremdansicht; Aktion und gefiltertes Live-Update | Verbotene API-Aktion und fremder Zustand nachweislich blockiert; Simulation steuert kein Gerät |
-| M2 Webpilot | GUI-Einrichtung, Gruppen/Rollen/Fences, Gerätebindungen, Dashboard-Editor, Gast-QR, Aufenthalte, Checkout, Audit, Backup/Restore | Abnahmefälle A01–A35, A39–A42, A45, A47–A52 automatisiert bzw. dokumentiert |
+| M2 Webpilot | GUI-Einrichtung, Gruppen/Rollen/Fences, Gerätebindungen, Dashboard-Editor, Gast-QR, Aufenthalte, Checkout, Audit, Backup/Restore | Abnahmefälle A01–A32, A34, A35, A39–A42, A44, A45, A47–A52 automatisiert bzw. dokumentiert; A33 entfällt (E21) |
 | M3 Native | Android/Fire-Paket mit lokaler UI, sicherer Speicherung, Scanner, nativer Verbindung, optionalem Pinning; iOS als Gerüst | Android-Build läuft auf Emulator/Gerät; iOS-Gerüst kompiliert nicht hier (kein macOS) und ist als ungetestet markiert |
 
-**Nicht im Umfang:** M4 (Vorlagen-Rollout für viele Einheiten, Lizenzierung, Support-Tooling), Store-Einreichung, Kameras/Schlösser/Skripte und alles aus Spez §18.1. Ein Rollout einer neuen Rollenversion auf bestehende Zuweisungen ist dagegen Teil von M2, weil der Publish-Ablauf ohne ihn unvollständig wäre.
+**Nicht im Umfang:** M4 (Vorlagen-Rollout für viele Einheiten, Lizenzierung, Support-Tooling), Store-Einreichung, Raumpresets (E21), Konfigurationsexport (E23) und alles aus Spez §18.1. Ein Rollout einer neuen Rollenversion auf bestehende Zuweisungen und Aufenthalte ist dagegen Teil von M2, weil der Publish-Ablauf ohne ihn unvollständig wäre.
 
 ## 2. Geklärte offene Punkte
 
@@ -27,22 +27,29 @@ myHA ist eine Home-Assistant-App (HAOS-Add-on) mit eigener Administration im HA-
 | E2 | Repositories | Öffentlich `LL0rd/myha` (Gateway, Web-UI, HA-App-Repository, Doku). Privat `LL0rd/myha-apps` (Capacitor-Projekte, native Plugins, Store-Assets) | Offener Kern, verkaufbare Komfort-Apps (Spez §17, Dimitri) |
 | E3 | Lizenz | Apache-2.0 für `myha` (Annahme, Dimitri bestätigt bei Spec-Review); `myha-apps` proprietär | HA-Ökosystem-üblich, erlaubt kommerzielle Nutzung durch den Autor |
 | E4 | Supervisor-Minimum | ≥ 2026.10.3 wird erzwungen. Dimitris Instanz steht auf 2026.10.2 (Stable-Release 2026.10.3 vom 2026-10-19 wird automatisch nachgezogen). Admin-UI zeigt bei zu altem Supervisor eine Update-Aufforderung und bleibt gesperrt | Spez §3.4; PR #7308 (`panel_admin`-Durchsetzung) ist in 2026.10.3 enthalten, verifiziert über GitHub |
-| E5 | Admin-Identität | Peer-IP `172.30.32.2` am Admin-Listener, genau ein `X-Remote-User-Id`, danach frische Rollenprüfung über `config/auth/list` (Cache ≤ 5 s). Der neue Header `X-Remote-User-Groups` (Supervisor-PR #7398, gemerged 2026-10-21, noch nicht released) wird protokolliert, aber nie als Ersatz der Core-Abfrage verwendet | `config/auth/list` gegen Dimitris Core 2026.10.2 getestet: liefert `id`, `is_owner`, `is_active`, `group_ids`, `system_generated`; S0-Gate damit vorab bestanden |
+| E5 | Admin-Identität | Peer-IP `172.30.32.2` am Admin-Listener, genau ein `X-Remote-User-Id`, danach Rollenprüfung über `config/auth/list`. **Mutationen, sensible Ausgaben (Einladungs-Secrets, Diagnose, Audit, Restore) und jeder Verbindungsaufbau prüfen ohne Cache**; reine Lese-GETs der Admin-UI dürfen ein Ergebnis bis 5 s wiederverwenden; Admin-WS prüft alle 5 s neu und schließt bei Herabstufung. Der neue Header `X-Remote-User-Groups` (Supervisor-PR #7398, gemerged 2026-10-21, noch nicht released) wird protokolliert, aber nie als Ersatz der Core-Abfrage verwendet | Spez §3.4 Schritt 5 (frische Prüfung vor jeder Mutation; 5 s nur für Abonnements), A04. `config/auth/list` gegen Dimitris Core 2026.10.2 getestet |
 | E6 | Klima-Semantik | Erster Adapter: Einzel-Sollwert in °C (`climate.set_temperature` → `temperature`), **plus** `climate.set_mode` mit je Ressource admin-bestätigter Modusliste aus `off`, `cool`, `heat`. `auto`, `dry`, `fan_only`, Presets und Doppelsollwerte bleiben gesperrt | Dimitris vier Geräte sind Klimaanlagen (Modi auto/cool/dry/fan_only/heat/off, 8–30 °C, Schritt 1 °C); ohne Moduswechsel wären sie für Gäste nutzlos. Spez §6.4 erlaubt das bei geprüfter Semantik |
-| E7 | Temperatur-Fence und Modus | Ein Moduswechsel wird nur erlaubt, wenn der danach aktive Sollwert innerhalb des effektiven Bereichs liegt; sonst `ACTION_NOT_ALLOWED` mit Admin-Grund `MODE_WOULD_BYPASS_FENCE`. Das Gateway sendet dazu den aktuellen `temperature`-Wert erneut mit, wenn HA ihn beim Moduswechsel verwerfen könnte | Spez §6.4 Absatz 3 |
+| E7 | Modus und Temperaturgrenzen | `climate.set_mode` wird ausschließlich als `climate.set_hvac_mode {hvac_mode}` übersetzt; kein Mitsenden eines Sollwerts. Die Absicherung erfolgt in `decide` (§4.1, Regel „Modus“): Ein Wechsel nach `cool`/`heat` ist nur erlaubt, wenn der aktuell gemeldete Sollwert innerhalb des effektiven Temperaturbereichs des Principals liegt; `off` ist frei, sobald es gewährt ist. Unbekannter Sollwert zählt als außerhalb | Spez §6.4 Absatz 3, A18; eine reine Entscheidungsfunktion mit Zustandseingang ist in Aktion und Simulation identisch |
 | E8 | TLS/Erreichbarkeit | Zwei Betriebsarten: `tls` (eigener HTTPS-Listener, PEM-Zertifikat und Schlüssel aus `/ssl`, beliebiger Aussteller: Let's Encrypt über die HA-App, eigene CA, privates Zertifikat) und `proxy` (Klartext-Bind, nur konfigurierte Proxy-CIDRs, `X-Forwarded-Proto/Host` nur von diesen). Public Origin ist immer explizit. Setup-Assistent prüft beide. Entscheidung für den Pilot fällt beim Deployment | Dimitri: „frei möglich … Let's Encrypt, eigene CA, privates Zert“ |
 | E9 | Cover-Tests | Es gibt keine Cover-Entities in Dimitris HA. Cover werden gegen den HA-Simulator getestet und im Pilot als „nicht nachgewiesen auf realer Hardware“ dokumentiert | Inventar 2026-10-22 |
-| E10 | Dashboard-Editor | Minimal in „Rooms & devices“ integriert: Reihenfolge der Karten je Einheit, Beschriftung, Symbol, bevorzugte Kartengröße, Theme-Default. Kein freies Raster, keine Viewport-Overrides in dieser Runde | Spez §11.3 MVP; Mockup hat keinen eigenen Editor-Screen |
+| E10 | Dashboard-Editor | Minimal in „Rooms & devices“ integriert: Reihenfolge der Karten je Einheit, Beschriftung, Symbol, bevorzugte Kartengröße, Theme-Default. Kein freies Raster, keine Viewport-Overrides in dieser Runde. Einzige Quelle für Reihenfolge und Größe ist `dashboard.layout` je Einheit; die Bindung trägt nur Label und Symbol | Spez §11.3 MVP; Mockup hat keinen eigenen Editor-Screen |
 | E11 | Personen und Gruppen | Zusätzlicher Admin-Screen „People & groups“ (Bewohner mit Passwort-Reset, Gruppen, Mitgliedschaften, Displays mit Pairing-Freigabe) | Spez §5/§8 verlangen es, Mockup zeigt es nicht |
 | E12 | Icons und Fonts | Keine externen Ressourcen: `@tabler/icons-react` gebündelt, Fonts Nunito Sans und JetBrains Mono über `@fontsource` selbst gehostet | Spez §8.2 Punkt 4 (Einstiegsseite lädt nichts Fremdes); Mockup nutzt iconify-CDN, das wird nicht übernommen |
 | E13 | Sprache | UI deutsch und englisch (Browsersprache, manuell umschaltbar). Code, Kommentare, README, ADRs englisch; dieses Design-Dokument und der Plan deutsch | Öffentliches Repo; Dimitri kommuniziert deutsch |
-| E14 | Native Tokens schon in M2 | Access-/Refresh-Token-Pfad (`client=native`) wird im Gateway bereits in M2 implementiert und getestet, damit M3 nur den Client baut | M3 ist im Umfang; der Serverteil ist klein und testbar |
+| E14 | Native Tokens schon in M2 | Access-/Refresh-Token-Pfad (`client=native`) inklusive Trustprofil-Endpunkt wird im Gateway bereits in M2 implementiert und getestet (§4.3 „Nativer Vertrag“), damit M3 nur den Client baut | M3 ist im Umfang; der Serverteil ist klein und testbar |
 | E15 | Deployment auf Dimitris HA | Über die Supervisor-API per WS `supervisor/api` (Repository hinzufügen, App installieren, Optionen setzen) mit dem Owner-Token aus der HA-MCP-Konfiguration; alternativ über die HA-GUI. Kein SSH nötig | SSH-Schlüssel ist nicht hinterlegt; der Token liegt lokal in `~/.claude.json` und wird nie ausgegeben |
 | E16 | Build-Strategie | Dockerfile im Add-on-Ordner, damit der Supervisor lokal bauen kann (Pilot). Zusätzlich GitHub-Actions-Workflow, der `ghcr.io/ll0rd/myha-{arch}` für amd64 und aarch64 baut; sobald der läuft, bekommt `config.yaml` den `image:`-Eintrag | Erst lauffähig, dann bequem |
-| E17 | Python-/Node-Versionen | Gateway Python 3.13 auf HA-Basisimage `ghcr.io/home-assistant/{arch}-base-python:3.13-alpine3.22` (genauer Tag wird in WP0 gegen `docker-base` verifiziert). Lokal `uv` mit Python 3.13. Web mit Node 22 und `pnpm` | Lokal liegt Python 3.14 vor, das Add-on-Image gibt 3.13 vor; Versionsgleichheit vermeidet Überraschungen |
+| E17 | Python-/Node-Versionen | Gateway Python 3.13 auf HA-Basisimage `ghcr.io/home-assistant/{arch}-base-python:3.13-alpine3.23` (Tag am 2026-10-22 per `docker manifest inspect` verifiziert, Python 3.13.17). Lokal `uv` mit Python 3.13. Web mit Node 22 und `pnpm` | Lokal liegt Python 3.14 vor, das Add-on-Image gibt 3.13 vor; Versionsgleichheit vermeidet Überraschungen |
 | E18 | Ingress-Peer in Tests | Vertrauenswürdige Peer-IP ist nur über die Umgebungsvariable `MYHA_TRUSTED_INGRESS_PEER` änderbar (Default `172.30.32.2`), niemals über App-Optionen. Tests setzen `127.0.0.1` | Spez §17: kein `ALLOW_ALL`; Tests brauchen trotzdem einen Weg |
 | E19 | QR-Erzeugung | Serverseitig als SVG mit `segno` (reines Python), nur im Admin-Ingress ausgeliefert | Spez §8.2 (lokal, kein externer Bilddienst) |
 | E20 | Passwort-Hashing | `argon2-cffi` (Argon2id), Parameter in S0 auf der HA-VM gemessen (Ziel ≈ 250 ms) und in `docs/security.md` festgehalten | Spez §8.1 |
+| E21 | Raumpresets | Nicht in dieser Runde: keine Preset-Aktion, kein Datenmodell, keine UI. Abnahmefall A33 entfällt und wird im Bericht als „nicht anwendbar“ geführt | Spez §6.5 beschreibt Presets, §18.1 nennt „komfortable Raumpresetvorlagen“ als Ausbau nach dem Pilot; YAGNI |
+| E22 | Backup-Positivliste | Export enthält zusätzlich zu Spez §15.3: `instance` ohne Secrets und ohne Trustprofil-Schlüssel, `group`, `membership`, `fence` mit Scope `instance`/`unit`/`principal`, `principal` nur Typ `resident`/`display` ohne Credentials, `assignment` als `disabled_pending_review`. Nicht exportiert: Gast-Principals, Session-Fences, Aufenthalte, Einladungen, Sessions, Befehle, Audit | Ohne Gruppen und Fences wäre ein Restore für Familienhaushalte wertlos; Gäste und Aufenthalte sind nach Restore ohnehin neu auszugeben |
+| E23 | Konfigurationsexport | `POST /admin/config/export` (Spez §12.2) entfällt in dieser Runde; der bereinigte Backup-Export deckt den Bedarf | YAGNI für den Pilot |
+| E24 | Admin-CSRF | Statt Origin-Prüfung: Pflicht-Header `X-MyHA-CSRF` (HMAC an User-ID, Ingress-Pfad und Tag gebunden, aus `GET /api/v1/admin/session`) plus `Sec-Fetch-Site`, das, wenn vorhanden, `same-origin` sein muss. Ein fehlender `Sec-Fetch-Site`-Header wird nur akzeptiert, weil der Pflicht-Custom-Header einen CORS-Preflight erzwingt, den der Admin-Listener nie beantwortet | Unter Ingress kennt das Gateway den HA-Origin nicht zuverlässig; Abweichung von Spez §3.4 Schritt 6 |
+| E25 | Cookie-Name | `__Host-myha_<instance_short_id>_session` (8-stelliges Instanzkürzel), damit mehrere Instanzen auf demselben Host mit verschiedenen Ports getrennte Cookies haben | Spez §8.4 „individueller Instanzname“; Browser trennen Cookies nicht nach Port |
+| E26 | Vertrauenswürdige Serverzeit | Das Gateway vergleicht `time_fired` eingehender Core-Ereignisse mit seiner Uhr; Abweichung > 60 s über 3 Ereignisse → `time_untrusted`: zeitabhängige Gastsessions (Aufenthalte) werden gesperrt, Admin sieht den Grund; Entsperrung automatisch bei Plausibilität | Spez §6.2; ohne `hassio_api` gibt es keinen Host-NTP-Status |
+| E27 | Native Zertifikatsprüfung | Die native App akzeptiert nur systemvertrauenswürdige Ketten plus optionale SPKI-Pins. Eine private CA funktioniert in M3 nur im Browser auf Geräten, die diese CA kennen; ein nativer Enrollment-Modus für private CAs kommt später | Spez §13.3 letzter Absatz, A38 |
 
 ## 3. Architektur
 
@@ -63,11 +70,11 @@ Gast / Bewohner / Tablet (Browser oder native App) ──HTTPS/WSS──▶ Publ
 ```
 
 - **Ein Prozess, zwei ASGI-Apps.** `uvicorn` startet beide Server im selben Event-Loop (zwei `uvicorn.Server`-Instanzen mit `asyncio.gather`). Ressourcen (DB-Engine, HAClient, EventBus, Settings) werden genau einmal erzeugt und per Dependency Injection geteilt. Kein zweiter Worker.
-- **Admin-Listener** bindet `0.0.0.0:8099` im Container (der Port ist nicht am Host veröffentlicht); jede Anfrage durchläuft `IngressGuard` (Peer-IP, Header-Eindeutigkeit, Rollenprüfung). `proxy_headers=False`.
+- **Admin-Listener** bindet `0.0.0.0:8099` im Container (der Port ist nicht am Host veröffentlicht); jede Anfrage durchläuft `IngressGuard` (Peer-IP, Header-Eindeutigkeit, Rollenprüfung nach E5). `proxy_headers=False`.
 - **Public-Listener** startet erst, wenn `instance.public_origin` gesetzt und die gewählte Betriebsart gültig ist (`tls`: Zertifikat lesbar; `proxy`: CIDRs gesetzt). Vorher antwortet der Port gar nicht.
-- **HAClient** hält genau eine WS-Verbindung zum Core, abonniert `state_changed`, lädt Snapshot und Registries, führt `call_service` mit Kontext-ID aus und meldet Verbindungszustand. Nach Reconnect: Snapshot neu laden, Generation erhöhen, Schreibadapter bis zur Revalidierung von `get_config.unit_system` sperren.
+- **HAClient** hält genau eine WS-Verbindung zum Core, abonniert `state_changed`, lädt Snapshot und Registries, führt `call_service` mit Kontext-ID aus, meldet Verbindungszustand und prüft die Zeitplausibilität (E26). Nach Reconnect: Snapshot neu laden, Generation erhöhen, Schreibadapter bis zur Revalidierung von `get_config.unit_system` sperren (`adapter_locked`).
 - **EventBus** verteilt Upstream-Ereignisse in-process an alle Client-Verbindungen; jede Verbindung projiziert mit *ihrer* Session und der aktuellen Policyversion. Sperrung, Checkout und Publish erzeugen Bus-Ereignisse, auf die Verbindungen mit Snapshot-Neuaufbau oder Schließen reagieren.
-- **Policy** ist eine reine Funktion ohne I/O (`decide`), die aus einem vorberechneten `PolicyIndex` (aus DB geladen, bei jeder Änderung neu gebaut) entscheidet. Dieselbe Funktion dient Aktionen, Projektion und Simulation.
+- **Policy** ist eine reine Funktion ohne I/O (`decide`), die aus einem vorberechneten `PolicyIndex` (aus DB geladen, bei jeder Änderung neu gebaut) und einem übergebenen Zustandsausschnitt entscheidet. Dieselbe Funktion dient Aktionen, Projektion und Simulation.
 
 ### 3.1 Repository-Layout (öffentlich, `LL0rd/myha`)
 
@@ -86,11 +93,11 @@ myha/                          ← Git-Root und HA-App-Repository
 │   ├── web/                   ← Vite + React + TypeScript (pnpm)
 │   │   ├── index.html         ← Gast/Bewohner/Display-Einstieg
 │   │   ├── admin.html         ← Admin-UI unter Ingress-Prefix
-│   │   └── src/{ui,guest,admin,api,i18n,native}
+│   │   └── src/{ui,guest,admin,api,i18n,transport}
 │   └── simulator/             ← Fake HA Core + Supervisor für Dev und Tests
 ├── tests/e2e/                 ← Playwright
 ├── scripts/                   ← dev.sh, build-image.sh, install-on-ha.py
-├── docs/                      ← setup.md, security.md, restore.md, device-matrix.md, adr/, reference/, superpowers/
+├── docs/                      ← setup.md, security.md, restore.md, device-matrix.md, s0-report.md, adr/, reference/, superpowers/
 └── .github/workflows/         ← ci.yml (lint, pytest, web build, e2e), image.yml (buildx → ghcr)
 ```
 
@@ -106,6 +113,7 @@ myha-apps/
 │   ├── src/                   ← native Shell: Instanzen, Scanner, Wandmodus, Einstellungen
 │   ├── android/               ← Gradle-Projekt, Plugin MyhaTransport (Kotlin/OkHttp)
 │   └── ios/                   ← Xcode-Projekt, Plugin MyhaTransport (Swift/URLSession), ungetestet
+├── spikes/transport-android/  ← S0-Spike: OkHttp HTTPS+WSS mit Pin gegen lokalen TLS-Testserver
 ├── scripts/build-web.sh       ← baut vendor/myha/myha/web im Modus native nach app/www-panel
 └── docs/device-matrix.md · store/
 ```
@@ -119,34 +127,59 @@ Die gemeinsame Web-UI wird **nicht** kopiert, sondern aus dem Submodule gebaut (
 | `settings` | Pydantic-Settings aus Env/`/data/options.json`, Pfade, Defaults | `Settings` |
 | `app` | Erzeugt `AdminApp`, `PublicApp`, Lifespan (Migration → Restore-Check → HAClient → Listener) | `create_admin_app()`, `create_public_app()`, `main()` |
 | `db` | SQLAlchemy 2 (async, `aiosqlite`), WAL, `foreign_keys=ON`, `secure_delete=ON`, Alembic | `Session`, Modelle |
-| `ha.client` | WS-Verbindung, Reconnect mit Backoff, `get_states`, Registries, `subscribe_events`, `call_service`, `get_config` | `HAClient`, `HAState`, `ServiceResult(context_id)` |
+| `ha.client` | WS-Verbindung, Reconnect mit Backoff, `get_states`, Registries, `subscribe_events`, `call_service`, `get_config`, Zeitplausibilität, `adapter_locked` | `HAClient`, `HAState`, `ServiceResult(context_id)` |
 | `ha.supervisor` | `GET http://supervisor/info`, Versionsvergleich, `addons/self/info` (Ingress-URL) | `SupervisorInfo` |
-| `adapters` | Je Kind (`light`, `switch`, `climate`, `cover`, `sensor`): Fähigkeiten aus HA-Attributen ableiten, Aktion → expliziter HA-Aufruf, Erwartung für Zustandsbestätigung | `Adapter.capabilities(state, registry)`, `Adapter.translate(action, params, state)`, `Adapter.expectation(...)` |
-| `policy` | `PolicyIndex` (Grants, Denies, Fences je Principal/Gruppe), `decide`, effektive Parameterbereiche | `decide(ctx, resource_id, action, params, now) -> Decision` |
-| `projection` | Typisierte Produktobjekte je Session (Positivliste Felder), Räume ohne sichtbare Ressourcen entfernen, Capabilities nur für erlaubte Schreibaktionen | `project_dashboard(session, snapshot)`, `project_resource(...)` |
+| `adapters` | Je Kind (`light`, `switch`, `climate`, `cover`, `sensor`): Fähigkeiten aus HA-Attributen ableiten, Aktion → expliziter HA-Aufruf, Erwartung für Zustandsbestätigung, `StateView` aus HA-Zustand | `Adapter.capabilities(state, registry)`, `Adapter.translate(action, params)`, `Adapter.expectation(...)`, `Adapter.state_view(state)` |
+| `policy` | `PolicyIndex`, effektiver Kontext, `decide`, effektive Parameterbereiche | `decide(ctx, resource, action, params, now, state_view) -> Decision` |
+| `projection` | Typisierte Produktobjekte je Kontext (Positivliste Felder), Räume ohne sichtbare Ressourcen entfernen, Capabilities nur für erlaubte Schreibaktionen | `project_dashboard(ctx, snapshot)`, `project_resource(...)` |
 | `events` | `EventBus`, Verbindungsregistry, Generation/Sequenz, Snapshot-Neuaufbau, Schließen bei Widerruf | `EventBus.publish`, `ClientConnection` |
-| `auth.admin` | `IngressGuard`, Rollen-Cache (5 s), CSRF-Nachweis (HMAC über User-ID + Ingress-Pfad + Server-Secret, Lebensdauer 12 h) | `require_admin()` |
-| `auth.public` | Invite-Redeem, Bewohner-Login (Argon2id, Rate Limit, gleichartige Fehler), Display-Pairing, Browser-Cookie `__Host-myha_session`, native Access/Refresh-Familien, WS-Tickets, Renewal | `require_session(purpose="access")` |
+| `auth.admin` | `IngressGuard`, Rollenprüfung (E5), CSRF-Nachweis (E24) | `require_admin(fresh: bool)` |
+| `auth.public` | Invite-Redeem, Bewohner-Login (Argon2id, Rate Limit, gleichartige Fehler), Display-Pairing, Browser-Cookie, native Access/Refresh-Familien, WS-Tickets, Renewal, Trustprofil | `require_session(purpose="access")` |
 | `commands` | Idempotenz, Statusmaschine `accepted → sent → confirmed/failed/unknown`, Bestätigung über beobachtete Zustände (Timeout 10 s), Wiederherstellung als `unknown` nach Neustart | `CommandService.submit` |
-| `stays` | Aufenthalte, Einladungen, Checkout, Verlängerung, Zimmerwechsel; alle Widerrufe transaktional | `StayService` |
+| `stays` | Aufenthalte, Einladungen, Checkout, Verlängerung, Zimmerwechsel, Rollout; alle Widerrufe transaktional | `StayService` |
 | `preview` | Previewkontexte (`purpose=preview`, 15 min), Simulation | `PreviewService` |
 | `audit` | Schreiben, Aggregation abgelehnter Massenanfragen (pro Session/Aktion/Minute), Aufbewahrung (Default 30 Tage, Job stündlich) | `audit(event)` |
 | `backup` | Bereinigter Export (SQLite Online Backup → Positivlisten-Kopie in neue DB), Hooks, Restore-Modus | CLI `myha-gateway backup export|cleanup` |
-| `setup` | Prüfungen des Assistenten (Gateway, HA, Admin-Identität, Public Origin/TLS, WSS, Gastgerätetest mit Test-QR) | `SetupService.run(check)` |
-| `i18n` | Serverseitige Texte nur für Fehlertitel in E-Mails/QR-Druck; UI-Texte liegen im Web | — |
+| `setup` | Prüfungen des Assistenten (Gateway, HA, Admin-Identität, Public Origin/TLS, WSS, Gastgerätetest mit Test-QR, Client-IP-Plausibilität), Trustprofil (Pins) | `SetupService.run(check)` |
 
 ### 4.1 Policy-Semantik (Konkretisierung von Spez §6)
 
+**Effektiver Kontext.** Jede Entscheidung und jede Projektion arbeitet auf einem `EffectiveContext`:
+
+```
+EffectiveContext(
+  principal_ref,           # echter Principal oder hypothetical(kind=guest|group_member)
+  role_bindings: [(role_template_id, role_version, unit_ids)],
+  fences: [...],           # Scope instance, unit, principal, session
+  not_before, not_after,   # Gültigkeitsfenster (UTC)
+  stay_id | None,
+  purpose: access | preview,
+  policy_version)
+```
+
+Quellen je Zugangsart:
+
+| Zugangsart | Principal | `role_bindings` | Fenster | Fences |
+|---|---|---|---|---|
+| Bewohner | `principal.type=resident` | alle `assignment` des Principals und seiner Gruppen (Mitgliedschaft zum Zeitpunkt `now` gültig) | Session-Ablauf | instance, unit, principal, session |
+| Display | `principal.type=display` | wie Bewohner | Session-Ablauf (betreibergesteuert) | wie Bewohner |
+| Gast | `principal.type=guest`, **wird beim Redeem je Einladung (= je Gerät) erzeugt**, trägt `stay_id` und `invite_id` | genau eine Bindung aus dem **Aufenthalt**: `(stay.role_template_id, stay.role_version, [stay.unit_id])`; Einladungen tragen keine Rolle | `[stay.starts_at, min(stay.ends_at, session.not_after))`; vor `starts_at` existiert die Session als `waiting` ohne Geräterechte | instance, unit, session (Principal-Fences für Gäste nur über den Aufenthalt: `fence.scope=stay`) |
+| Vorschau | je Ziel (siehe §4.5) | je Ziel | je Ziel, `now` optional hypothetisch | wie das Ziel |
+
+Ein **Rollout** beim Publish (`rollout=true`) setzt `assignment.role_version` **und** `stay.role_version` aller Aufenthalte mit Status `draft`/`confirmed` dieser Vorlage auf die neue Version; ohne Rollout behalten bestehende Zuweisungen und Aufenthalte ihre Version, neue Aufenthalte erhalten die zuletzt veröffentlichte Version als Vorgabe.
+
 - **Aktionen** (geschlossene Menge): `metadata.read`, `state.read`, `history.read` (im MVP immer verweigert), `switch.on/off`, `light.on/off/set_level`, `climate.set_temperature/set_mode`, `cover.open/close/stop/set_position`.
-- **Parameter-Schemas** (Pydantic, `extra="forbid"`): `level_pct: int 0..100`, `target_c: Decimal-String`, `mode: Enum[off, cool, heat]`, `position_pct: int 0..100`. Zusätzliche Felder, NaN, Unendlich, Strings mit Exponent werden abgelehnt.
-- **Grant** = `{resources: [product_id], actions: [action], parameters?: {name: {intervals: [{min,max}], step?, origin?} | {allowed: [enum]}}}`. Ein Grant gilt nur, wenn Ressource *und* Aktion enthalten sind und *alle* Parameter der Anfrage von diesem Grant abgedeckt werden. Mehrere Grants bilden die Vereinigung vollständiger Regeln (A10).
+- **Parameter-Schemas** (Pydantic, `extra="forbid"`): `level_pct: int 0..100`, `target_c: Decimal-String` (max. eine Nachkommastelle, kein Exponent), `mode: Enum[off, cool, heat]`, `position_pct: int 0..100`. Zusätzliche Felder, NaN, Unendlich werden abgelehnt (`PARAM_SCHEMA`).
+- **Grant** = `{resources: [product_id], actions: [action], parameters?: {name: {intervals: [{min, max, step, origin}]} | {allowed: [enum]}}}`. Schritt und Nullpunkt gehören zum Intervall. Ein Grant deckt eine Anfrage, wenn Ressource *und* Aktion enthalten sind und *alle* Parameter der Anfrage von diesem Grant abgedeckt werden. Mehrere Grants bilden die Vereinigung vollständiger Regeln (A10).
 - **Deny** = `{resources, actions}`; trifft ein Deny, ist die Entscheidung negativ (A12).
-- **Fence** = `{scope: instance|unit|principal|session, resources?, action, parameters}`; Fences schneiden Intervalle und Enum-Mengen; sie können nie erlauben (A11).
+- **Fence** = `{scope: instance|unit|stay|principal|session, resources?, action, parameters}`; Fences schneiden Intervalle (jeweils `min`/`max`, Schritt bleibt der des Grants) und Enum-Mengen; sie können nie erlauben (A11).
 - **Schrittprüfung:** `(value - origin) / step` muss ganzzahlig sein (Decimal-Arithmetik); Gerätegrenzen und Geräteschritt gehen zusätzlich ein. Kein Klemmen, kein Runden.
-- **Effektive Capability** (für Projektion und UI): Vereinigung der Grant-Intervalle ∩ Fences ∩ Gerätebereich, abzüglich durch Deny entfernter Aktionen. Die UI erhält daraus `intervals`, `step`, `origin` bzw. `allowed`.
-- **Decision-Codes (admin-sichtbar):** `GRANTED`, `NO_GRANT`, `DENIED_BY_RULE`, `FENCE_VIOLATION`, `PARAM_OUT_OF_RANGE`, `PARAM_STEP`, `PARAM_SCHEMA`, `RESOURCE_NOT_IN_SCOPE`, `RESOURCE_UNCONFIRMED`, `CAPABILITY_MISSING`, `ADAPTER_LOCKED`, `SESSION_INACTIVE`, `STAY_NOT_STARTED`, `STAY_ENDED`, `PREVIEW_CONTEXT`, `UNKNOWN_ACTION`, `MODE_WOULD_BYPASS_FENCE`.
+- **Effektive Capability** (für Projektion und UI): Vereinigung der Grant-Intervalle ∩ Fences ∩ Gerätebereich, abzüglich durch Deny entfernter Aktionen. Die UI erhält daraus `intervals` (je mit `step`, `origin`) bzw. `allowed`.
+- **Regel „Modus“ (E7):** Für `climate.set_mode` gilt zusätzlich: (1) `mode` muss in der Grant-Menge ∩ bestätigter Modusliste liegen; (2) `off` ist damit erlaubt; (3) `cool`/`heat` sind nur erlaubt, wenn entweder für diesen Principal und diese Ressource weder ein effektiver `target_c`-Bereich noch ein Temperatur-Fence existiert, oder `state_view.target_c` innerhalb des effektiven Bereichs liegt. Ist `state_view.target_c` unbekannt (`None`), gilt der Wert als außerhalb. Verstoß → `MODE_WOULD_BYPASS_FENCE` (öffentlich `ACTION_NOT_ALLOWED`). Die Simulation nutzt dieselbe `state_view` wie die reale Ansicht.
+- **`state_view`** (vom Adapter aus dem aktuellen HA-Zustand gebildet, ohne I/O in `decide`): `availability`, `adapter_locked`, kindspezifische Werte (`power`, `level_pct`, `target_c`, `current_c`, `hvac_mode`, `position_pct`, `value`).
+- **Decision-Codes (admin-sichtbar), geprüft in dieser Reihenfolge, erster Treffer gewinnt:** `PREVIEW_CONTEXT` (nur an ausführenden Endpunkten) → `SESSION_INACTIVE` → `STAY_NOT_STARTED` → `STAY_ENDED` → `RESOURCE_NOT_IN_SCOPE` → `RESOURCE_UNCONFIRMED` → `UNKNOWN_ACTION` → `PARAM_SCHEMA` → `DENIED_BY_RULE` → `NO_GRANT` (kein Grant nennt Ressource und Aktion) → `PARAM_OUT_OF_RANGE` (Aktion gewährt, Wert in keinem Intervall) → `PARAM_STEP` → `FENCE_VIOLATION` → `CAPABILITY_MISSING` (Gerät kann die Aktion nicht) → `MODE_WOULD_BYPASS_FENCE` → `ADAPTER_LOCKED` → `GRANTED`.
 - **Öffentliche Abbildung:** `RESOURCE_*`, `UNKNOWN_ACTION` → `NOT_FOUND`; `NO_GRANT`, `DENIED_BY_RULE`, `FENCE_VIOLATION`, `CAPABILITY_MISSING`, `MODE_WOULD_BYPASS_FENCE`, `PREVIEW_CONTEXT` → `ACTION_NOT_ALLOWED`; `PARAM_*` → `INVALID_PARAMETERS`; `SESSION_INACTIVE`, `STAY_*` → `ACCESS_EXPIRED`; `ADAPTER_LOCKED` → `UPSTREAM_UNAVAILABLE`.
-- **Policyversion:** jede veröffentlichte Rollenversion, Zuweisung, Fence-, Bindungs- oder Gruppenänderung erhöht `instance.policy_version` monoton in derselben Transaktion; danach `policy.changed` auf dem Bus.
+- **Policyversion:** jede veröffentlichte Rollenversion, Zuweisung, Fence-, Bindungs-, Aufenthalts- oder Gruppenänderung erhöht `instance.policy_version` monoton in derselben Transaktion; danach `policy.changed` auf dem Bus.
 
 ### 4.2 Adapter-Regeln
 
@@ -154,7 +187,7 @@ Die gemeinsame Web-UI wird **nicht** kopiert, sondern aus dem Submodule gebaut (
 |---|---|---|---|
 | light | Domain `light`, kein Gruppen-/Template-Hinweis in Registry (Plattform `group`, `template`, `switch_as_x` → Review), `supported_color_modes` vorhanden | `light.turn_on` ohne Zusatzfelder; `light.turn_off`; `set_level` → `light.turn_on {brightness_pct}` bzw. `turn_off` bei 0 (verlangt `light.off`-Recht), positive Werte verlangen `light.on` | `state == on/off`, bei Level `brightness` ≈ Ziel ± 1 % |
 | switch | Domain `switch`, Plattform nicht `group`/`template` | `switch.turn_on/off` | `state` |
-| climate | `unit_system.temperature == "°C"`, `temperature`-Attribut vorhanden, kein `target_temp_high/low` im aktuellen Zustand, `min_temp/max_temp/target_temp_step` gelesen; Modusliste vom Admin aus `hvac_modes ∩ {off, cool, heat}` bestätigt | `climate.set_temperature {temperature}`; `climate.set_hvac_mode {hvac_mode}` | `temperature` bzw. `state` (= hvac_mode) |
+| climate | `unit_system.temperature == "°C"`, `temperature`-Attribut vorhanden, kein `target_temp_high/low` im aktuellen Zustand, `min_temp/max_temp/target_temp_step` gelesen; Modusliste vom Admin aus `hvac_modes ∩ {off, cool, heat}` bestätigt | `climate.set_temperature {temperature}`; `climate.set_hvac_mode {hvac_mode}` (E7) | `temperature` bzw. `state == hvac_mode` |
 | cover | Domain `cover`, `supported_features` enthält OPEN/CLOSE/STOP bzw. SET_POSITION; Plattform nicht `group`/`template` | `cover.open_cover/close_cover/stop_cover/set_cover_position {position}`; `set_position` 0/100 verlangen zusätzlich `cover.close`/`cover.open`, Zwischenwerte beide (A17) | `current_position` bzw. `state` |
 | sensor | Domain `sensor`/`binary_sensor`, `device_class` und `unit_of_measurement` werden als typisierte Felder übernommen | nur Lesen | — |
 
@@ -164,31 +197,47 @@ Ein neu entdecktes Gerät, eine geänderte `unique_id`, ein Bereichswechsel oder
 
 | Zugangsart | Ablauf | Artefakt |
 |---|---|---|
-| Admin | Ingress-Peer + `X-Remote-User-Id` + `config/auth/list` (aktiv und Owner oder `system-admin`) bei jeder Anfrage (Cache 5 s); Mutationen zusätzlich mit `X-MyHA-CSRF` (HMAC an User-ID und Ingress-Pfad gebunden, aus `GET /api/v1/admin/session`) und `Sec-Fetch-Site: same-origin`/fehlend | keine eigene Admin-Session; Live-Admin-WS prüft alle 5 s neu und schließt bei Herabstufung (A04) |
-| Gast | `GET /join#i=<secret>` → Seite entfernt Fragment, `POST /api/v1/auth/redeem {invite_secret, device_label?, client: browser|native}` → atomarer Verbrauch (`UPDATE invite SET consumed_at=… WHERE id=… AND consumed_at IS NULL AND revoked_at IS NULL`) in derselben Transaktion wie `session INSERT` (A22) | Browser: Cookie `__Host-myha_session` (Secure, HttpOnly, SameSite=Lax, Path=/), Ablauf = min(Stay-Ende, konfigurierte Obergrenze). Native: Access-Token (15 min) + Refresh-Token (Familie, Rotation, Wiederverwendung sperrt Familie) |
-| Bewohner | `POST /api/v1/auth/login {username, password}`; Normalisierung NFKC + casefold; Argon2id; Rate Limit 10/min je IP und 5/min je Benutzername; identische Fehlermeldung | wie Gast; Refresh-Familie max. 30 Tage |
-| Display | Tablet: `POST /api/v1/auth/pair/start` → `{pairing_id, code (6 Ziffern), poll_token}`, Anzeige des Codes; Admin bestätigt in „People & groups“ mit Scope; Tablet pollt `POST /api/v1/auth/pair/poll` (Rate Limit, 10 min gültig) | langlebige, betreibergesteuerte Session; jederzeit widerrufbar |
-| WS | `POST /api/v1/ws-ticket` (Session + CSRF) → einmaliges Ticket 30 s; Client sendet es als erste Nachricht `{"type":"auth","ticket":…}`; 5 s Auth-Timeout; Origin exakt gegen Public Origin | — |
+| Admin | Ingress-Peer + `X-Remote-User-Id` + `config/auth/list` (aktiv und Owner oder `system-admin`) nach E5; Mutationen zusätzlich mit CSRF nach E24 | keine eigene Admin-Session; Live-Admin-WS prüft alle 5 s neu und schließt bei Herabstufung (A04) |
+| Gast | `GET /join#i=<secret>` → Seite entfernt Fragment, `POST /api/v1/auth/redeem {invite_secret, device_label?, client: browser|native}` → in einer Transaktion: atomarer Verbrauch (`UPDATE invite SET consumed_at=… WHERE id=… AND consumed_at IS NULL AND revoked_at IS NULL`, A22), Gast-Principal anlegen, Session anlegen | Browser: Cookie nach E25 (Secure, HttpOnly, SameSite=Lax, Path=/), Ablauf = min(Stay-Ende, `instance.session_limits.guest_browser`). Native: Access-Token (15 min) + Refresh-Token (Familie, Rotation, Wiederverwendung sperrt Familie), Familie endet spätestens am Stay-Ende |
+| Bewohner | `POST /api/v1/auth/login {username, password}`; Normalisierung NFKC + casefold; Argon2id; Rate Limit 10/min je IP und 5/min je Benutzername; identische Fehlermeldung | wie Gast; Refresh-Familie max. `session_limits.resident_refresh_days` (Default 30) |
+| Display | Tablet: `POST /api/v1/auth/pair/start` → `{pairing_id, code (6 Ziffern), poll_token}`, Anzeige des Codes; Admin bestätigt in „People & groups“ mit Scope; Tablet pollt `POST /api/v1/auth/pair/poll` (Rate Limit, 10 min gültig) | langlebige, betreibergesteuerte Session (`session_limits.display_days`, Default 365, sichtbarer Ablauf); jederzeit widerrufbar |
+| WS | `POST /api/v1/ws-ticket` (Session, bei Browser-Audience CSRF) → einmaliges Ticket 30 s; Client sendet es als erste Nachricht `{"type":"auth","ticket":…}`; 5 s Auth-Timeout; Browser-Audience: `Origin` exakt gegen Public Origin | — |
 
-CSRF für öffentliche Mutationen: Sitzungsgebundenes Token aus `GET /api/v1/me` im Header `X-MyHA-CSRF` plus Origin-Prüfung. Auth-Endpunkte leiten nie weiter (A49). Alle Secrets (Invite, Session, Refresh, Ticket) werden nur als SHA-256-Hash gespeichert; Vergleich zeitkonstant.
+CSRF für öffentliche Mutationen der Browser-Audience: Sitzungsgebundenes Token aus `GET /api/v1/me` im Header `X-MyHA-CSRF` plus `Origin`-Prüfung gegen Public Origin. Auth-Endpunkte leiten nie weiter (A49). Alle Secrets (Invite, Session, Refresh, Ticket, Poll-Token) werden nur als SHA-256-Hash gespeichert; Vergleich zeitkonstant.
+
+**Nativer Vertrag (E14):**
+- Access-Token im Header `Authorization: Bearer <token>`; Sessions mit `audience=native` setzen kein Cookie, verlangen kein CSRF-Token und ignorieren `Origin` (ein Browser erhält nie ein Bearer-Token; der Header selbst erzwingt bei Fremdorigins einen Preflight ohne CORS-Antwort).
+- `POST /api/v1/auth/refresh {refresh_token}` rotiert die Familie; Antwort enthält neues Access-/Refresh-Paar und das aktuelle Trustprofil.
+- `GET /api/v1/me/trust` liefert `{instance_id, public_origin, pins: [{spki_sha256, role: primary|backup, valid_from}], policy: pin_required|pin_optional}`; nur authentifiziert erreichbar. Clients übernehmen Pin-Änderungen ausschließlich hieraus oder durch neues Enrollment (Spez §13.3 Punkt 5).
+- Der Einladungs-QR trägt im Fragment zusätzlich `inst=<instance_id>` und `fp=<primärer SPKI-Pin>`; Browser ignorieren die Zusatzparameter.
+- Pins pflegt der Admin im Setup-Assistenten („Trust profile“): im Modus `tls` wird der primäre Pin aus dem konfigurierten Zertifikat berechnet und der Ersatzpin manuell eingetragen (z. B. aus dem nächsten Schlüssel); im Modus `proxy` werden beide manuell eingetragen, maßgeblich ist der Schlüssel des Proxys. Entfernte Pins verschwinden aus dem Trustprofil; der Client schließt daraufhin Pools und Sockets und prüft neu (A37).
 
 ### 4.4 Live-Ereignisse und Befehle
 
-- Verbindung erhält zuerst `snapshot` (Generation `conn_<n>`, Sequenz 0), danach `resource.updated`/`resource.removed` mit laufender Sequenz. Jedes Ereignis wird erst unmittelbar vor dem Senden gegen Session und `policy_version` projiziert; nach `policy.changed` folgt ein neuer Snapshot statt Deltas.
-- `session.revoked` (bei Widerruf, Checkout, Ablauf) → Verbindung wird serverseitig innerhalb von 5 s geschlossen (A20, A25).
-- Befehl: `POST /api/v1/actions` mit `Idempotency-Key` (UUID, Pflicht). Ablauf in einer DB-Transaktion: Session prüfen → `decide` → `command INSERT (status=accepted)` → Commit → HA-Aufruf → `sent` → Beobachtung → `confirmed|failed|unknown` → `command.updated`. Gleicher Schlüssel, gleicher Body → derselbe Befehl ohne zweiten Versand; anderer Body → `409 CONFLICT` (A31). Nach Neustart werden `accepted|sent` zu `unknown` (A32).
+- Verbindung erhält zuerst `snapshot` (Generation `conn_<n>`, Sequenz 0), danach `resource.updated`/`resource.removed` mit laufender Sequenz. Jedes Ereignis wird erst unmittelbar vor dem Senden gegen Kontext und `policy_version` projiziert; nach `policy.changed` folgt ein neuer Snapshot statt Deltas.
+- `session.revoked` (bei Widerruf, Checkout, Ablauf) → Verbindung wird serverseitig innerhalb von 5 s geschlossen (A20, A25, A52).
+- Befehl: `POST /api/v1/actions` mit `Idempotency-Key` (UUID, Pflicht). Ablauf: Session prüfen → `decide` → `command INSERT (status=accepted)` → Commit → **unmittelbar vor `call_service` erneut im Speicher prüfen: Session nicht widerrufen, `policy_version` unverändert, HAClient verbunden; sonst `failed` mit Grund** → HA-Aufruf → `sent` → Beobachtung → `confirmed|failed|unknown` → `command.updated`. Gleicher Schlüssel, gleicher Body → derselbe Befehl ohne zweiten Versand; anderer Body → `409 CONFLICT` (A31). Nach Neustart werden `accepted|sent` zu `unknown` (A32).
 - Keine Offline-Warteschlange: Der Client sendet nur bei bestehender Verbindung; der Server lehnt Befehle ab, wenn der HAClient getrennt ist (`UPSTREAM_UNAVAILABLE`).
 
 ### 4.5 Fremdansicht
 
-`POST /api/v1/admin/preview {target: {principal_id | invite_id | group_id}, session_id?, at?}` erzeugt eine `session` mit `purpose=preview`, `actor_admin_id`, Ablauf 15 min. `GET /api/v1/admin/preview/{id}/dashboard` ruft `project_dashboard` mit genau diesem Kontext auf; `POST …/simulate {resource_id, action, parameters}` ruft `decide` mit `now = at or server_time` und liefert `would_allow`, `code`, `normalized_parameters`, `matched_rules`. `PublicApp` lehnt Preview-Sessions an allen ausführenden Endpunkten ab (`PREVIEW_CONTEXT`, A30). Hypothetische Zeiten ändern nur die Policybewertung; Zustände werden als „aktuell gemessen“ beschriftet (A29).
+`POST /api/v1/admin/preview {target, at?}` mit `target` aus genau einer der Formen:
+
+| Ziel | Kontext |
+|---|---|
+| `{principal_id, session_id?}` | echter Principal; mit `session_id` zusätzlich deren Scope-Obergrenze und Fenster; bei Gästen der zugehörige Aufenthalt |
+| `{stay_id}` | hypothetischer Gast dieses Aufenthalts (auch `draft`), Rolle/Einheit/Fenster aus dem Aufenthalt, Stay-Fences |
+| `{invite_id}` | wie `{stay_id}` der Einladung; zusätzlich deren `redeem_until` in der Anzeige (A50) |
+| `{group_id}` | ausdrücklich markierte hypothetische Person, deren einzige Bindungen die Zuweisungen dieser Gruppe sind |
+
+Die Antwort ist eine `session` mit `purpose=preview`, `actor_admin_id`, `preview_target` (JSON), `principal_id` nur bei echtem Principal, Ablauf 15 min. `GET /api/v1/admin/preview/{id}/dashboard` ruft `project_dashboard` mit genau diesem Kontext auf; `POST …/simulate {resource_id, action, parameters}` ruft `decide` mit `now = at or server_time` und derselben `state_view` wie die Live-Ansicht und liefert `would_allow`, `code`, `normalized_parameters`, `matched_rules`. `PublicApp` lehnt Preview-Sessions an allen ausführenden Endpunkten ab (`PREVIEW_CONTEXT`, A30). Hypothetische Zeiten ändern nur die Policybewertung; Zustände werden als „aktuell gemessen“ beschriftet (A29).
 
 ### 4.6 Backup und Restore
 
-- `backup_pre` → `myha-gateway backup export`: Online-Backup der Live-DB nach `/data/state/tmp/snapshot.sqlite`, daraus **neue leere DB** `/data/state/tmp/export.sqlite` mit Positivliste (`instance` ohne Secrets, `unit`, `resource_binding`, `role_template`, `role_version`, `group`, `membership`, `assignment` mit `status=disabled_pending_review`, `fence`, `dashboard`, `principal` ohne Credentials), Metadaten `export_generation`, `exported_at`, `schema_version`, `requires_admin_review=1`; `PRAGMA integrity_check`; atomar nach `/data/backup/restore.sqlite` verschieben. Lockdatei verhindert parallele Exporte.
+- `backup_pre` → `myha-gateway backup export`: Online-Backup der Live-DB nach `/data/state/tmp/snapshot.sqlite`, daraus **neue leere DB** `/data/state/tmp/export.sqlite` mit Positivliste nach E22, Metadaten `export_generation`, `exported_at`, `schema_version`, `requires_admin_review=1`; `PRAGMA integrity_check`; atomar nach `/data/backup/restore.sqlite` verschieben. Lockdatei verhindert parallele Exporte.
 - `backup_post` → `myha-gateway backup cleanup`: Export löschen; Fehler sichtbar im Admin-Status.
 - Beim Start: existiert `/data/backup/restore.sqlite`, startet die App im **Restore-Modus**: Public-Listener bleibt zu, Admin sieht den Import-Review, bestätigt Bindungen und Zuweisungen, danach wird eine frische Live-DB mit neuer `security_generation` erzeugt; Sessions, Einladungen, Passwörter und Refresh-Familien existieren danach nicht (A39). Fehlt beides (Live-DB und Export), bleibt die App im Einrichtungszustand.
-- `config.yaml`: `backup: hot`, `backup_exclude: ["state", "state/**"]` (relativ zu `/data`; das tatsächliche Archiv wird in WP11 geprüft, A47).
+- `config.yaml`: `backup: hot`, `backup_exclude: ["state", "state/**"]` (relativ zu `/data`; das tatsächliche Archiv wird in S0 und WP11 geprüft, A47).
 
 ## 5. Datenmodell
 
@@ -196,26 +245,26 @@ Die Tabellen aus Spez §5 werden übernommen; Konkretisierungen:
 
 | Tabelle | Ergänzung/Entscheidung |
 |---|---|
-| `instance` | Einzeiler: `public_origin`, `tls_mode`, `tls_cert_path`, `tls_key_path`, `proxy_cidrs`, `timezone`, `policy_version`, `security_generation`, `setup_state`, `server_secret` (für HMACs, nur hier) |
-| `unit` | `id` (`unit_…`), `name`, `sort`, `template_id?` |
-| `resource_binding` | `id` (`res_…`), `unit_id`, `kind`, `entity_id`, `registry_entity_id`, `device_id`, `area_id`, `label`, `icon`, `confirmed_capabilities` (JSON inkl. Modusliste, Bereich, Schritt), `capability_fingerprint`, `status` (`confirmed`, `needs_review`, `blocked`), `sort`, `card_size` |
-| `principal` | `type` (`resident`, `guest`, `display`), `status`, `display_name`, `locale`, `theme` |
+| `instance` | Einzeiler: `id`, `short_id` (8 Zeichen, für Cookie-Name), `name`, `public_origin`, `tls_mode`, `tls_cert_path`, `tls_key_path`, `proxy_cidrs`, `trust_pins` (JSON), `timezone`, `policy_version`, `security_generation`, `setup_state`, `operator_contact`, `session_limits` (JSON: `guest_browser_days`, `resident_refresh_days`, `display_days`, `native_access_minutes`), `audit_retention_days`, `time_trusted`, `server_secret` (für HMACs, nur hier) |
+| `unit` | `id` (`unit_…`), `name`, `sort` |
+| `resource_binding` | `id` (`res_…`), `unit_id`, `kind`, `entity_id`, `registry_entity_id`, `device_id`, `area_id`, `label`, `icon`, `confirmed_capabilities` (JSON inkl. Modusliste, Bereich, Schritt), `capability_fingerprint`, `status` (`confirmed`, `needs_review`, `blocked`) |
+| `principal` | `type` (`resident`, `guest`, `display`), `status`, `display_name`, `locale`, `theme`; bei `guest`: `stay_id`, `invite_id` |
 | `credential` | `principal_id` unique, `username_normalized` unique, `password_hash`, `changed_at`, `must_reset` |
 | `group`, `membership` | wie Spez; `membership.valid_from/valid_to` |
-| `role_template`, `role_version` | Versionen unveränderlich; `role_version.grants`, `denies` als JSON mit Schema; `published_at`, `based_on_version` |
-| `assignment` | `subject_type` (`principal`/`group`), `subject_id`, `role_template_id`, `role_version`, `unit_ids` (Scope), `status` |
-| `fence` | `scope_type`, `scope_id`, `resource_ids?`, `action`, `parameters` |
-| `stay` | `unit_id`, `starts_at`, `ends_at` (UTC), `status` (`planned`, `active`, `checked_out`, `cancelled`), `external_ref?`, `role_template_id`, `role_version` |
-| `invite` | `secret_hash`, `purpose` (`guest_join`), `stay_id`, `unit_ids`, `role_template_id`, `role_version`, `redeem_until`, `consumed_at`, `consumed_session_id`, `revoked_at`, `device_slot` |
-| `session` | `token_hash` (Browser/Access), `family_id` (native Refresh), `principal_id`, `audience` (`browser`, `native`), `purpose` (`access`, `preview`, `pairing`), `stay_id?`, `unit_ids`, `not_before`, `not_after`, `last_seen_at`, `revoked_at`, `revoke_reason`, `csrf_secret`, `device_label`, `actor_admin_id?` |
+| `role_template`, `role_version` | Versionen unveränderlich; `role_version.grants`, `denies` als JSON mit Schema; `published_at`, `based_on_version`; Draft als `role_template.draft` (JSON, `draft_based_on`) |
+| `assignment` | `subject_type` (`principal`/`group`), `subject_id`, `role_template_id`, `role_version`, `unit_ids` (Scope), `status` (`active`, `disabled_pending_review`) |
+| `fence` | `scope_type` (`instance`, `unit`, `stay`, `principal`, `session`), `scope_id`, `resource_ids?`, `action`, `parameters` |
+| `stay` | `unit_id`, `starts_at`, `ends_at` (UTC), `status` (`draft`, `confirmed`, `checked_out`, `cancelled`; „geplant“/„aktiv“ werden aus `confirmed` und `now` abgeleitet), `external_ref?`, `role_template_id`, `role_version`, `device_slots` |
+| `invite` | `secret_hash`, `purpose` (`guest_join`, `guest_test`), `stay_id`, `device_slot`, `redeem_until`, `consumed_at`, `consumed_session_id`, `revoked_at`; **keine Rollenfelder** (Rolle kommt vom Aufenthalt) |
+| `session` | `token_hash` (Browser/Access), `family_id` (native Refresh), `principal_id?`, `audience` (`browser`, `native`), `purpose` (`access`, `preview`, `pairing`), `stay_id?`, `unit_ids`, `not_before`, `not_after`, `last_seen_at`, `revoked_at`, `revoke_reason`, `csrf_secret`, `device_label`, `actor_admin_id?`, `preview_target?` (JSON) |
 | `refresh_token` | `family_id`, `token_hash`, `issued_at`, `rotated_at`, `used_at` (Wiederverwendung sperrt Familie) |
 | `ws_ticket` | `ticket_hash`, `session_id`, `expires_at`, `used_at` |
 | `pairing_request` | `code`, `poll_token_hash`, `expires_at`, `approved_session_id?` |
-| `dashboard` | je Unit: Kartenreihenfolge, Größen, Theme-Default (JSON, versioniert) |
+| `dashboard` | je Unit: `layout` (JSON: Kartenreihenfolge, Größen, Theme-Default), `version` – einzige Quelle für Reihenfolge und Größe (E10) |
 | `command` | wie Spez; `idempotency_key` unique mit `session_id`; `ha_context_id`; `expectation` JSON |
 | `audit_event` | wie Spez; zusätzlich `aggregate_count` für zusammengefasste Ablehnungen |
 
-Alle Zeitpunkte als UTC-ISO-Strings in SQLite; `starts_at` inklusiv, `ends_at` exklusiv. Optimistic Locking über `version`-Spalte auf allen admin-editierbaren Tabellen (`If-Match`/`expected_version` in der API).
+Alle Zeitpunkte als UTC-ISO-Strings in SQLite; `starts_at` inklusiv, `ends_at` exklusiv. Optimistic Locking über `version`-Spalte auf allen admin-editierbaren Tabellen (`expected_version` in der API).
 
 ## 6. API-Vertrag
 
@@ -223,32 +272,34 @@ Namespace `/api/v1`. Öffentliche Routen nur in `PublicApp`, Admin-Routen nur in
 
 **Öffentlich (Spez §12.1 unverändert)** plus:
 - `POST /api/v1/auth/pair/start`, `POST /api/v1/auth/pair/poll` (Display-Pairing).
+- `GET /api/v1/me/trust` (Trustprofil, §4.3).
 - `GET /api/v1/public/config` liefert nur Instanzname, Sprachen, Theme-Defaults, Betreiberkontakt.
 
 **Admin (`/api/v1/admin`)**
-- `GET session` (CSRF-Token, Admin-Name, Supervisor-/Core-Versionen, Setup-Zustand)
+- `GET session` (CSRF-Token, Admin-Name, Supervisor-/Core-Versionen, Setup-Zustand, Zeitstatus)
 - `units`, `units/{id}/bindings`, `bindings/{id}/confirm`, `bindings/{id}/review`, `ha/areas`, `ha/entities?area=&kind=` (Kandidatenliste aus Registry, nur Anzeige, keine Rechte)
 - `principals`, `principals/{id}/credential` (Reset), `groups`, `groups/{id}/members`, `pairings`, `pairings/{id}/approve|reject`
 - `roles`, `roles/{id}/versions`, `roles/{id}/draft` (PUT), `roles/{id}/diff` (Draft gegen veröffentlicht, mit betroffenen Aufenthalten/Sessions), `roles/{id}/publish` (mit `expected_version`, optional `rollout=true`)
 - `assignments`, `fences`
-- `stays`, `stays/{id}/invites` (POST erzeugt n Einladungen, Antwort enthält Secret genau einmal und SVG-QR), `stays/{id}/checkout`, `stays/{id}/extend`, `stays/{id}/move` (Zimmerwechsel erzeugt neuen Stay-Entwurf), `invites/{id}/revoke`
+- `stays` (POST erzeugt `draft`), `stays/{id}/confirm`, `stays/{id}/invites` (POST erzeugt n Einladungen, Antwort enthält Secret und SVG-QR genau einmal; setzt `draft` → `confirmed`), `stays/{id}/checkout`, `stays/{id}/extend`, `stays/{id}/move` (Zimmerwechsel erzeugt neuen `draft`), `invites/{id}/revoke`
 - `sessions`, `sessions/{id}/revoke`, `sessions/{id}/replace` (Widerruf + neue Einladung)
 - `preview`, `preview/{id}/dashboard`, `preview/{id}/simulate`
 - `dashboard/{unit_id}` (GET/PUT)
-- `setup/checks`, `setup/checks/{name}/run`, `setup/origin` (PUT), `setup/tls` (PUT), `setup/guest-test` (erzeugt Test-QR, meldet Einlösung)
+- `setup/checks`, `setup/checks/{name}/run`, `setup/origin` (PUT), `setup/tls` (PUT), `setup/trust` (GET/PUT Pins), `setup/guest-test` (erzeugt Test-QR mit `purpose=guest_test`, meldet Einlösung)
 - `audit?filter=&cursor=`, `diagnostics`, `diagnostics/export` (Vorschau, dann Download), `backup/status`
 - `restore/review`, `restore/apply`
 - `WS admin/events` (Setup-Fortschritt, Pairing-Anfragen, Backup-Status, Live-Audit)
 
-Fehlerformat überall `{"error": {"code": "...", "message": "...", "details"?: ...}}`; öffentliche Codes nur die acht aus Spez §12.1; Admin-Antworten dürfen Decision-Codes enthalten.
+Fehlerformat überall `{"error": {"code": "...", "message": "...", "details"?: ...}}`; öffentliche Codes nur die acht aus Spez §12.1; Admin-Antworten dürfen Decision-Codes enthalten. A26 wird so geprüft: Es gibt keinen statischen Zimmer-QR; die Einstiegsseite ohne gültiges Secret gewährt nichts.
 
 ## 7. Web-Frontend
 
 - **Stack:** Vite 6, React 18, TypeScript strict, React Router, Radix Primitives (Dialog, Select, Checkbox, Switch, Tabs, Tooltip), eigene CSS-Module mit Designtokens aus dem Mockup (`--bg #F7F5F0`, `--accent #C8A24A`, Dark- und Kontrast-Theme, Nunito Sans / JetBrains Mono). Kein Tailwind. Buildziel `es2019`, CSS ohne Container-Query-Pflicht (Grid/Flex/Media Queries), Autoprefixer.
-- **Zwei Einstiege:** `admin.html` (Base `./`, läuft unter beliebigem Ingress-Prefix, liest `X-Ingress-Path` nicht, sondern nutzt relative Pfade und `document.baseURI`), `index.html` (Gast/Bewohner/Display, PWA mit Manifest; Service Worker cached nur `/assets/*`).
+- **Zwei Einstiege:** `admin.html` (Base `./`, läuft unter beliebigem Ingress-Prefix, nutzt relative Pfade und `document.baseURI`), `index.html` (Gast/Bewohner/Display, PWA mit Manifest; Service Worker cached nur `/assets/*`).
+- **Transport-Abstraktion (`src/transport`):** Interface `Transport { request(), openSocket() }`; Browser-Implementierung mit `fetch`/`WebSocket` und Cookie/CSRF; native Implementierung (Modus `native`) ruft das Capacitor-Plugin `MyhaTransport` und sendet Bearer-Token.
 - **Gemeinsame UI (`src/ui`):** `GuestPanel` (Portierung des Mockups: Layouts `tiles|list|focus`, `wall`, `simulate`, `explain`, Status `online|stale|waiting|expired`), `ResourceCard` je Kind, `CommandStatus` (checking → accepted → confirmed | unknown | failed), `ConnectionPill`, `ThemeProvider`, `useI18n`.
 - **Gast-Routen:** `/join` (Fragment lesen, `history.replaceState` ohne Fragment, Redeem), `/login`, `/pair`, `/` (Dashboard mit WS, Stale-Fenster 30 s, danach Zustände entfernen), `/ended`. Sprache: Browser → gespeicherte Wahl; Theme: System → Wahl.
-- **Admin-Routen** (Mockup-Screens plus E10/E11): Rooms & devices (inkl. Layout-Tab), People & groups, Roles & rights (Matrix und Karten-Editor, Parameter, Fences, Live-Vorschau mit Explain), Preview as user, Stays & invites (QR-Dialog), Sessions & checkout, Setup assistant, Audit & diagnostics, Review & publish, Restore (nur im Restore-Modus).
+- **Admin-Routen** (Mockup-Screens plus E10/E11): Rooms & devices (inkl. Layout-Tab), People & groups, Roles & rights (Matrix und Karten-Editor, Parameter, Fences, Live-Vorschau mit Explain), Preview as user, Stays & invites (QR-Dialog), Sessions & checkout, Setup assistant (inkl. Trust profile), Audit & diagnostics, Review & publish, Restore (nur im Restore-Modus).
 - **Zugänglichkeit:** 44 px Touchziele (64 px Wand), sichtbarer Fokus, `aria-live` für Befehlsstatus, Tastaturpfad für Drag-and-drop (Pfeiltasten/Buttons), `prefers-reduced-motion`.
 - **Sicherheit:** CSP `default-src 'self'; connect-src 'self' wss:; img-src 'self' data:; frame-ancestors 'none'` auf dem Public-Listener; Admin-Listener `frame-ancestors` nur für HA (Ingress bettet ein) – Header kommt vom Gateway. Beschriftungen immer als Text gerendert.
 - **Typen:** generierte API-Typen; Dashboard-Schema als Zod-Schema validiert, bevor gerendert wird (gilt auch für den nativen Build).
@@ -294,41 +345,42 @@ schema:
   log_level: list(debug|info|warning|error)
 ```
 
-Keine Zugangsdaten in `options`. Das Dockerfile ist mehrstufig (Node-Stage baut `web/`, Python-Stage installiert `gateway/` mit `uv` in ein venv); `build.yaml` referenziert die HA-Python-Basisimages je Architektur. s6-Service startet `myha-gateway serve`. `GET http://supervisor/info` funktioniert laut Supervisor-Bypass-Liste auch ohne `hassio_api` – das ist ein S0-Nachweis; falls er scheitert, wird `hassio_api: true` mit `hassio_role: default` gesetzt und dokumentiert.
+Keine Zugangsdaten in `options`. Das Dockerfile ist mehrstufig (Node-Stage baut `web/`, Python-Stage installiert `gateway/` mit `uv` in ein venv); `build.yaml` referenziert die HA-Python-Basisimages je Architektur. s6-Service startet `myha-gateway serve`. `GET http://supervisor/info` steht laut Supervisor-Middleware (`api_bypass` enthält `/info`) jedem App-Token offen; der reale Nachweis gehört zu S0. Falls er scheitert, wird `hassio_api: true` mit `hassio_role: default` gesetzt und dokumentiert.
 
 ## 9. Native Apps (M3, privates Repo)
 
-- **Shell:** Capacitor 8, TypeScript. Screens: Instanzen (mehrere, getrennte Sessions/Trustprofile), Instanz hinzufügen (QR oder Adresse), Panel (Web-UI aus dem Submodule im Modus `native`), Wandmodus-Einstellungen (Wachhalten, Querformat, Nachtthema, PIN für App-Einstellungen).
-- **Transport:** Interface `Transport { request(), openSocket() }` im öffentlichen Web-Code; Browser-Implementierung nutzt `fetch`/`WebSocket`, native Implementierung ruft das Plugin `MyhaTransport`. Android: Kotlin, OkHttp mit `CertificatePinner` (SPKI-SHA-256, mindestens ein Ersatzpin), WebSocket über OkHttp, Pools und Sockets werden bei Trustprofil-Änderung geschlossen; keine Redirect-Verfolgung bei Auth-Endpunkten. iOS: Swift, `URLSession` mit `URLSessionWebSocketTask` und `urlSession(_:didReceive:)`-Pinning, Gerüst ohne Build-Nachweis.
+- **Shell:** Capacitor 8 (8.5.x), TypeScript. Screens: Instanzen (mehrere, getrennte Sessions/Trustprofile), Instanz hinzufügen (QR oder Adresse), Panel (Web-UI aus dem Submodule im Modus `native`), Wandmodus-Einstellungen (Wachhalten, Querformat, Nachtthema, PIN für App-Einstellungen).
+- **Transport:** Plugin `MyhaTransport` hinter dem `Transport`-Interface aus §7. Android: Kotlin, OkHttp mit `CertificatePinner` (SPKI-SHA-256 aus dem Trustprofil, primär und Ersatz), WebSocket über OkHttp, Pools und Sockets werden bei Trustprofil-Änderung geschlossen; keine Redirect-Verfolgung bei Auth-Endpunkten. iOS: Swift, `URLSession` mit `URLSessionWebSocketTask` und `urlSession(_:didReceive:)`-Pinning, Gerüst ohne Build-Nachweis. Nur systemvertrauenswürdige Ketten (E27).
 - **Tokenablage:** Android Keystore-verschlüsselt (EncryptedSharedPreferences), iOS Keychain; Access-Token nur im Speicher.
-- **QR-Scanner:** Web-Decoder `zxing-wasm` mit `getUserMedia` im WebView (keine Play Services nötig); Kameraberechtigung über Capacitor. Fallback manuelle Adresseingabe. Native QR-Payload: Join-URL mit Fragment `i=<secret>&inst=<instance_id>&fp=<spki-sha256>`; Browser ignorieren die Zusatzparameter. Das Secret wird erst nach erfolgreicher TLS-/Pinprüfung gesendet.
+- **QR-Scanner:** Web-Decoder `zxing-wasm` mit `getUserMedia` im WebView (keine Play Services nötig); Kameraberechtigung über Capacitor. Fallback manuelle Adresseingabe. Das Secret wird erst nach erfolgreicher TLS-/Pinprüfung gesendet; danach lädt der Client `GET /api/v1/me/trust` und speichert das Trustprofil je Instanz.
 - **Gerätematrix:** Pixel-Emulator API 30/35, reales Android-Gerät von Dimitri, Fire HD 10 falls vorhanden; Ergebnisse in `docs/device-matrix.md`.
 
 ## 10. Sicherheit – Zuordnung Bedrohung → Mechanismus
 
 | Bedrohung | Mechanismus | Abnahme |
 |---|---|---|
-| Gefälschte Ingress-Identität | Peer-IP, Header-Eindeutigkeit, Core-Rollenabfrage, getrennte Listener | A01–A05 |
+| Gefälschte Ingress-Identität | Peer-IP, Header-Eindeutigkeit, Core-Rollenabfrage ohne Cache bei Mutationen, getrennte Listener | A01–A05 |
 | Fremde Ressource per ID | Scope-Prüfung vor jeder Auflösung, identischer `NOT_FOUND` | A06, A19 |
 | Umgehung über Parameter/Services | Geschlossene Aktionsmenge, `extra=forbid`, Adapterübersetzung ohne Durchreichung | A07–A09, A13, A17, A18 |
 | Rechteerweiterung durch Vereinigung | Vollständige Regeln, Deny-Vorrang, Fences als Schnitt | A10–A12 |
 | Registry-Drift | Fingerprint der Fähigkeiten, `needs_review` sperrt Schreiben | A14–A16 |
-| Veraltete Rechte in offenen Verbindungen | Projektion pro Ereignis, Snapshot nach `policy.changed`, Schließen nach Widerruf | A20, A21, A25, A52 |
+| Veraltete Rechte in offenen Verbindungen | Projektion pro Ereignis, Snapshot nach `policy.changed`, Schließen nach Widerruf, Prüfung vor `call_service` | A20, A21, A25, A52 |
 | QR-Missbrauch | 256-Bit-Secret, Hash, atomarer Verbrauch, Einlösefrist, Fragment-Transport, keine Logs | A22–A26, A45 |
 | Simulation führt aus | `purpose=preview` an allen Aktionsrouten abgelehnt | A28–A30 |
-| Doppelte oder nachgeholte Befehle | Idempotency-Key, `unknown` nach Neustart, keine Offline-Queue | A31–A34 |
-| CSRF/Origin/Replay | Custom-Header-Token je Session, Origin-Prüfung, einmalige WS-Tickets, Refresh-Rotation, keine Redirects | A35, A49 |
-| Restore reaktiviert Zugänge | Positivlisten-Export ohne Secrets, neue Sicherheitsgeneration | A39, A47, A48 |
+| Doppelte oder nachgeholte Befehle | Idempotency-Key, `unknown` nach Neustart, keine Offline-Queue | A31, A32, A34 |
+| CSRF/Origin/Replay | Custom-Header-Token je Session, Origin-Prüfung (Browser), einmalige WS-Tickets, Refresh-Rotation, keine Redirects | A35, A49 |
+| Restore reaktiviert Zugänge | Positivlisten-Export ohne Secrets, neue Sicherheitsgeneration | A39, A40, A47, A48 |
 | Informationsabfluss in Logs | Redaction-Filter im Logging (Token, Secrets, Authorization), Audit ohne Payloads | A45 |
+| Falscher TLS-Endpunkt (nativ) | Systemkette plus Pins aus dem Trustprofil, Pools schließen bei Änderung | A36–A38 |
 
 ## 11. Tests und Qualitätssicherung
 
-- **pytest** (`gateway/tests`): reine Policy-Tests tabellengetrieben (A06–A18 als parametrisierte Fälle), Auth-Tests mit gefälschten Peers/Headers (A01–A05), Integrationstests gegen den **HA-Simulator** (`simulator/`: WS `/api/websocket` mit `auth`, `get_states`, `subscribe_events`, `call_service`, Registries, `get_config`, `config/auth/list`; HTTP `/info` als Supervisor; Fixture mit Licht, Schalter, Klimaanlage 1 °C, Thermostat 0,5 °C, Cover, Sensoren; Fehlerinjektion: Gerät offline, Service-Fehler, Verbindungsabbruch), Ereignis- und Widerrufstests (A19–A21, A25, A52), Idempotenz und Neustart (A31–A34), Backup/Restore (A39, A47, A48), Zeitzonen inkl. Sommerzeitwechsel.
+- **pytest** (`gateway/tests`): reine Policy-Tests tabellengetrieben (A06–A18 als parametrisierte Fälle inkl. Modusregel), Auth-Tests mit gefälschten Peers/Headers (A01–A05), Integrationstests gegen den **HA-Simulator** (`simulator/`: WS `/api/websocket` mit `auth`, `get_states`, `subscribe_events`, `call_service`, Registries, `get_config`, `config/auth/list`; HTTP `/info` als Supervisor; Fixture mit Licht, Schalter, Klimaanlage 1 °C, Thermostat 0,5 °C, Cover, Sensoren; Fehlerinjektion: Gerät offline, Service-Fehler, Verbindungsabbruch, Zeitversatz), Ereignis- und Widerrufstests (A19–A21, A25, A52), Idempotenz und Neustart (A31, A32, A34), Backup/Restore (A39, A40, A47, A48), Zeitzonen inkl. Sommerzeitwechsel, nativer Tokenpfad (Rotation, Wiederverwendung, Trustprofil).
 - **Web:** Vitest für Policy-nahe UI-Logik (Explain-Mapping, Stale-Fenster), `tsc --noEmit`, ESLint.
 - **Playwright** (`tests/e2e`): Gateway gegen Simulator mit `MYHA_TRUSTED_INGRESS_PEER=127.0.0.1` und einem kleinen Ingress-Proxy, der Identitätsheader setzt: Admin legt Raum, Rolle, Aufenthalt und Einladung an → Gast löst QR ein → erlaubte Aktion sichtbar bestätigt, verbotene nicht vorhanden und per API abgelehnt → Checkout → „Access ended“. Viewports 320, 768, 1180, 2560 und 200 % Text (A41); Tastaturpfad (A42 teilweise automatisiert).
 - **Last:** Skript mit 20 WS-Clients und 100 freigegebenen Ressourcen gegen den Simulator, Messung Policy-p95 und Ereignislatenz (Spez §16, A46 als Dokumentation).
 - **CI:** GitHub Actions auf jedem Push: Ruff, mypy (strict für `policy`, `auth`, `adapters`), pytest mit Coverage-Schwelle 85 % für Policy/Auth, Web-Build, Playwright (Chromium). Image-Workflow baut amd64/aarch64 mit buildx.
-- **Reale HA:** Nach M1 Installation auf Dimitris Instanz; Nachweise A01–A05 real über Ingress, vertikaler Pfad mit Govee-Licht und Klimaanlage im Wohnzimmer; Backup-Archiv prüfen (A47).
+- **Reale HA:** S0 mit der Minimal-App (siehe WP1); nach M1 Installation der echten App auf Dimitris Instanz; Nachweise A01–A05 real über Ingress, vertikaler Pfad mit Govee-Licht und Klimaanlage im Wohnzimmer; Backup-Archiv prüfen (A47).
 
 ## 12. Entwicklungs- und Deploymentablauf
 
@@ -339,33 +391,36 @@ Keine Zugangsdaten in `options`. Das Dockerfile ist mehrstufig (Node-Stage baut 
 
 ## 13. Arbeitspakete, Reihenfolge und Orchestrierung
 
-Fable 5.1 schreibt den Implementierungsplan, dispatcht je Arbeitspaket Opus-5.5-Subagenten mit scharf abgegrenztem Auftrag, prüft deren Ergebnis (Tests laufen lassen, Diff lesen) und führt am Ende Code- und Sicherheitsreview sowie die Abnahmematrix aus.
+Fable 5.1 schreibt den Implementierungsplan, dispatcht je Arbeitspaket Opus-5.5-Subagenten mit scharf abgegrenztem Auftrag, prüft deren Ergebnis (Tests laufen lassen, Diff lesen) und führt am Ende Code- und Sicherheitsreview sowie die Abnahmematrix aus. Die Pakete 4 und 8 sind bewusst geteilt; der Plan darf weiter teilen.
 
 | WP | Inhalt | Phase | Gate |
 |---|---|---|---|
-| 0 | Repo-Gerüst beider Repos, Tooling (uv, pnpm, Ruff, mypy, ESLint), CI-Skelett, Add-on-Skelett mit Hello-World-Listenern, Basisimage-Tag verifiziert | S0 | CI grün, Image baut |
-| 1 | HA-Simulator; `HAClient` mit Reconnect, Snapshot, Registries, `call_service`; Supervisor-`/info` | S0 | Integrationstest gegen Simulator; `/info` ohne `hassio_api` real nachgewiesen |
-| 2 | Datenmodell, Migrationen, `PolicyIndex`, `decide`, Adapter-Fähigkeiten und Übersetzung | M1 | A06–A18 grün |
-| 3 | `IngressGuard`, Rollenprüfung, CSRF, Admin-App-Skelett, zwei Listener, Startreihenfolge | S0/M1 | A01–A05 gegen Fake-Peer grün |
-| 4 | Öffentliche Auth: Invite/Redeem, Cookie/CSRF, Bewohner-Login, Display-Pairing, native Tokens, WS-Tickets, Renewal | M1/M2 | A22–A24, A35, A49 grün |
-| 5 | Projektion, EventBus, WS-Events, Befehle mit Idempotenz und Bestätigung, Audit | M1 | A19–A21, A31–A34 grün |
-| 6 | Preview und Simulation | M1 | A28–A30 grün |
-| 7 | Web: Tokens, `GuestPanel`, Join/Login/Pair/Dashboard, i18n, PWA, CSP | M1 | Playwright: Join → Aktion → Bestätigung |
-| 8 | Web-Admin: alle Screens aus §7 | M2 | Manuelle Abnahme je Screen, Tastaturpfad |
-| 9 | Aufenthalte, Einladungen, QR, Checkout, Verlängerung, Zimmerwechsel, Rollout | M2 | A25–A27, A50, A51 grün |
-| 10 | Setup-Assistent, TLS-Modi, Public Origin, Gastgerätetest | M2 | A44 dokumentiert |
-| 11 | Backup-Hooks, Restore-Modus, Archivprüfung | M2 | A39, A47, A48 grün |
-| 12 | Paketierung, Dockerfile, s6, Image-Workflow, Installation auf Dimitris HA, realer vertikaler Pfad | M1/M2 | Add-on läuft, Admin-SSO real, Licht und Klima real bedient |
-| 13 | E2E-Suite, Lastskript, Doku (setup, security, restore, device-matrix), DOCS.md | M2 | A41, A42, A45, A46 dokumentiert |
-| 14 | Natives Repo: Capacitor-App, `MyhaTransport` Android, iOS-Gerüst, Scanner, sichere Ablage, Wandmodus, Pinning-Tests | M3 | A36–A38, A43 auf Android/Emulator; iOS als ungetestet markiert |
-| 15 | Fable-Abschlussreview: Code-Review, Security-Review, Abnahmematrix, Restrisiken | alle | Bericht an Dimitri |
+| 0 | Repo-Gerüst beider Repos (GitHub anlegen, Submodule), Tooling (uv, pnpm, Ruff, mypy, ESLint), CI-Skelett, Add-on-Skelett mit zwei Hello-World-Listenern und `IngressGuard`-Rohfassung (Peer, Header-Logging), Backup-Hook-Dummies | S0 | CI grün, Image baut lokal |
+| 1 | **S0-Real-Probe:** Minimal-App auf Dimitris HA installieren (`install-on-ha.py`), protokollieren: `GET /info` ohne `hassio_api`, Ingress-Peer und Identitätsheader, Client-IP am Public-Port (IPv4/IPv6 unter HAOS-Portmapping), `backup_pre/post` mit Archivprüfung auf ausgeschlossenen Inhalt, Argon2-Parameter messen. Parallel im privaten Repo: Android-Spike OkHttp HTTPS+WSS mit Pin gegen lokalen TLS-Testserver (richtiger/falscher Pin, Hostname, Rotation) | S0 | `docs/s0-report.md` mit Ergebnissen; offene Annahmen in §14 aktualisiert |
+| 2 | HA-Simulator; `HAClient` mit Reconnect, Snapshot, Registries, `call_service`, Zeitplausibilität; Supervisor-`/info` | S0 | Integrationstest gegen Simulator |
+| 3 | Datenmodell, Migrationen, `PolicyIndex`, effektiver Kontext, `decide`, Adapter-Fähigkeiten, Übersetzung, `state_view` | M1 | A06–A18 grün |
+| 4 | `IngressGuard` vollständig, Rollenprüfung nach E5, CSRF nach E24, Admin-App-Skelett, zwei Listener, Startreihenfolge | M1 | A01–A05 gegen Fake-Peer grün |
+| 5a | Öffentliche Auth Teil 1: Einladung minimal (Stay `draft`/`confirmed`, Invite anlegen), Redeem, Gast-Principal, Cookie/CSRF, WS-Tickets, `/me` | M1 | A22–A24, A35 grün |
+| 5b | Öffentliche Auth Teil 2: Bewohner-Login, Display-Pairing, native Tokens, Refresh-Rotation, Trustprofil, Renewal | M2 | A49 und Token-Tests grün |
+| 6 | Projektion, EventBus, WS-Events, Befehle mit Idempotenz, Vorprüfung vor `call_service`, Bestätigung, Audit | M1 | A19–A21, A31, A32, A34, A52 grün |
+| 7 | Preview und Simulation mit allen vier Zielarten | M1 | A28–A30, A50 grün |
+| 8 | Web: Tokens, `GuestPanel`, Transport, Join/Login/Pair/Dashboard, i18n, PWA, CSP | M1 | Playwright: Join → Aktion → Bestätigung |
+| 9a | Web-Admin Teil 1: Shell/Navigation, Rooms & devices (mit Layout-Tab), People & groups, Roles & rights mit Live-Vorschau | M2 | Manuelle Abnahme, Tastaturpfad |
+| 9b | Web-Admin Teil 2: Preview as user, Stays & invites, Sessions & checkout, Setup assistant, Audit & diagnostics, Review & publish, Restore | M2 | Manuelle Abnahme, Tastaturpfad |
+| 10 | Aufenthalte vollständig: Checkout, Verlängerung, Zimmerwechsel, Ersatz, Rollout, Aufräumjobs | M2 | A25–A27, A51 grün |
+| 11 | Setup-Assistent, TLS-Modi, Public Origin, Trustprofil, Gastgerätetest | M2 | A44 dokumentiert |
+| 12 | Backup-Hooks, Restore-Modus, Archivprüfung | M2 | A39, A40, A47, A48 grün |
+| 13 | Paketierung, Dockerfile, s6, Image-Workflow, Installation der echten App auf Dimitris HA, realer vertikaler Pfad | M1/M2 | Add-on läuft, Admin-SSO real, Licht und Klima real bedient |
+| 14 | E2E-Suite, Lastskript, Doku (setup, security, restore, device-matrix), DOCS.md | M2 | A41, A42, A45, A46 dokumentiert |
+| 15 | Natives Repo: Capacitor-App, `MyhaTransport` Android, iOS-Gerüst, Scanner, sichere Ablage, Wandmodus, Pinning-Tests | M3 | A36–A38, A43 auf Android/Emulator; iOS als ungetestet markiert |
+| 16 | Fable-Abschlussreview: Code-Review, Security-Review, Abnahmematrix, Restrisiken | alle | Bericht an Dimitri |
 
 ## 14. Risiken und bewusst offene Punkte
 
-- **Supervisor 2026.10.3** ist auf Dimitris Instanz noch nicht aktiv; bis dahin bleibt der Admin-Zugang laut E4 gesperrt. Die reale Prüfung in WP12 setzt das Update voraus.
-- **`/info` ohne `hassio_api`**: aus dem Supervisor-Quelltext plausibel, aber erst in WP1 real nachgewiesen.
+- **Supervisor 2026.10.3** ist auf Dimitris Instanz noch nicht aktiv; bis dahin bleibt der Admin-Zugang laut E4 gesperrt. WP1 und WP13 setzen das Update voraus (Admin-UI zeigt den Hinweis).
+- **`/info` ohne `hassio_api`**, **Client-IP am Public-Port** und **Backup-Exclude-Muster** werden erst in WP1 real nachgewiesen.
 - **Cover** nur im Simulator; **Fahrenheit**, Doppelsollwerte und Presets bleiben gesperrt.
 - **iOS** kann hier weder gebaut noch getestet werden; das Gerüst ist Startpunkt, kein Nachweis.
 - **Alte Fire-WebViews**: Buildziel `es2019` und CSS-Fallbacks sind eine Annahme, bis ein Fire-Gerät getestet ist.
-- **Selbstsignierte Zertifikate im Browser** funktionieren nur, wenn das Gastgerät die CA kennt; der Setup-Assistent warnt, verbietet es aber nicht (Dimitris Wunsch nach Freiheit).
-- **Backup-Exclude-Muster** werden erst am realen Archiv verifiziert (A47); bis dahin gilt der Export als unbestätigt.
+- **Selbstsignierte Zertifikate im Browser** funktionieren nur, wenn das Gastgerät die CA kennt; der Setup-Assistent warnt, verbietet es aber nicht (Dimitris Wunsch nach Freiheit). Nativ gilt E27.
+- **Zeitplausibilität (E26)** erkennt nur Abweichungen zwischen Core und Gateway, keinen gemeinsamen Drift beider Uhren.
