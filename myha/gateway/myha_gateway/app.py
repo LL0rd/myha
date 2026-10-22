@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
-from myha_gateway.api.admin import probe
+from myha_gateway.api.admin import probe, session
 from myha_gateway.api.public import health
+from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
@@ -88,7 +89,9 @@ def create_public_app(ctx: AppContext) -> FastAPI:
 def create_admin_app(ctx: AppContext) -> FastAPI:
     """Admin app behind the Supervisor ingress proxy, reachable only from its peer address."""
     app = _app(ctx, validation_details=True, lifespan=_admin_lifespan)
+    app.state.admin_guard = AdminGuard(ctx)  # require_admin on each route; caches live here
     app.include_router(probe.router)
+    app.include_router(session.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.
     csp = content_security_policy(frame_ancestors="'self'", allow_ws=True)

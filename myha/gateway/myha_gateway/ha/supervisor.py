@@ -35,6 +35,7 @@ class SupervisorInfo:
     channel: str | None = None
     arch: str | None = None
     supported: bool | None = None
+    homeassistant: str | None = None  # Core's version
 
     def is_at_least(self, minimum: str) -> bool:
         """Numeric comparison: 2026.9.9 is older than 2026.10.0, a dev build than its release."""
@@ -95,7 +96,11 @@ class SupervisorClient:
         if not isinstance(data.get("supervisor"), str):
             raise SupervisorUnavailable("GET /info: no Supervisor version")
         return SupervisorInfo(
-            data["supervisor"], data.get("channel"), data.get("arch"), data.get("supported")
+            data["supervisor"],
+            data.get("channel"),
+            data.get("arch"),
+            data.get("supported"),
+            data.get("homeassistant"),
         )
 
     async def host_info(self) -> HostInfo | None:

@@ -28,16 +28,22 @@ def status(code: int) -> Handler:
     return lambda request: httpx.Response(code, json={"result": "error", "message": "nope"})
 
 
-async def test_info_sends_the_token_and_reads_the_version() -> None:
+async def test_info_sends_the_token_and_reads_the_versions() -> None:
     seen: list[httpx.Request] = []
-    data = {"supervisor": "2026.10.3", "channel": "stable", "arch": "amd64", "supported": True}
+    data = {
+        "supervisor": "2026.10.3",
+        "homeassistant": "2026.10.2",
+        "channel": "stable",
+        "arch": "amd64",
+        "supported": True,
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return ok(data)(request)
 
     info = await client(handler).info()
-    assert info == SupervisorInfo("2026.10.3", "stable", "amd64", True)
+    assert info == SupervisorInfo("2026.10.3", "stable", "amd64", True, "2026.10.2")
     assert str(seen[0].url) == "http://supervisor/info"
     assert seen[0].headers["authorization"] == "Bearer sup-secret"
 
