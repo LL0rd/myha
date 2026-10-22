@@ -136,7 +136,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, onAct
             ref={sliderRef}
             onChange={(e) => setLevel(Number(e.currentTarget.value))}
           />
-          <span className={styles.level}>{value} %</span>
+          <span className={styles.level}>{t("state.level", { value })}</span>
         </div>
       );
     }
@@ -214,6 +214,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, onAct
           <>
             <span className={styles.srOnly}>{label}: </span>
             <CommandStatus status={command.status} text={t(`command.${command.status}`)} />
+            {command.public_code && <p className={styles.commandDetail}>{t(`error.${command.public_code}`)}</p>}
           </>
         )}
       </div>

@@ -4,6 +4,7 @@ import { useI18n } from "../../i18n";
 import { ApiError } from "../../transport";
 import styles from "../guest.module.css";
 import { useConfig, useSession, type JoinFragment } from "../store/session";
+import { usePage } from "../usePage";
 
 export function Join({ fragment }: { fragment: JoinFragment | null }) {
   const { api, setCsrf, keepPairing } = useSession();
@@ -15,11 +16,14 @@ export function Join({ fragment }: { fragment: JoinFragment | null }) {
   const [error, setError] = useState<string | null>(null);
   const contact = config?.operator_contact ? <p className={styles.small}>{t("join.contact", { contact: config.operator_contact })}</p> : null;
   const secret = fragment?.secret;
+  usePage(secret ? t("join.title") : t("join.incomplete_title"));
 
   if (!secret)
     return (
       <main className={styles.page}>
-        <h1 className={styles.title}>{t("join.incomplete_title")}</h1>
+        <h1 className={styles.title} tabIndex={-1}>
+          {t("join.incomplete_title")}
+        </h1>
         <p className={styles.hint}>{t("join.incomplete_text")}</p>
         {contact}
       </main>
@@ -35,7 +39,17 @@ export function Join({ fragment }: { fragment: JoinFragment | null }) {
       keepPairing(fragment);
       navigate("/", { replace: true });
     } catch (e) {
-      setError(e instanceof ApiError && e.code === "RATE_LIMITED" ? t("error.RATE_LIMITED") : t("join.failed"));
+      if (!(e instanceof ApiError && e.status >= 400 && e.status < 500)) {
+        setError(t("error.generic")); // the network or the server, not the link
+        return setBusy(false);
+      }
+      // Refused: maybe this browser redeemed the link before and still holds its session.
+      const session = await api.me().catch(() => null);
+      if (session) {
+        setCsrf(session.csrf_token);
+        return navigate("/", { replace: true });
+      }
+      setError(e.code === "RATE_LIMITED" ? t("error.RATE_LIMITED") : t("join.failed"));
       setBusy(false);
     }
   };
@@ -43,7 +57,9 @@ export function Join({ fragment }: { fragment: JoinFragment | null }) {
   return (
     <main className={styles.page}>
       <div>
-        <h1 className={styles.title}>{t("join.title")}</h1>
+        <h1 className={styles.title} tabIndex={-1}>
+          {t("join.title")}
+        </h1>
         {config && <div className={styles.muted}>{config.instance_name}</div>}
       </div>
       <p className={styles.hint}>{t("join.hint")}</p>

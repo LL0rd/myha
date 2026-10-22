@@ -45,7 +45,7 @@ export function GuestPanel({
     <div className={styles.panel} data-layout={layout} data-wall={wall || undefined} data-explain={explain || undefined}>
       <header className={styles.header}>
         <div className={styles.titles}>
-          <h1 className={styles.title}>{title}</h1>
+          <h1 className={styles.title} tabIndex={-1}>{title}</h1>
           {subtitle && <div className={styles.subtitle}>{subtitle}</div>}
         </div>
         <ConnectionPill status={status} label={t(`status.${status}`)} />

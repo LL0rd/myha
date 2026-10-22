@@ -133,9 +133,9 @@ export function createLiveStore() {
       staleTimer = setTimeout(() => set({ rooms: unknownStates(view.rooms), cleared: true }), STALE_CLEAR_MS);
       set({ staleSince: Date.now() });
     },
-    /** Ends the page at `notAfter`, also beyond setTimeout's range. */
-    expireAt(notAfter: string) {
-      const end = Date.parse(notAfter);
+    /** Ends the page at `notAfter` on the server's clock (`offsetMs` = server minus local), also beyond setTimeout's range. */
+    expireAt(notAfter: string, offsetMs = 0) {
+      const end = Date.parse(notAfter) - offsetMs;
       const arm = () => {
         clearTimeout(endTimer);
         const left = end - Date.now();
@@ -149,6 +149,10 @@ export function createLiveStore() {
       clearTimeout(staleTimer);
       clearTimeout(endTimer);
       fades.forEach(clearTimeout);
+      fades.clear();
+      // Their fade timers are gone; a confirmed command would otherwise stay forever.
+      if (view.commands.some((c) => c.status === "confirmed"))
+        set({ commands: view.commands.filter((c) => c.status !== "confirmed") });
     },
   };
 }

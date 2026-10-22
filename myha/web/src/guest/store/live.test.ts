@@ -122,6 +122,21 @@ it("revocation and the session end both end the page", () => {
   other.dispose();
 });
 
+it("the session end follows the server's clock", () => {
+  store.expireAt("2026-10-22T10:10:00Z", 60_000); // the server is a minute ahead
+  vi.advanceTimersByTime(9 * 60_000 - 1);
+  expect(store.get().ended).toBe(false);
+  vi.advanceTimersByTime(1);
+  expect(store.get().ended).toBe(true);
+});
+
+it("disposing drops confirmed commands, whose fade timers are gone", () => {
+  store.apply(command("c4", "confirmed"));
+  store.apply(command("c5", "failed"));
+  store.dispose();
+  expect(store.get().commands.map((c) => c.id)).toEqual(["c5"]);
+});
+
 it("an end beyond the timer range still fires", () => {
   const far = new Date(Date.now() + 40 * 24 * 3600_000).toISOString(); // past setTimeout's 24.8-day limit
   store.expireAt(far);

@@ -18,8 +18,9 @@ interface Worker {
 }
 
 const worker = self as unknown as Worker;
-// shortcut: the cache keeps the assets of earlier releases too (a few hundred KB each); bump the name to drop them.
-const CACHE = "myha-assets-v1";
+// One cache per build: the build replaces this placeholder with a hash of the asset names (vite.guest.config.ts),
+// so activate() drops the assets of every earlier release.
+const CACHE = "__MYHA_ASSET_CACHE__";
 
 worker.addEventListener("install", () => void worker.skipWaiting());
 

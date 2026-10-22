@@ -105,6 +105,17 @@ it("a timeout while reading the body is a TimeoutError too", async () => {
   await expect(browserTransport().request("/api/v1/me")).rejects.toMatchObject({ name: "TimeoutError" });
 });
 
+it("measures the server clock from the Date header", async () => {
+  vi.useFakeTimers({ now: new Date("2026-10-22T10:00:00Z") });
+  const date = "Thu, 22 Oct 2026 10:00:30 GMT";
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => ({ ok: true, status: 200, type: "basic", headers: new Headers({ date }), json: async () => ({}) }) as unknown as Response));
+  const transport = browserTransport();
+  expect(transport.serverOffsetMs?.()).toBe(0);
+  await transport.request("/api/v1/me");
+  expect(transport.serverOffsetMs?.()).toBe(30_000);
+  vi.useRealTimers();
+});
+
 it("returns nothing for 204", async () => {
   stubFetch({ status: 204, body: undefined });
   expect(await browserTransport().request("/api/v1/auth/logout", { method: "POST" })).toBeUndefined();

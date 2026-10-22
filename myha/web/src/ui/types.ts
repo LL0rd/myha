@@ -1,5 +1,5 @@
 // What the panel renders: the dashboard projection plus the explain rules of the admin preview.
-import type { actions, kinds } from "../api/schema";
+import type { actions, kinds, PublicErrorCode } from "../api/schema";
 
 export type Kind = (typeof kinds)[number];
 
@@ -65,6 +65,8 @@ export interface Command {
   resource_id: string;
   action: string;
   status: CommandState;
+  /** Why a command failed, in the eight public codes. */
+  public_code?: PublicErrorCode | null;
   created_at: string;
   updated_at: string;
 }

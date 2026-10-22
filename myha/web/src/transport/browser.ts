@@ -11,7 +11,9 @@ function timeoutSignal(ms: number): AbortSignal {
 
 /** Same-origin fetch with the session cookie; `csrf` returns the token from redeem or /me. */
 export function browserTransport(csrf: () => string | null = () => null): Transport {
+  let offset = 0;
   return {
+    serverOffsetMs: () => offset,
     async request(path, { method = "GET", body, sensitive = false, idempotencyKey, signal }: RequestOptions = {}) {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -35,6 +37,8 @@ export function browserTransport(csrf: () => string | null = () => null): Transp
         throw timedOut() ? new DOMException("request timed out", "TimeoutError") : error;
       }
       if (response.type === "opaqueredirect") throw new ApiError(0, null, "unexpected redirect");
+      const date = Date.parse(response.headers?.get("date") ?? ""); // whole seconds: good enough for timers on session ends
+      if (!Number.isNaN(date)) offset = date - Date.now();
       if (!response.ok) {
         const parsed = errorBody.safeParse(await response.json().catch(() => null));
         if (parsed.success) throw new ApiError(response.status, parsed.data.error.code, parsed.data.error.message);

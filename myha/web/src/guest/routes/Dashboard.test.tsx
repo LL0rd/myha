@@ -131,6 +131,7 @@ it("a click whose outcome stays unknown says so, a refusal says failed", async (
   const refused = within(await screen.findByRole("group", { name: "Ceiling" }));
   fireEvent.click(refused.getByRole("button", { name: "Turn off" }));
   expect(await refused.findByText("Failed · nothing was changed")).toBeTruthy();
+  expect(refused.getByText("This action is not allowed for you.")).toBeTruthy();
 });
 
 it("an invalid frame or a sequence gap closes the socket for a fresh snapshot", async () => {

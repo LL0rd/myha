@@ -48,9 +48,11 @@ export function createSession(makeTransport: (csrf: () => string | null) => Tran
     },
     /** Instance id and pin of the redeemed link, for the native pairing of Plan 3. */
     pairing: () => ({ ...pairing }),
+    /** Keeps instance and pin; the spent secret is dropped from memory. */
     keepPairing(fragment: JoinFragment) {
       pairing.inst = fragment.inst;
       pairing.fp = fragment.fp;
+      fragment.secret = null;
     },
   };
 }

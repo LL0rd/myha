@@ -1,4 +1,5 @@
-"""Draw the add-on icon (128x128) and logo (250x100) into myha/.
+"""Draw the add-on icon (128x128) and logo (250x100) into myha/, and the guest app's
+apple-touch-icon (180x180) into myha/web/public/.
 
 Run from the repository root: uv run --with pillow==13.0.0 python scripts/make-icons.py
 Deterministic for a given Pillow version: fixed geometry and Pillow's bundled font, no system
@@ -41,6 +42,12 @@ draw.text(
 )
 logo = logo.resize((250, 100), Image.Resampling.LANCZOS)
 
-assert icon.size == (128, 128) and logo.size == (250, 100)
+# iOS rounds the corners itself and paints transparency black: a full gold square.
+touch = Image.new("RGB", (180 * SS, 180 * SS), GOLD)
+draw_mark(ImageDraw.Draw(touch), 0, 0, 180 * SS)
+touch = touch.resize((180, 180), Image.Resampling.LANCZOS)
+
+assert icon.size == (128, 128) and logo.size == (250, 100) and touch.size == (180, 180)
 icon.save(OUT / "icon.png", optimize=True)
 logo.save(OUT / "logo.png", optimize=True)
+touch.save(OUT / "web" / "public" / "apple-touch-icon.png", optimize=True)

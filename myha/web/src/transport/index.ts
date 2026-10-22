@@ -22,12 +22,14 @@ export interface Transport {
   request(path: string, options?: RequestOptions): Promise<unknown>;
   /** A socket to `path` on the page's host that authenticates with `ticket` as its first frame. */
   openSocket(path: string, ticket: string): WebSocket;
+  /** Server clock minus local clock in ms, from the last answer's Date header; 0 before any. */
+  serverOffsetMs?(): number;
 }
 
 export class ApiError extends Error {
   override name = "ApiError";
   constructor(
-    /** HTTP status; 0 for a refused redirect. */
+    /** HTTP status; 0 when none applies: a refused redirect, or an answer that failed its schema (guest/store/session.ts). */
     readonly status: number,
     /** The public error code from the body; null when the body carried none. */
     readonly code: PublicErrorCode | null,

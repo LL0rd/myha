@@ -52,10 +52,13 @@ it("takes the invite from the fragment and removes it before anything else", () 
 
 it("redeems on the button, with the fragment already gone, and opens the dashboard", async () => {
   history.replaceState(null, "", `/join#i=${SECRET}&inst=inst_1&fp=x`);
-  const s = renderJoin(takeJoinFragment(), async () => {
+  const fragment = takeJoinFragment();
+  const s = renderJoin(fragment, async () => {
     expect(location.hash).toBe(""); // the request never starts while the secret is in the address bar
     return session;
   });
+  expect(document.title).toBe("You're invited");
+  expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1 }));
   await userEvent.type(screen.getByLabelText("Name on this device (optional)"), "Sam's phone");
   await userEvent.click(screen.getByRole("button", { name: "Open my room" }));
   expect(await screen.findByText("dashboard")).toBeTruthy();
@@ -65,6 +68,7 @@ it("redeems on the button, with the fragment already gone, and opens the dashboa
   });
   expect(csrf()).toBe("csrf-1");
   expect(s.pairing()).toEqual({ inst: "inst_1", fp: "x" });
+  expect(fragment.secret).toBeNull(); // the spent secret does not linger in memory
 });
 
 it("a refused invite shows the operator contact", async () => {
@@ -77,10 +81,31 @@ it("a refused invite shows the operator contact", async () => {
   expect((screen.getByRole("button", { name: "Open my room" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
-it("an answer that fails its schema is an ordinary failure", async () => {
+it("an answer that fails its schema is an ordinary, generic failure", async () => {
   renderJoin({ secret: SECRET, inst: null, fp: null }, async () => ({ ...session, entity_id: "light.x" }));
   await userEvent.click(screen.getByRole("button", { name: "Open my room" }));
-  expect(await screen.findByText("This link could not be used.")).toBeTruthy();
+  expect(await screen.findByText("Something went wrong. Please try again.")).toBeTruthy();
+});
+
+it("a refused link with a live session in this browser opens the dashboard", async () => {
+  const me = {
+    principal: { id: "p1", type: "guest", display_name: "", locale: null, theme: null },
+    session: session.session,
+    csrf_token: "csrf-2",
+    stay: { unit_name: "Room 203", ends_at: "2026-10-24T10:00:00Z" },
+    instance: { name: "Example Inn", operator_contact: null },
+  };
+  renderJoin({ secret: SECRET, inst: null, fp: null }, async () => {
+    throw new ApiError(401, "UNAUTHENTICATED", "Unauthenticated");
+  });
+  request.mockImplementation(async (path) => {
+    if (path === "/api/v1/me") return me;
+    if (path === "/api/v1/public/config") return config;
+    throw new ApiError(401, "UNAUTHENTICATED", "Unauthenticated");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Open my room" }));
+  expect(await screen.findByText("dashboard")).toBeTruthy();
+  expect(csrf()).toBe("csrf-2");
 });
 
 it("without a secret the link is incomplete and nothing is sent", async () => {

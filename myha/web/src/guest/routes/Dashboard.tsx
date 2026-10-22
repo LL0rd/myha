@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
-import { events } from "../../api/schema";
+import { events, type PublicErrorCode } from "../../api/schema";
 import { useI18n, type Lang } from "../../i18n";
 import { ApiError } from "../../transport";
 import { GuestPanel } from "../../ui/GuestPanel";
@@ -8,6 +8,7 @@ import type { Action, ActionParams } from "../../ui/types";
 import styles from "../guest.module.css";
 import { createLiveStore, panelStatus, STALE_CLEAR_MS } from "../store/live";
 import { useSession } from "../store/session";
+import { usePage } from "../usePage";
 
 type Me = Awaited<ReturnType<ReturnType<typeof useSession>["api"]["me"]>>;
 
@@ -27,8 +28,11 @@ function idempotencyKey(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-const formatTime = (iso: string, lang: Lang) =>
-  new Intl.DateTimeFormat(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+/** {date} and {time} apart, so each language words the sentence around them. */
+const when = (iso: string, lang: Lang) => ({
+  date: new Intl.DateTimeFormat(lang, { day: "numeric", month: "short" }).format(new Date(iso)),
+  time: new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)),
+});
 
 export function Dashboard() {
   const { api, transport, setCsrf } = useSession();
@@ -51,7 +55,7 @@ export function Dashboard() {
 
     const reconnect = () => {
       store.socketLost();
-      retry = setTimeout(connect, delay);
+      retry = setTimeout(connect, delay * (0.5 + Math.random() / 2)); // jitter: not every guest at once after an outage
       delay = Math.min(delay * 2, BACKOFF_MS[1]);
     };
     async function connect() {
@@ -76,7 +80,8 @@ export function Dashboard() {
         });
         ws.addEventListener("close", () => {
           socket = null;
-          if (!stopped) reconnect(); // a revoked session fails at the next ticket with 401
+          // After session.revoked the page ends; otherwise a revoked session fails at the next ticket with 401.
+          if (!stopped && !store.get().ended) reconnect();
         });
       } catch (error) {
         if (sessionGone(error)) return end();
@@ -91,9 +96,10 @@ export function Dashboard() {
         setCsrf(who.csrf_token);
         setMe(who);
         setFailed(false);
-        store.expireAt(who.session.not_after);
+        const offset = transport.serverOffsetMs?.() ?? 0; // the session's times are server times
+        store.expireAt(who.session.not_after, offset);
         if (who.session.waiting && who.session.not_before) {
-          const left = Date.parse(who.session.not_before) - Date.now();
+          const left = Date.parse(who.session.not_before) - offset - Date.now();
           begins = setTimeout(() => setRun((n) => n + 1), Math.min(Math.max(left, 0), 2 ** 31 - 1));
         }
         store.load(await api.dashboard());
@@ -123,7 +129,8 @@ export function Dashboard() {
       }
       const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
       hiddenAt = null;
-      if (away > STALE_CLEAR_MS) return setRun((n) => n + 1); // a long nap: /me, dashboard and a new socket
+      // A long nap, or a start that failed: /me, dashboard and a new socket.
+      if (away > STALE_CLEAR_MS || failed) return setRun((n) => n + 1);
       api.me().then(
         () => store.get().staleSince !== null && setRun((n) => n + 1),
         (error: unknown) => sessionGone(error) && navigate("/ended", { replace: true }),
@@ -131,7 +138,7 @@ export function Dashboard() {
     };
     document.addEventListener("visibilitychange", visible);
     return () => document.removeEventListener("visibilitychange", visible);
-  }, [api, store, navigate]);
+  }, [api, store, navigate, failed]);
 
   useEffect(() => {
     if (view.ended) navigate("/ended", { replace: true });
@@ -146,9 +153,9 @@ export function Dashboard() {
 
   const onAction = (resourceId: string, action: Action, params: ActionParams) => {
     const key = idempotencyKey();
-    const local = (status: "accepted" | "failed" | "unknown", id = key) => {
+    const local = (status: "accepted" | "failed" | "unknown", id = key, publicCode: PublicErrorCode | null = null) => {
       const at = new Date().toISOString();
-      store.addCommand({ id, resource_id: resourceId, action, status, created_at: at, updated_at: at });
+      store.addCommand({ id, resource_id: resourceId, action, status, created_at: at, updated_at: at, public_code: publicCode });
     };
     // A timeout leaves open whether the gateway got the click: the same key makes the retry safe.
     const send = (retries: number): Promise<void> =>
@@ -158,11 +165,14 @@ export function Dashboard() {
           if (error instanceof DOMException && error.name === "TimeoutError" && retries > 0) return send(retries - 1);
           if (sessionGone(error)) navigate("/ended", { replace: true });
           // Refused by the gateway: nothing happened. A timeout or a network failure: it may have.
-          else local(error instanceof ApiError ? "failed" : "unknown");
+          else if (error instanceof ApiError) local("failed", key, error.code);
+          else local("unknown");
         },
       );
     void send(ACTION_RETRIES);
   };
+
+  usePage(me ? (me.stay?.unit_name ?? me.instance.name) : null);
 
   if (failed)
     return (
@@ -183,10 +193,10 @@ export function Dashboard() {
   const status = panelStatus(view);
   const contact = me.instance.operator_contact;
   let subtitle = me.instance.name;
-  if (status === "waiting" && me.session.not_before) subtitle = t("status.waiting_until", { time: formatTime(me.session.not_before, lang) });
+  if (status === "waiting" && me.session.not_before) subtitle = t("status.waiting_until", when(me.session.not_before, lang));
   else if (view.cleared) subtitle = t("notice.stale_cleared");
   else if (view.staleSince !== null) subtitle = t("status.stale_since", { seconds: Math.max(0, Math.round((now - view.staleSince) / 1000)) });
-  else if (me.stay) subtitle = `${me.instance.name} · ${t("dashboard.access_ends", { time: formatTime(me.stay.ends_at, lang) })}`;
+  else if (me.stay) subtitle = `${me.instance.name} · ${t("dashboard.access_ends", when(me.stay.ends_at, lang))}`;
 
   return (
     <main>

@@ -41,7 +41,7 @@
 
 .header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
 .titles { min-width: 0; }
-.title { margin: 0; font-weight: 800; font-size: var(--title-fs); line-height: 1.15; letter-spacing: -0.01em; }
+.title { margin: 0; outline: none; font-weight: 800; font-size: var(--title-fs); line-height: 1.15; letter-spacing: -0.01em; }
 .subtitle { color: var(--muted); font-size: 14px; margin-top: 2px; }
 
 .pill {
@@ -131,6 +131,7 @@
   font-size: 13px; font-weight: 600; color: var(--info); background: var(--info-soft);
 }
 .command svg { flex: none; }
+.commandDetail { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 .command[data-status="sent"] { color: var(--accent-ink); background: var(--accent-soft); }
 .command[data-status="confirmed"] { color: var(--ok); background: var(--ok-soft); }
 .command[data-status="unknown"] { color: var(--warn); background: var(--warn-soft); }
