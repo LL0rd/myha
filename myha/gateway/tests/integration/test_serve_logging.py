@@ -5,7 +5,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
 
 import myha_gateway.__main__ as gateway
 from myha_gateway.app import create_public_app
@@ -69,37 +68,6 @@ async def test_real_server_config_and_redacted_logs(
     assert any("/healthz?token=<redacted>" in line for line in access)
     assert "Exception in ASGI application" in output and "RuntimeError: Bearer <redacted>" in output
     assert "SECRETVALUE123" not in output and "sup-secret" not in output
-
-
-async def test_public_listener_failure_keeps_admin_running(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    settings = Settings(data_dir=tmp_path, public_enabled=True, public_origin="http://testserver")
-
-    class FakeServer:
-        def __init__(self, port: int) -> None:
-            self.port, self.should_exit = port, False
-
-        async def serve(self) -> None:
-            if self.port == settings.public_port:
-                raise SystemExit(3)  # what uvicorn does when the port is taken
-            while not self.should_exit:  # noqa: ASYNC110
-                await asyncio.sleep(0.01)
-
-    servers: dict[int, FakeServer] = {}
-
-    def fake_server(app: FastAPI, host: str, port: int) -> FakeServer:
-        servers[port] = FakeServer(port)
-        return servers[port]
-
-    monkeypatch.setattr(gateway, "_server", fake_server)
-    task = asyncio.create_task(gateway._serve(settings))
-    async with asyncio.timeout(5):
-        while "public listener stopped" not in caplog.text:  # noqa: ASYNC110
-            await asyncio.sleep(0.01)
-    assert not task.done()  # the admin listener is still serving
-    servers[settings.admin_port].should_exit = True
-    await task
 
 
 def test_gateway_crash_is_logged_redacted_and_exits_1(

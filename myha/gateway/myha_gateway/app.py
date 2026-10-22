@@ -5,12 +5,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from sqlalchemy import select
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from myha_gateway.api.admin import probe, session
 from myha_gateway.api.public import health
 from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
+from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
@@ -51,19 +53,31 @@ def _app(
 
 @asynccontextmanager
 async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Once per process, since the admin app always runs: database, S0 probe, the HA client."""
+    """Startup and shutdown, once per process, since the admin app always runs.
+
+    Order: restore check, database, instance row, public listener decision, S0 probe, HA
+    client. ``_serve`` then opens the admin listener, and the public one if ``public_ready``.
+    """
     ctx: AppContext = app.state.ctx
+    # Before the database: a later restore must not find an instance row made by this start.
+    ctx.restore_mode = (ctx.settings.backup_dir / "restore.sqlite").exists()
     try:
         ctx.settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         await run_migrations(ctx.engine)
-        async with write_session(ctx.engine) as session:
-            ctx.instance = await ensure_instance(session)
+        if ctx.restore_mode:  # load, never create: the restore brings its own row (Plan 3)
+            async with ctx.sessions() as session:
+                ctx.instance = (await session.execute(select(Instance))).scalar_one_or_none()
+        else:
+            async with write_session(ctx.engine) as session:
+                ctx.instance = await ensure_instance(session)
     except Exception:
         # Nothing works without the schema; uvicorn then exits with code 3 and s6 halts the app.
         logger.exception("startup aborted: database %s is not usable", ctx.settings.db_path)
         await ctx.close()
         raise RuntimeError("database not usable") from None  # uvicorn logs this short copy
     try:
+        if reason := ctx.refresh_public():
+            logger.warning("public listener off: %s", reason)
         if ctx.settings.probe_mode:
             await probe.log_startup(ctx)
         await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
@@ -79,8 +93,8 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     app = _app(ctx, validation_details=False)
     app.include_router(health.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
-    # Plain ws: only while the public origin is plain http (dev and proxy setups).
-    allow_ws = (settings.public_origin or "").startswith("http://")
+    # Plain ws: only for a plain http origin, which only the dev/test override allows.
+    allow_ws = (ctx.public_origin or "").startswith("http://")
     csp = content_security_policy(frame_ancestors="'none'", allow_ws=allow_ws)
     app.add_middleware(SecurityHeadersMiddleware, csp=csp)
     return app
