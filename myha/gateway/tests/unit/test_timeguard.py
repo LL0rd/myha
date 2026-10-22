@@ -1,0 +1,135 @@
+"""Wall-clock plausibility guard (E26): high-water mark, monotonic jumps, host time sync."""
+
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from myha_gateway.db import (
+    create_engine,
+    ensure_instance,
+    run_migrations,
+    session_factory,
+    write_session,
+)
+from myha_gateway.db.models import Instance
+from myha_gateway.ha.supervisor import HostInfo, SupervisorUnavailable
+from myha_gateway.services.timeguard import TimeGuard
+
+MARK = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+async def engine(tmp_path: Path) -> AsyncIterator[AsyncEngine]:
+    engine = create_engine(tmp_path / "myha.sqlite")
+    await run_migrations(engine)
+    async with write_session(engine) as session:
+        (await ensure_instance(session)).last_seen_clock = MARK
+    yield engine
+    await engine.dispose()
+
+
+class Recorder:
+    """Audit stub: records each operation name."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    async def __call__(self, session: AsyncSession, operation: str) -> None:
+        self.events.append(operation)
+
+
+async def instance(engine: AsyncEngine) -> Instance:
+    async with session_factory(engine)() as session:
+        return (await session.execute(select(Instance))).scalar_one()
+
+
+def guard(engine: AsyncEngine, audit: Recorder, host: HostInfo | None = None) -> TimeGuard:
+    async def host_info() -> HostInfo | None:
+        return host
+
+    return TimeGuard(engine, host_info, audit)
+
+
+async def test_first_check_is_trusted_and_persists_the_mark(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    now = MARK + timedelta(seconds=30)
+    assert await guard(engine, audit).check(now, 100.0) is True
+    row = await instance(engine)
+    assert row.time_trusted is True
+    assert row.last_seen_clock == now
+    assert audit.events == []  # no transition, no audit
+
+
+async def test_wall_clock_behind_the_mark_is_untrusted(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit)
+    assert await timeguard.check(MARK - timedelta(minutes=5), 100.0) is False
+    assert await timeguard.check(MARK - timedelta(minutes=4), 160.0) is False
+    row = await instance(engine)
+    assert row.time_trusted is False
+    assert row.last_seen_clock == MARK  # never moves backwards
+    assert audit.events == ["time.untrusted"]  # once per transition, not per check
+
+
+@pytest.mark.parametrize("offset_s", [61, -61])
+async def test_jump_against_the_monotonic_clock_is_untrusted(
+    engine: AsyncEngine, offset_s: int
+) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit)
+    start = MARK + timedelta(hours=1)
+    assert await timeguard.check(start, 1000.0) is True
+    # 60 s of monotonic time, 60 s + offset of wall time; both stay ahead of the mark
+    assert await timeguard.check(start + timedelta(seconds=60 + offset_s), 1060.0) is False
+    assert (await instance(engine)).time_trusted is False
+    assert audit.events == ["time.untrusted"]
+
+
+async def test_drift_up_to_60_s_is_tolerated(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit)
+    assert await timeguard.check(MARK + timedelta(seconds=1), 1000.0) is True
+    assert await timeguard.check(MARK + timedelta(seconds=121), 1060.0) is True
+    assert audit.events == []
+
+
+async def test_host_clock_not_synchronized_is_untrusted(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    now = MARK + timedelta(seconds=1)
+    assert await guard(engine, audit, HostInfo(dt_synchronized=False)).check(now, 1.0) is False
+    assert (await instance(engine)).time_trusted is False
+    assert audit.events == ["time.untrusted"]
+
+
+@pytest.mark.parametrize("host", [None, HostInfo(dt_synchronized=None), HostInfo(True)])
+async def test_unknown_or_synchronized_host_clock_is_ignored(
+    engine: AsyncEngine, host: HostInfo | None
+) -> None:
+    now = MARK + timedelta(seconds=1)
+    assert await guard(engine, Recorder(), host).check(now, 1.0) is True
+
+
+async def test_unreachable_or_missing_supervisor_is_ignored(engine: AsyncEngine) -> None:
+    async def unreachable() -> HostInfo | None:
+        raise SupervisorUnavailable("GET /host/info: ConnectError")
+
+    now = MARK + timedelta(seconds=1)
+    assert await TimeGuard(engine, unreachable, Recorder()).check(now, 1.0) is True
+    assert await TimeGuard(engine, None, Recorder()).check(now, 2.0) is True
+
+
+async def test_plausible_check_restores_trust_with_one_audit(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit)
+    assert await timeguard.check(MARK - timedelta(seconds=10), 100.0) is False
+    # the clock is corrected: ahead of the mark, consistent with the monotonic clock
+    assert await timeguard.check(MARK + timedelta(seconds=50), 160.0) is True
+    assert await timeguard.check(MARK + timedelta(seconds=110), 220.0) is True
+    row = await instance(engine)
+    assert row.time_trusted is True
+    assert row.last_seen_clock == MARK + timedelta(seconds=110)
+    assert audit.events == ["time.untrusted", "time.trusted"]
