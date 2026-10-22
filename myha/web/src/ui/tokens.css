@@ -1,0 +1,102 @@
+/* Design tokens from docs/reference/design/ha-access-ui.dc.html. Theme: system preference unless data-theme on <html> says otherwise. */
+:root {
+  --bg: #F7F5F0;
+  --surface: #FFFFFF;
+  --ink: #1F1D19;
+  --muted: #6B665C;
+  --line: rgba(31,29,25,.14);
+  --accent: #C8A24A;
+  --accent-ink: #7A5E12;
+  --accent-soft: rgba(200,162,74,.18);
+  --ok: #3F8F5E;
+  --ok-soft: rgba(63,143,94,.14);
+  --warn: #B9742B;
+  --warn-soft: rgba(185,116,43,.14);
+  --err: #C64B3C;
+  --err-soft: rgba(198,75,60,.14);
+  --info: #2C8C86;
+  --info-soft: rgba(44,140,134,.14);
+  --muted-soft: rgba(31,29,25,.08);
+  --font: 'Nunito Sans',system-ui,sans-serif;
+  --mono: 'JetBrains Mono',ui-monospace,monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1B1A17;
+    --surface: #26241F;
+    --ink: #F3EFE6;
+    --muted: #A8A295;
+    --line: rgba(243,239,230,.16);
+    --accent: #D9B35C;
+    --accent-ink: #E8C976;
+    --accent-soft: rgba(217,179,92,.2);
+    --ok: #6CC08B;
+    --ok-soft: rgba(108,192,139,.16);
+    --warn: #E0A05A;
+    --warn-soft: rgba(224,160,90,.16);
+    --err: #EF7B6D;
+    --err-soft: rgba(239,123,109,.16);
+    --info: #5FC0B9;
+    --info-soft: rgba(95,192,185,.16);
+    --muted-soft: rgba(243,239,230,.1);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1B1A17;
+  --surface: #26241F;
+  --ink: #F3EFE6;
+  --muted: #A8A295;
+  --line: rgba(243,239,230,.16);
+  --accent: #D9B35C;
+  --accent-ink: #E8C976;
+  --accent-soft: rgba(217,179,92,.2);
+  --ok: #6CC08B;
+  --ok-soft: rgba(108,192,139,.16);
+  --warn: #E0A05A;
+  --warn-soft: rgba(224,160,90,.16);
+  --err: #EF7B6D;
+  --err-soft: rgba(239,123,109,.16);
+  --info: #5FC0B9;
+  --info-soft: rgba(95,192,185,.16);
+  --muted-soft: rgba(243,239,230,.1);
+}
+
+/* Keep after the media rule: equal specificity, so source order lets contrast beat system dark. */
+:root[data-theme="contrast"] {
+  --bg: #FFFFFF;
+  --surface: #FFFFFF;
+  --ink: #000000;
+  --muted: #2B2B2B;
+  --line: #000000;
+  --accent: #F2C94C;
+  --accent-ink: #5C4100;
+  --accent-soft: #FFF1C2;
+  --ok: #006B2E;
+  --ok-soft: #D9F2E2;
+  --warn: #7A4A00;
+  --warn-soft: #FFE8C2;
+  --err: #B00020;
+  --err-soft: #FFD9DE;
+  --info: #004F8C;
+  --info-soft: #D6E9FA;
+  --muted-soft: #E6E6E6;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+}
+
+a { color: var(--accent-ink); }
+a:hover { color: var(--ink); }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--accent-ink);
+  outline-offset: 2px;
+}

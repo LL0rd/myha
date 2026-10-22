@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    // ES2019 lib on purpose: Vite lowers syntax but adds no polyfills, so newer runtime APIs must fail here (older Fire WebViews).
+    "target": "ES2019",
+    "lib": ["ES2019", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src", "*.ts"]
+}
