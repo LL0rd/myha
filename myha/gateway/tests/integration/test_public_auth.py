@@ -1,7 +1,7 @@
 """Public guest auth: redeem, cookie, native tokens, /me, logout, WS tickets, renew, limits."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 import httpx
 import pytest
@@ -11,6 +11,7 @@ from myha_gateway.auth import public
 from myha_gateway.auth.public import client_key
 from myha_gateway.db import models as db
 from myha_gateway.ids import hash_secret, new_secret
+from myha_gateway.services import audit as audit_module
 from tests import public_helpers
 from tests.public_helpers import (
     GUEST_IP,
@@ -70,7 +71,10 @@ async def test_redeem_uniform_errors(world: World) -> None:
     assert invites[hash_secret(closed)].consumed_at is None
     assert invites[hash_secret(dropped)].consumed_at is None
     denied = [e for e in await rows(ctx, db.AuditEvent) if e.result == "denied"]
-    assert [e.reason_code for e in denied] == ["invite_invalid"] * 5 + ["stay_closed"] * 2
+    counts = {reason: 0 for reason in ("invite_invalid", "stay_closed")}
+    for e in denied:  # folded per client and minute
+        counts[str(e.reason_code)] += e.aggregate_count
+    assert counts == {"invite_invalid": 5, "stay_closed": 2}
     assert all(e.anon_key and e.anon_key.endswith(f"|{GUEST_IP}") for e in denied)
     assert all(e.anon_key and e.anon_key.startswith("auth.redeem|") for e in denied)
 
@@ -310,8 +314,14 @@ async def test_redeem_replaces_the_browser_session_it_carries(world: World) -> N
             "UNAUTHENTICATED",
         )
         assert (await client.get("/api/v1/me", headers={"Cookie": second})).status_code == 200
-    reasons = sorted(str(s.revoke_reason) for s in await rows(world.ctx, db.Session))
-    assert reasons == ["None", "replaced"]
+    sessions = await rows(world.ctx, db.Session)
+    assert sorted(str(s.revoke_reason) for s in sessions) == ["None", "replaced"]
+    replaced = next(s.id for s in sessions if s.revoke_reason == "replaced")
+    redeems = [e for e in await rows(world.ctx, db.AuditEvent) if e.operation == "auth.redeem"]
+    assert [(e.normalized_params or {}).get("replaced_session") for e in redeems] == [
+        None,
+        replaced,
+    ]
 
 
 async def test_lone_surrogate_label_is_a_400(world: World) -> None:
@@ -326,6 +336,25 @@ async def test_lone_surrogate_label_is_a_400(world: World) -> None:
     assert all(i.consumed_at is None for i in await rows(world.ctx, db.Invite))
 
 
+async def test_denials_of_one_client_fold_per_minute(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mid_minute = now().replace(second=30)  # both clocks fixed: no minute boundary in between
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "Clock":
+            return cls.fromtimestamp(mid_minute.timestamp(), tz)
+
+    monkeypatch.setattr(public, "utcnow", lambda: mid_minute)
+    monkeypatch.setattr(audit_module, "datetime", Clock)
+    async with world.client() as client:
+        for _ in range(2):
+            assert (await redeem(client, new_secret())).status_code == 401
+    (row,) = [e for e in await rows(world.ctx, db.AuditEvent) if e.result == "denied"]
+    assert row.aggregate_count == 2 and row.reason_code == "invite_invalid"
+
+
 async def test_denial_audit_never_breaks_the_uniform_401(
     world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -334,7 +363,7 @@ async def test_denial_audit_never_breaks_the_uniform_401(
         (row,) = [e for e in await rows(world.ctx, db.AuditEvent) if e.result == "denied"]
         assert row.anon_key is not None and row.anon_key.endswith("|2001:db8:1:2::/64")
 
-        async def broken(session: object, event: object) -> None:
+        async def broken(session: object, event: object, **kwargs: object) -> None:
             raise RuntimeError("database is locked")
 
         monkeypatch.setattr(public, "audit", broken)

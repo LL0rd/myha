@@ -36,7 +36,8 @@ async def test_a22_concurrent_redeem_single_winner(world: World) -> None:
     assert [s.id for s in sessions] == [invite.consumed_session_id]
     assert [(p.type, p.status, p.invite_id) for p in principals] == [("guest", "active", invite.id)]
     audit = [e for e in await rows(world.ctx, db.AuditEvent) if e.operation == "auth.redeem"]
-    assert sorted(e.result for e in audit) == ["denied"] * 19 + ["ok"]
+    assert [e.result for e in audit if e.result == "ok"] == ["ok"]
+    assert sum(e.aggregate_count for e in audit if e.result == "denied") == 19  # folded
     assert secret not in repr([(e.normalized_params, e.anon_key) for e in audit])
 
 

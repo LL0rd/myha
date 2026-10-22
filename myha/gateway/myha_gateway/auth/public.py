@@ -206,14 +206,17 @@ async def redeem(
                     )
                 )
             await db.flush()
+            params = {"stay_id": stay.id, "invite_id": row.id, "audience": client}
             if replaces is not None:
                 query = update(Session).where(
                     Session.token_hash == hash_secret(replaces),
                     Session.audience == "browser",
                     Session.revoked_at.is_(None),
                 )
-                await db.execute(query.values(revoked_at=now, revoke_reason="replaced"))
-            params = {"stay_id": stay.id, "invite_id": row.id, "audience": client}
+                query = query.values(revoked_at=now, revoke_reason="replaced")
+                replaced = (await db.execute(query.returning(Session.id))).scalar_one_or_none()
+                if replaced is not None:  # its only audit trace: this event
+                    params["replaced_session"] = replaced
             event = AuditEvent(
                 operation="auth.redeem",
                 result="ok",
@@ -230,7 +233,7 @@ async def redeem(
         )
         try:
             async with write_session(ctx.engine) as db:
-                await audit(db, event)
+                await audit(db, event, aggregate=True)  # one row per client and minute
         except Exception:  # e.g. busy timeout: the answer stays the uniform 401
             logger.warning("redeem denial not audited", exc_info=True)
         raise redeem_refused() from None
