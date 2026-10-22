@@ -17,7 +17,7 @@ MAX_PARAMS = 16
 MAX_KEY = 64
 MAX_PARAMS_JSON = 4096
 _PRODUCT_ID: TypeAdapter[str] = TypeAdapter(ProductId)
-_FIELDS = frozenset({"resource_id", "action", "params"})
+_FIELDS = frozenset({"resource_id", "action", "parameters"})
 
 
 def _invalid(message: str) -> ApiError:
@@ -25,7 +25,7 @@ def _invalid(message: str) -> ApiError:
 
 
 def validate_action_request(body: Any) -> tuple[str, Action, dict[str, Any]]:
-    """``(resource_id, action, params)`` of a well-formed body, else 400 ``INVALID_PARAMETERS``."""
+    """``(resource_id, action, parameters)`` of a well-formed body, else 400."""
     if not isinstance(body, dict) or not _FIELDS.issuperset(body):
         raise _invalid("Invalid request body")
     try:
@@ -35,7 +35,7 @@ def validate_action_request(body: Any) -> tuple[str, Action, dict[str, Any]]:
     raw_action = body.get("action")
     if not isinstance(raw_action, str) or raw_action not in Action:
         raise _invalid("Unknown action")
-    params = body.get("params", {})
+    params = body.get("parameters", {})
     if (
         not isinstance(params, dict)
         or len(params) > MAX_PARAMS
@@ -45,7 +45,7 @@ def validate_action_request(body: Any) -> tuple[str, Action, dict[str, Any]]:
         )
         or len(json.dumps(params)) > MAX_PARAMS_JSON
     ):
-        raise _invalid("Invalid params")
+        raise _invalid("Invalid parameters")
     return resource_id, Action(raw_action), params
 
 

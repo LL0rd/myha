@@ -9,7 +9,11 @@ from myha_gateway.adapters.base import Action
 from myha_gateway.api.public.validation import idempotency_key, validate_action_request
 from myha_gateway.errors import ApiError
 
-VALID = {"resource_id": "res_203_light", "action": "light.set_level", "params": {"level_pct": 40}}
+VALID = {
+    "resource_id": "res_203_light",
+    "action": "light.set_level",
+    "parameters": {"level_pct": 40},
+}
 
 
 def refused(body: Any) -> ApiError:
@@ -27,14 +31,14 @@ def test_valid_request_returns_its_parts() -> None:
     )
 
 
-def test_params_default_to_empty() -> None:
+def test_parameters_default_to_empty() -> None:
     body = {"resource_id": "res_203_light", "action": "light.on"}
     assert validate_action_request(body) == ("res_203_light", Action.LIGHT_ON, {})
 
 
 def test_scalar_values_pass() -> None:
     params = {"a": "x", "b": 1, "c": 1.5, "d": True, "e": None}
-    assert validate_action_request(VALID | {"params": params})[2] == params
+    assert validate_action_request(VALID | {"parameters": params})[2] == params
 
 
 @pytest.mark.parametrize(
@@ -50,13 +54,13 @@ def test_scalar_values_pass() -> None:
         VALID | {"action": "light.explode"},
         VALID | {"action": "a" * 65},
         VALID | {"action": None},
-        VALID | {"params": [1]},
-        VALID | {"params": "level=40"},
-        VALID | {"params": {"level_pct": {"nested": 1}}},
-        VALID | {"params": {"level_pct": [40]}},
-        VALID | {"params": {f"k{i}": i for i in range(17)}},
-        VALID | {"params": {"k" * 65: 1}},
-        VALID | {"params": {"note": "x" * 4096}},
+        VALID | {"parameters": [1]},
+        VALID | {"parameters": "level=40"},
+        VALID | {"parameters": {"level_pct": {"nested": 1}}},
+        VALID | {"parameters": {"level_pct": [40]}},
+        VALID | {"parameters": {f"k{i}": i for i in range(17)}},
+        VALID | {"parameters": {"k" * 65: 1}},
+        VALID | {"parameters": {"note": "x" * 4096}},
         VALID | {"extra": 1},
     ],
 )
@@ -69,7 +73,7 @@ def test_refusal_never_echoes_values() -> None:
     for body in (
         VALID | {"resource_id": secret},
         VALID | {"action": secret},
-        VALID | {"params": {secret: [secret]}},
+        VALID | {"parameters": {secret: [secret]}},
     ):
         error = refused(body)
         assert secret not in json.dumps([error.message, error.details])
