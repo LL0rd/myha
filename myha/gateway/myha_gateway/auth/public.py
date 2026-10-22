@@ -317,7 +317,7 @@ def session_view(session: Session, now: datetime) -> dict[str, Any]:
 
 
 async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
-    """Revoke the session now; its refresh family dies with it."""
+    """Revoke the session now; refresh tokens are not touched yet (rotation comes in Plan 3)."""
     session, now = current.session, utcnow()
     async with write_session(ctx.engine) as db:
         query = update(Session).where(Session.id == session.id, Session.revoked_at.is_(None))
