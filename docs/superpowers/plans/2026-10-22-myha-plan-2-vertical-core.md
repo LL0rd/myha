@@ -42,7 +42,7 @@ scripts/check-no-external.mjs
 
 ### Task 5a.1: Rate-Limit, Cookies, minimaler Audit-Writer
 
-> Hinweise aus WP16: Body-Limit am Public-Listener (z. B. 64 KiB) mit `413` im Fehlerformat, denn uvicorn hat keins und Redeem/Actions lesen JSON; `_HTTP_CODES` kennt 403/409/429 (seit WP16-Fix-up) – `CONFLICT` für Idempotenzkonflikte und `RATE_LIMITED` für den Limiter nutzen; Anfragen vor `decide()` validieren (ProductId-Muster, Aktionslänge, `params` als dict).
+> Hinweise aus WP16 (verbindlich, nicht nur Härtung): Body-Limit am Public-Listener (z. B. 64 KiB) mit `413` im Fehlerformat, denn uvicorn hat keins und Redeem/Actions lesen JSON; eine Header-Block-Deadline (z. B. 10 s) über eine kleine Protokoll-Unterklasse gegen Slowloris, denn `limit_concurrency` auf dem Public-Listener macht halboffene Verbindungen sonst zum billigen 503-Hebel; der Admin-Listener bleibt ohne `limit_concurrency`, fremde Peers werden dort künftig schon in `connection_made` geschlossen; `_HTTP_CODES` kennt 403/409/429 (seit WP16-Fix-up) – `CONFLICT` für Idempotenzkonflikte und `RATE_LIMITED` für den Limiter nutzen; Anfragen vor `decide()` validieren (ProductId-Muster, Aktionslänge, `params` als dict).
 
 **Files:**
 - Create: `myha_gateway/auth/ratelimit.py`, `auth/cookies.py`, `services/audit.py`
