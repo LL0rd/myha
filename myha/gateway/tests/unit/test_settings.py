@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import pytest
@@ -8,10 +7,6 @@ from myha_gateway.settings import Settings
 
 @pytest.fixture(autouse=True)
 def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    # Hermetic: ignore MYHA_* and SUPERVISOR_TOKEN from the developer's shell.
-    for key in list(os.environ):
-        if key.upper().startswith("MYHA_") or key.upper() == "SUPERVISOR_TOKEN":
-            monkeypatch.delenv(key)
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
     return tmp_path
 

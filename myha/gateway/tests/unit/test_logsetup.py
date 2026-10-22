@@ -55,3 +55,25 @@ def test_setup_logging_redacts_records_from_child_loggers(
         root.handlers[:] = handlers
         root.setLevel(level)
     assert "token=<redacted>" in capsys.readouterr().err
+
+
+def test_setup_logging_redacts_exception_text(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        setup_logging("info")
+        try:
+            raise RuntimeError("token=abc")
+        except RuntimeError:
+            logging.getLogger("myha_gateway.test").exception("request failed")
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)
+    err = capsys.readouterr().err
+    assert "RuntimeError: token=<redacted>" in err and "abc" not in err
+
+
+def test_redacts_stack_info() -> None:
+    record = logging.LogRecord("x", logging.INFO, "", 0, "m", (), None, sinfo="Stack:\n token=abc")
+    assert RedactionFilter().filter(record)
+    assert record.stack_info == "Stack:\n token=<redacted>"

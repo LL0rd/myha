@@ -27,7 +27,7 @@ def _redact(text: str) -> str:
 
 
 class RedactionFilter(logging.Filter):
-    """Formats the message once and replaces secrets in it with ``<redacted>``."""
+    """Formats message, traceback and stack once; replaces secrets with ``<redacted>``."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -35,6 +35,11 @@ class RedactionFilter(logging.Filter):
         except Exception:  # malformed log call: drop the args instead of raising into the caller
             message = str(record.msg)
         record.msg, record.args = _redact(message), ()
+        if record.exc_info and not record.exc_text:
+            # Formatter.format() reuses a cached exc_text instead of rendering exc_info again.
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        record.exc_text = record.exc_text and _redact(record.exc_text)
+        record.stack_info = record.stack_info and _redact(record.stack_info)
         return True
 
 
