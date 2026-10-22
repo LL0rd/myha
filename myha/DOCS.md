@@ -32,7 +32,6 @@ read-only.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `log_level` | `info` | Log detail: `debug`, `info`, `warning` or `error`. |
-| `probe_mode` | off | Developer option for the pre-release environment probe. It opens the guest port without HTTPS. Leave it off. |
 
 ## Backups
 

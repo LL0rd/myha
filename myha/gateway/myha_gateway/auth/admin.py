@@ -3,8 +3,7 @@
 ``PeerGuardMiddleware`` turns away every other peer first. Each admin API route then depends on
 ``require_admin``: the peer again, exactly one ``X-Remote-User-Id``, a Supervisor of at least
 the minimum version, and the user's role as Core reports it. Mutations and sensitive reads
-depend on ``require_csrf`` instead, which asks Core afresh and checks the CSRF proof. Only the
-S0 probe has neither: probe mode only, behind the peer guard, deleted with task 1.6.
+depend on ``require_csrf`` instead, which asks Core afresh and checks the CSRF proof.
 """
 
 import functools

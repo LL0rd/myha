@@ -111,7 +111,6 @@ class AppContext:
             if problem := _origin_problem(origin, allow_http=True):
                 return problem
             if instance is not None:  # the startup decision; create() has no instance yet
-                # Mostly for probe_mode, which switches the override on (until task 1.6).
                 message = "settings override: public listener on plain HTTP for %s; %s"
                 logger.info(message, origin, "the instance's public settings do not apply")
         else:

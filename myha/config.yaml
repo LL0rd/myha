@@ -34,4 +34,3 @@ options:
   log_level: info
 schema:
   log_level: list(debug|info|warning|error)
-  probe_mode: bool?

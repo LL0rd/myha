@@ -25,7 +25,7 @@ def test_defaults(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.ha_ws_url == "ws://supervisor/core/websocket"
     assert s.min_supervisor_version == "2026.10.3"
     assert s.log_level == "info"
-    assert not s.probe_mode and not s.public_enabled and s.public_origin is None
+    assert not s.public_enabled and s.public_origin is None
 
 
 def test_env_uses_prefix_but_supervisor_token_is_unprefixed(
@@ -40,14 +40,15 @@ def test_env_uses_prefix_but_supervisor_token_is_unprefixed(
     assert "sup-secret" not in repr(s)
 
 
-def test_options_json_sets_only_log_level_and_probe_mode(data_dir: Path) -> None:
+def test_options_json_sets_only_log_level(data_dir: Path) -> None:
+    # probe_mode is left over in the options of installations from S0 builds.
     (data_dir / "options.json").write_text(
         '{"log_level": "debug", "probe_mode": true, "admin_port": 1, "public_origin": "http://x"}'
     )
     s = Settings()
-    assert s.log_level == "debug" and s.probe_mode
+    assert s.log_level == "debug"
     assert s.admin_port == 8099
-    assert s.public_enabled and s.public_origin == "http://probe.invalid:8443"
+    assert not s.public_enabled and s.public_origin is None
 
 
 def test_relative_data_dir_becomes_absolute(
@@ -81,18 +82,6 @@ def test_public_enabled_requires_origin(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("MYHA_PUBLIC_ENABLED", "1")
     with pytest.raises(ValueError, match="MYHA_PUBLIC_ORIGIN required with MYHA_PUBLIC_ENABLED"):
         Settings()
-    monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
-    assert Settings().public_origin == "http://testserver"
-
-
-def test_probe_mode_allows_public_enabled_without_origin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MYHA_PUBLIC_ENABLED", "1")
-    monkeypatch.setenv("MYHA_PROBE_MODE", "1")
-    monkeypatch.setenv("MYHA_PUBLIC_PORT", "9443")
-    s = Settings()
-    assert s.public_enabled and s.public_origin == "http://probe.invalid:9443"
     monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
     assert Settings().public_origin == "http://testserver"
 

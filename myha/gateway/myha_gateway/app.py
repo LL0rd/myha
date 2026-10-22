@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
-from myha_gateway.api.admin import probe, session
+from myha_gateway.api.admin import session
 from myha_gateway.api.public import health
 from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
@@ -76,9 +76,9 @@ async def _log_supervisor(ctx: AppContext) -> None:
 async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown, once per process, since the admin app always runs.
 
-    Order: restore check, database, instance row, public listener decision, S0 probe, then
-    the HA client beside the Supervisor version line. ``_serve`` then opens the admin
-    listener, and the public one if ``public_ready``.
+    Order: restore check, database, instance row, public listener decision, then the HA
+    client beside the Supervisor version line. ``_serve`` then opens the admin listener, and
+    the public one if ``public_ready``.
     """
     ctx: AppContext = app.state.ctx
     # Before the database: a later restore must not find an instance row made by this start.
@@ -101,8 +101,6 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         if reason := ctx.refresh_public():
             logger.warning("public listener off: %s", reason)
-        if ctx.settings.probe_mode:
-            await probe.log_startup(ctx)
         # Side by side, so that a slow Supervisor (5 s timeout) adds nothing to the HA start;
         # neither raises: an unreachable Core is logged and retried, never fatal.
         await asyncio.gather(ctx.ha.start(), _log_supervisor(ctx))
@@ -128,10 +126,8 @@ def create_public_app(ctx: AppContext) -> FastAPI:
 def create_admin_app(ctx: AppContext) -> FastAPI:
     """Admin app behind the Supervisor ingress proxy, reachable only from its peer address."""
     app = _app(ctx, validation_details=True, lifespan=_admin_lifespan)
-    # Caches of require_admin, which every admin API route depends on except the S0 probe.
+    # Caches of require_admin, which every admin API route depends on.
     app.state.admin_guard = AdminGuard(ctx)
-    if ctx.settings.probe_mode:  # S0 only, behind the peer guard alone; deleted with task 1.6
-        app.include_router(probe.router)
     app.include_router(session.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.

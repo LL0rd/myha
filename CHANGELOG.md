@@ -50,4 +50,10 @@ myHA is pre-alpha and not ready for real guests.
   restarts after a delay that doubles from 5 to at most 60 seconds, while the admin panel stays
   up. A database that cannot be opened stops the app with a logged reason and exit code 3.
 
+### Removed
+
+- The pre-release environment probe: the `probe_mode` option, the admin probe route and the
+  `myha-gateway probe` command. A `probe_mode` value left in the options of an existing
+  installation is ignored. `/healthz` reports only `status` and `client_ip`.
+
 [Unreleased]: https://github.com/LL0rd/myha/commits/main

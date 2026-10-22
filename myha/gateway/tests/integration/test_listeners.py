@@ -1,15 +1,12 @@
-import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.types import Message
 
-from myha_gateway.api.admin import probe
+from myha_gateway.__main__ import main
 from myha_gateway.app import create_admin_app, create_public_app
-from myha_gateway.auth.passwords import Argon2Timing, measure_argon2
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import ApiError
 from tests.helpers import call, fake_supervisor
@@ -25,160 +22,30 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppContext:
     return ctx
 
 
-def probe_app(ctx: AppContext) -> FastAPI:
-    """The admin app in probe mode, the only mode that serves the S0 probe."""
-    ctx.settings.probe_mode = True
-    return create_admin_app(ctx)
-
-
 async def test_public_health_reports_client_ip(ctx: AppContext) -> None:
     r = await call(create_public_app(ctx), "GET", "/healthz", peer="203.0.113.9")
     assert r.status_code == 200 and r.json()["client_ip"] == "203.0.113.9"
 
 
 async def test_public_listener_has_no_admin_routes(ctx: AppContext) -> None:  # ahead of A01
-    ctx.settings.probe_mode = True
     app = create_public_app(ctx)
-    r = await call(app, "GET", "/api/v1/admin/probe", headers={"X-Remote-User-Id": "owner1"})
+    r = await call(app, "GET", "/api/v1/admin/session", headers={"X-Remote-User-Id": "owner1"})
     assert r.status_code == 404
 
 
-async def test_admin_probe_only_in_probe_mode(ctx: AppContext) -> None:
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
-    assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
-
-
-async def test_admin_probe_requires_trusted_peer(ctx: AppContext) -> None:
-    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", peer="10.0.0.5")
-    assert r.status_code == 403 and r.json()["error"]["code"] == "UNAUTHENTICATED"
-
-
-async def test_admin_probe_echoes_identity_headers_from_trusted_peer(ctx: AppContext) -> None:
-    headers = {"X-Remote-User-Id": "u1", "X-Ingress-Path": "/api/hassio_ingress/abc"}
-    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
-    assert r.status_code == 200 and r.json()["peer"] == "172.30.32.2"
-    assert r.json()["headers"]["x-remote-user-id"] == "u1"
-
-
-async def test_admin_probe_shows_only_identity_and_forwarding_headers(ctx: AppContext) -> None:
-    headers = {
-        "X-Remote-User-Name": "dimitri",
-        "X-Forwarded-For": "192.168.1.20",
-        "X-Real-IP": "192.168.1.20",
-        "Authorization": "Bearer abc",
-        "Cookie": "session=abc",
-        "X-Ingress-Path-Foo": "/not/echoed",
-    }
-    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
-    assert r.json()["headers"] == {
-        "x-remote-user-name": "dimitri",
-        "x-forwarded-for": "192.168.1.20",
-        "x-real-ip": "192.168.1.20",
-    }
-
-
-async def test_admin_probe_reports_supervisor_environment_and_paths(
-    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-secret")
-    (ctx.settings.data_dir / "options.json").write_text("{}", encoding="utf-8")
-    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe")
-    body = r.json()
-    assert body["supervisor_info"] == {
-        "version": "2026.10.3",
-        "channel": "stable",
-        "arch": "amd64",
-        "supported": True,
-        "homeassistant": None,
-    }
-    assert body["host_info"] is None  # 403: the app has no hassio_api
-    assert body["self_info"]["ingress_entry"] == "/api/hassio_ingress/abc"
-    assert "SUPERVISOR_TOKEN" in body["env_names"] and "sup-secret" not in r.text
-    assert set(body["paths"]) == {"data_dir", "state_dir", "backup_dir", "web_dist"}
-    assert body["paths"]["data_dir"] is True and body["paths"]["state_dir"] is False
-    assert body["data_entries"] == ["options.json"]  # names only
-    assert datetime.fromisoformat(body["time"]).utcoffset() == timedelta(0)
-
-
-async def test_admin_probe_shows_supervisor_errors_instead_of_failing(ctx: AppContext) -> None:
-    ctx.supervisor = fake_supervisor(reachable=False)
-    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe")
-    assert r.status_code == 200 and "sup-secret" not in r.text
-    error = "SupervisorUnavailable: GET /info: ConnectError: Name or service not known"
-    assert r.json()["supervisor_info"] == {"error": error}
-    assert r.json()["host_info"]["error"].startswith("SupervisorUnavailable: GET /host/info")
-    assert r.json()["self_info"]["error"].startswith("SupervisorUnavailable: GET /addons/self")
-
-
-def fast_argon2() -> list[Argon2Timing]:
-    return measure_argon2(memory_costs_kib=(8,), rounds=1)
-
-
-@pytest.mark.parametrize("reachable", [True, False])
-async def test_probe_mode_startup_logs_evidence_and_writes_marker(
-    reachable: bool,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    (tmp_path / "options.json").write_text('{"probe_mode": true}', encoding="utf-8")
-    monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(probe, "measure_argon2", fast_argon2)
-    caplog.set_level(logging.INFO)
-    ctx = await AppContext.create()
-    ctx.supervisor = fake_supervisor(reachable=reachable)
+async def test_no_probe_route_and_no_probe_cli(ctx: AppContext) -> None:
     app = create_admin_app(ctx)
-    async with app.router.lifespan_context(app):
-        pass
-    marker = (tmp_path / "state" / "probe-live.marker").read_text(encoding="utf-8")
-    assert datetime.fromisoformat(marker.strip()).utcoffset() == timedelta(0)
-    if reachable:
-        assert "probe: supervisor_info {'version': '2026.10.3', 'channel': 'stable'" in caplog.text
-        assert "probe: host_info not permitted" in caplog.text
-        assert "'ingress_entry': '/api/hassio_ingress/abc'" in caplog.text
-    else:  # dev without Supervisor: logged, startup goes on
-        assert "probe: supervisor_info {'error': 'SupervisorUnavailable: GET /info" in caplog.text
-    assert "argon2id t=4 m=8 KiB: " in caplog.text
+    r = await call(app, "GET", "/api/v1/admin/probe", headers={"X-Remote-User-Id": "owner1"})
+    assert r.status_code == 404
+    with pytest.raises(SystemExit) as exc:
+        main(["probe"])
+    assert exc.value.code == 2  # argparse: invalid choice
 
 
-async def test_probe_mode_startup_survives_marker_and_argon2_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    (tmp_path / "options.json").write_text('{"probe_mode": true}', encoding="utf-8")
-    (tmp_path / "state" / "probe-live.marker").mkdir(parents=True)  # where the file belongs
-    monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
-
-    def broken_argon2() -> list[Argon2Timing]:
-        raise MemoryError("argon2 needs more memory")
-
-    monkeypatch.setattr(probe, "measure_argon2", broken_argon2)
-    ctx = await AppContext.create()
-    ctx.supervisor = fake_supervisor()
-    app = create_admin_app(ctx)
-    async with app.router.lifespan_context(app):
-        pass  # reached: the app starts despite both failures
-    assert "probe: marker not written" in caplog.text and "IsADirectoryError" in caplog.text
-    assert "probe: argon2id timing failed" in caplog.text and "MemoryError" in caplog.text
-
-
-async def test_admin_startup_without_probe_mode_leaves_no_marker(
-    ctx: AppContext, tmp_path: Path
-) -> None:
-    app = create_admin_app(ctx)
-    async with app.router.lifespan_context(app):
-        pass
-    assert not (tmp_path / "state" / "probe-live.marker").exists()
-
-
-async def test_healthz_echoes_forwarding_headers_without_trusting_them(ctx: AppContext) -> None:
+async def test_healthz_ignores_forwarding_headers(ctx: AppContext) -> None:
     headers = {"X-Forwarded-For": "198.51.100.1", "X-Real-IP": "198.51.100.2"}
     r = await call(create_public_app(ctx), "GET", "/healthz", peer="203.0.113.9", headers=headers)
-    assert r.json() == {
-        "status": "ok",
-        "client_ip": "203.0.113.9",
-        "x_forwarded_for": "198.51.100.1",
-        "x_real_ip": "198.51.100.2",
-    }
+    assert r.json() == {"status": "ok", "client_ip": "203.0.113.9"}
 
 
 @pytest.mark.parametrize("factory", [create_public_app, create_admin_app])
@@ -198,7 +65,7 @@ async def test_wrong_method_keeps_error_shape(ctx: AppContext) -> None:
 
 @pytest.mark.parametrize(
     ("factory", "path"),
-    [(create_public_app, "/healthz/"), (probe_app, "/api/v1/admin/probe/")],
+    [(create_public_app, "/healthz/"), (create_admin_app, "/api/v1/admin/session/")],
 )
 async def test_trailing_slash_is_not_found_instead_of_redirect(
     ctx: AppContext, factory: Callable[[AppContext], FastAPI], path: str

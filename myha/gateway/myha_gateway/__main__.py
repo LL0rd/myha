@@ -1,17 +1,14 @@
-"""``myha-gateway serve`` runs both listeners; ``myha-gateway probe`` checks the environment."""
+"""``myha-gateway serve`` runs both listeners."""
 
 import argparse
 import asyncio
 import contextlib
-import json
 import logging
 from collections.abc import Callable
-from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
 
-from myha_gateway.api.admin import probe
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
 from myha_gateway.logsetup import setup_logging
@@ -107,24 +104,12 @@ async def _serve(
         await task
 
 
-def _probe(settings: Settings) -> None:
-    """Print what the admin probe endpoint reports, without starting a server (S0 only)."""
-
-    async def gather() -> dict[str, Any]:
-        return await probe.details(await AppContext.create(settings))
-
-    print(json.dumps(asyncio.run(gather()), indent=2))
-
-
 def main(argv: list[str] | None = None) -> None:
     """Entry point of the ``myha-gateway`` command."""
     parser = argparse.ArgumentParser(prog="myha-gateway")
-    parser.add_argument("command", choices=["serve", "probe"])
-    command = parser.parse_args(argv).command
+    parser.add_argument("command", choices=["serve"])
+    parser.parse_args(argv)
     settings = Settings()
-    if command == "probe":
-        _probe(settings)
-        return
     setup_logging(settings.log_level)
     try:
         asyncio.run(_serve(settings))  # SystemExit from the admin server keeps its exit code

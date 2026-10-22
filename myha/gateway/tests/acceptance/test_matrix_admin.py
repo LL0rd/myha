@@ -25,7 +25,6 @@ from tests.helpers import SimHandle, call
 
 SESSION = "/api/v1/admin/session"
 CHECK = "/api/v1/admin/session/check"
-PROBE = "/api/v1/admin/probe"
 
 
 def denied(r: httpx.Response) -> bool:
@@ -56,28 +55,21 @@ def owner_changed(**changes: Any) -> list[dict[str, Any]]:
 
 
 async def test_a01_public_listener_ignores_identity_headers(ctx: AppContext) -> None:
-    ctx.settings.probe_mode = True  # the mode in which the admin app has the S0 probe
     public = create_public_app(ctx)
     identity = {
         "X-Remote-User-Id": OWNER,
         "X-Remote-User-Name": "owner",
         "X-Ingress-Path": "/api/hassio_ingress/simtoken",
     }
-    for method, path in [("GET", SESSION), ("POST", CHECK), ("GET", PROBE)]:
+    for method, path in [("GET", SESSION), ("POST", CHECK)]:
         r = await call(public, method, path, headers=identity)  # even from the ingress peer
         assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
 
 
-async def test_a02_wrong_peer_rejected(
-    admin_app: FastAPI, admin_client: httpx.AsyncClient, ctx: AppContext
-) -> None:
+async def test_a02_wrong_peer_rejected(admin_app: FastAPI, admin_client: httpx.AsyncClient) -> None:
     identity = {"X-Remote-User-Id": OWNER, "X-MyHA-CSRF": await csrf(admin_client)}
     for method, path in [("GET", SESSION), ("POST", CHECK), ("GET", "/")]:
         assert denied(await call(admin_app, method, path, peer="10.0.0.5", headers=identity))
-
-    ctx.settings.probe_mode = True  # the S0 probe route exists in probe mode only
-    probe_on = create_admin_app(ctx)
-    assert denied(await call(probe_on, "GET", PROBE, peer="10.0.0.5", headers=identity))
 
     # require_admin checks the peer itself, not only the middleware around the admin app.
     bare = FastAPI()
@@ -397,12 +389,9 @@ def _calls(dependant: Any) -> set[Any]:
 
 async def test_every_admin_api_route_requires_the_guard(ctx: AppContext) -> None:
     guards = {require_admin(fresh=False), require_admin(fresh=True), require_csrf}
-    ctx.settings.probe_mode = True  # every route the admin app can have
     checked = set()
     for context in iter_route_contexts(create_admin_app(ctx).routes):
         assert isinstance(context.original_route, APIRoute), context.path  # WS, Mount: own check
-        if context.path == PROBE:  # S0 tool, probe mode only, peer guard only (task 1.6)
-            continue
         calls = _calls(context.dependant)  # the route plus router-level dependencies
         assert calls & guards, context.path
         if context.methods & {"POST", "PUT", "PATCH", "DELETE"}:

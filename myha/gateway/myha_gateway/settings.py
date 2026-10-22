@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 
 
 class _AddonOptions(PydanticBaseSettingsSource):
-    """``<data_dir>/options.json`` written by the Supervisor; only two keys are honoured."""
+    """``<data_dir>/options.json`` written by the Supervisor; only ``log_level`` is honoured."""
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
         raise NotImplementedError  # unused: __call__ reads the whole file
@@ -22,9 +22,9 @@ class _AddonOptions(PydanticBaseSettingsSource):
         if not path.is_file():
             return {}
         options = json.loads(path.read_text(encoding="utf-8"))
-        # Task 1.6: drop "probe_mode" here in the same commit as Settings.probe_mode; otherwise
-        # startup fails with extra_forbidden while options.json still carries the key.
-        return {key: options[key] for key in ("log_level", "probe_mode") if key in options}
+        # A whitelist: other keys, such as the probe option left over from S0 builds, would fail
+        # startup with extra_forbidden.
+        return {key: options[key] for key in ("log_level",) if key in options}
 
 
 class Settings(BaseSettings):
@@ -46,7 +46,6 @@ class Settings(BaseSettings):
     ha_ws_url: str = "ws://supervisor/core/websocket"
     min_supervisor_version: str = "2026.10.3"
     log_level: Literal["debug", "info", "warning", "error"] = "info"
-    probe_mode: bool = False
     # Dev/test override: public listener without instance configuration, plain HTTP.
     public_enabled: bool = False
     public_origin: str | None = None
@@ -79,11 +78,7 @@ class Settings(BaseSettings):
         return value.lower() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def apply_public_override(self) -> Self:
-        # Later code reads only public_enabled/public_origin, so task 1.6 can drop probe_mode.
-        if self.probe_mode:
-            self.public_enabled = True
-            self.public_origin = self.public_origin or f"http://probe.invalid:{self.public_port}"
+    def check_public_override(self) -> Self:
         if self.public_enabled and not self.public_origin:
             raise ValueError("MYHA_PUBLIC_ORIGIN required with MYHA_PUBLIC_ENABLED")
         return self

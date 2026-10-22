@@ -226,7 +226,7 @@ async def command(ha: Supervisor, base: str, token: str) -> str:
             network = {"network": {"8443/tcp": args.hostport}}
             result = await ha.change(f"/addons/{await ha.slug()}/options", network)
         case "backup-new":
-            body = {"name": "myha-probe", "addons": [await ha.slug()]}
+            body = {"name": "myha-dev", "addons": [await ha.slug()]}
             return str((await ha.change("/backups/new/partial", body))["slug"])
         case "logs":
             path = f"/api/hassio/addons/{await ha.slug()}/logs?lines={args.lines}"
@@ -299,7 +299,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     download = commands.add_parser("backup-download")
     download.add_argument("backup_slug")
     download.add_argument("out")
-    commands.add_parser("ingress-get").add_argument("path", help="for example api/v1/admin/probe")
+    commands.add_parser("ingress-get").add_argument("path", help="for example api/v1/admin/session")
     return parser.parse_args(argv)
 
 

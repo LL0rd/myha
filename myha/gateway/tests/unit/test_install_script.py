@@ -120,7 +120,7 @@ async def test_change_with_yes_asks_nothing_and_waits_without_timeout(
 ) -> None:
     monkeypatch.setattr(script, "read_line", lambda: "n\n")  # a prompt would abort
     ws = FakeWebSocket(result(1, {"slug": "abcd1234"}))
-    body = {"name": "myha-probe", "addons": ["a0d7b954_myha"]}
+    body = {"name": "myha-dev", "addons": ["a0d7b954_myha"]}
     assert await supervisor(ws, yes=True).change("/backups/new/partial", body) == {
         "slug": "abcd1234"
     }
