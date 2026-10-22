@@ -464,6 +464,32 @@ class SimState:
             data = {"action": "update", "entity_id": entity_id, "changes": changes}
             await self.fire("entity_registry_updated", data)
 
+    async def add(self, body: "NewEntity") -> JSON:
+        """A newly discovered entity: registry entry first, then its first state, as in Core."""
+        if body.entity_id in self.entities or body.entity_id in self.states:
+            raise HTTPException(409, f"{body.entity_id} exists")
+        if body.area_id is not None and body.area_id not in self.areas:
+            raise HTTPException(404, f"unknown area {body.area_id}")
+        object_id = body.entity_id.split(".", 1)[1]
+        self.entities[body.entity_id] = {
+            "entity_id": body.entity_id,
+            "unique_id": f"{body.platform}-{object_id}",
+            "device_id": None,
+            "area_id": body.area_id,
+            "platform": body.platform,
+        }
+        await self.fire(
+            "entity_registry_updated", {"action": "create", "entity_id": body.entity_id}
+        )
+        return await self.set_state(body.entity_id, body.state, body.attributes)
+
+    async def remove(self, entity_id: str) -> None:
+        """The registry entry goes, then the state; the device stays."""
+        del self.entities[self.entry(entity_id)["entity_id"]]
+        await self.fire("entity_registry_updated", {"action": "remove", "entity_id": entity_id})
+        if entity_id in self.states:
+            await self.remove_state(entity_id)
+
     async def reset(self) -> None:
         """Back to the fixture without dropping connections; subscribers see what changed."""
         old_entities, old_devices = self.entities, self.devices
@@ -536,6 +562,18 @@ class ModeSetpoint(_Body):
 class Rename(_Body):
     entity_id: str
     new_entity_id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+
+
+class NewEntity(_Body):
+    entity_id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+    area_id: str | None
+    platform: str
+    state: str
+    attributes: JSON = {}
+
+
+class EntityRef(_Body):
+    entity_id: str
 
 
 class Replace(_Body):
@@ -699,6 +737,14 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
     @app.post("/_sim/registry/area")
     async def registry_area(body: AreaChange) -> None:
         await sim.move(body.entity_id, body.area_id)
+
+    @app.post("/_sim/entity")
+    async def entity_add(body: NewEntity) -> JSON:
+        return await sim.add(body)
+
+    @app.post("/_sim/entity/remove")
+    async def entity_remove(body: EntityRef) -> None:
+        await sim.remove(body.entity_id)
 
     @app.post("/_sim/entity/attributes")
     async def entity_attributes(body: EntityAttributes) -> JSON:

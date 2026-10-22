@@ -484,3 +484,44 @@ async def test_host_info_mode(sim: SimHandle) -> None:
         "result": "ok",
         "data": {"dt_synchronized": True, "operating_system": "Home Assistant OS 18.3"},
     }
+
+
+async def test_entity_added_and_removed_at_runtime(sim: SimHandle) -> None:
+    new = {"entity_id": "light.room_203_new", "area_id": "area_203", "platform": "shelly"}
+    new |= {"state": "on", "attributes": {"supported_color_modes": ["onoff"]}}
+    async with connect(sim) as listener, connect(sim) as ws:
+        await command(listener, {"id": 1, "type": "subscribe_events"})
+        await sim.control.post("entity", new)
+        added = [(await receive(listener))["event"] for _ in range(2)]
+        entities = (await command(ws, {"id": 1, "type": "config/entity_registry/list"}))["result"]
+        await sim.control.post("entity/remove", {"entity_id": "light.room_203_new"})
+        removed = [(await receive(listener))["event"] for _ in range(2)]
+        left = (await command(ws, {"id": 2, "type": "config/entity_registry/list"}))["result"]
+    assert [event["event_type"] for event in added] == ["entity_registry_updated", "state_changed"]
+    assert added[0]["data"] == {"action": "create", "entity_id": "light.room_203_new"}
+    assert added[1]["data"]["old_state"] is None
+    entry = next(e for e in entities if e["entity_id"] == "light.room_203_new")
+    assert (entry["unique_id"], entry["area_id"]) == ("shelly-room_203_new", "area_203")
+    assert removed[0]["data"] == {"action": "remove", "entity_id": "light.room_203_new"}
+    assert removed[1]["data"]["new_state"] is None
+    assert not any(e["entity_id"] == "light.room_203_new" for e in left)
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "status"),
+    [
+        ("entity", {"entity_id": "light.hallway", "platform": "x", "state": "on"}, 409),
+        (
+            "entity",
+            {"entity_id": "light.x", "area_id": "nowhere", "platform": "x", "state": "on"},
+            404,
+        ),
+        ("entity/remove", {"entity_id": "light.unknown"}, 404),
+    ],
+)
+async def test_entity_add_and_remove_errors(
+    sim: SimHandle, path: str, body: dict[str, Any], status: int
+) -> None:
+    body = {"area_id": None} | body if path == "entity" else body
+    response = await sim.control.client.post(f"/_sim/{path}", json=body)
+    assert response.status_code == status
