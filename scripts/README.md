@@ -15,7 +15,7 @@ Developer tools, run from the repository root.
   existing image, for example the one CI just built.
 - `make-icons.py` redraws `myha/icon.png` and `myha/logo.png`:
   `uv run --with pillow==13.0.0 python scripts/make-icons.py`.
-- `install-on-ha.py` (planned, Task 1.1) installs and configures the add-on on a Home Assistant
+- `install-on-ha.py` installs and configures the add-on on a Home Assistant
   instance through the Supervisor API. It reads `HA_URL` and `HA_TOKEN` from the environment.
 
 `.dev/` is git-ignored and holds local state: the gateway data of `dev.sh` and `ha.env` with
