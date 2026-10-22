@@ -1,0 +1,5 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# S0 probe dummy for backup_post: removes what backup-export wrote.
+rm -f /data/backup/PROBE-export.txt
+bashio::log.info "myHA backup-cleanup probe: removed PROBE-export.txt"

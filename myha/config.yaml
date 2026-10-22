@@ -1,0 +1,37 @@
+name: myHA
+version: "0.1.0"
+slug: myha
+description: Room-scoped guest, resident and wall-display access for Home Assistant
+url: https://github.com/LL0rd/myha
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:key-variant
+panel_title: myHA
+panel_admin: true
+homeassistant_api: true
+hassio_api: false
+auth_api: false
+ports:
+  8443/tcp: null
+ports_description:
+  8443/tcp: Guest and resident access (HTTPS or behind your reverse proxy)
+map:
+  - type: ssl
+    read_only: true
+backup: hot
+backup_pre: /opt/myha/backup-export
+backup_post: /opt/myha/backup-cleanup
+backup_exclude:
+  - state
+  - state/**
+options:
+  log_level: info
+schema:
+  log_level: list(debug|info|warning|error)
+  probe_mode: bool?
