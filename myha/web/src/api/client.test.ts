@@ -37,3 +37,15 @@ it("redeems as a browser and escapes command ids", async () => {
   await cmd.client.command("a/b");
   expect(cmd.request).toHaveBeenCalledWith("/api/v1/commands/a%2Fb", undefined);
 });
+
+it("accepts /me as the guest auth routes send it", async () => {
+  const me = {
+    principal: { id: "prn_1", type: "guest", display_name: null, locale: null, theme: null },
+    session: { not_before: "2026-10-22T00:00:00+00:00", not_after: "2026-10-24T10:00:00+00:00", waiting: false },
+    csrf_token: "c",
+    stay: { unit_name: null, ends_at: "2026-10-24T10:00:00+00:00" },
+    instance: { name: "Seeblick", operator_contact: null },
+  };
+  expect((await transportReturning(me).client.me()).stay?.unit_name).toBeNull();
+  await expect(transportReturning({ ...me, principal: { ...me.principal, password: "x" } }).client.me()).rejects.toThrow();
+});

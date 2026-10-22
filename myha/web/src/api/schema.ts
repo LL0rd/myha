@@ -94,7 +94,7 @@ export const command = z.strictObject({
   public_code: z.enum(publicErrorCodes).nullable().optional(),
 });
 
-// Responses of the guest routes of Task 5a.3 and 6.4, from the plan text; align when those routes land.
+// Responses of the guest routes: config, redeem, renew, /me and ws-ticket as in api/public; actions from the plan text (Task 6.4).
 const sessionInfo = z.strictObject({ not_before: datetime, not_after: datetime, waiting: z.boolean() });
 
 /** GET /api/v1/public/config */
@@ -108,10 +108,16 @@ export const configResponse = z.strictObject({
 export const sessionResponse = z.strictObject({ session: sessionInfo, csrf_token: z.string() });
 /** GET /api/v1/me */
 export const meResponse = z.strictObject({
-  principal: z.strictObject({ id: z.string(), type: z.string(), display_name: z.string().nullable() }),
+  principal: z.strictObject({
+    id: z.string(),
+    type: z.string(),
+    display_name: z.string().nullable(),
+    locale: z.string().nullable(),
+    theme: z.string().nullable(),
+  }),
   session: sessionInfo,
   csrf_token: z.string(),
-  stay: z.strictObject({ unit_name: z.string(), ends_at: datetime }).nullable(),
+  stay: z.strictObject({ unit_name: z.string().nullable(), ends_at: datetime }).nullable(),
   instance: z.strictObject({ name: z.string(), operator_contact: z.string().nullable() }),
 });
 /** POST /api/v1/ws-ticket */
