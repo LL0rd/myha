@@ -31,7 +31,7 @@ from myha_gateway.projection.dashboard import (
     project_dashboard,
     project_resource,
 )
-from myha_gateway.projection.schema import DashboardView
+from myha_gateway.projection.schema import DashboardView, dump_public
 from myha_simulator import fixtures
 from tests import policy_world, public_helpers
 from tests.helpers import (
@@ -74,7 +74,7 @@ def project(
 
 def public(view: DashboardView) -> dict[str, Any]:
     """The JSON the client receives."""
-    return view.model_dump(mode="json", exclude_unset=True)
+    return dump_public(view)
 
 
 def resources(view: DashboardView) -> dict[str, dict[str, Any]]:
@@ -524,3 +524,43 @@ def test_offered_intervals_respect_companion_grants(
     offered = capabilities(view, resource_id).get(action, {}).get("intervals", [])
     assert [(edge["min"], edge["max"]) for edge in offered] == expected
     assert_offers_are_allowed(view, guest_context(), index)
+
+
+def test_untrusted_time_stays_online_with_no_rooms() -> None:
+    view = public(project(guest_context(time_trusted=False)))
+    assert view == {"status": "online", "rooms": []}
+
+
+def test_dump_public_leaves_unset_fields_out() -> None:
+    hidden = room203_index(grants=[{"resources": ["res_203_hum"], "actions": ["metadata.read"]}])
+    body = dump_public(project(index=hidden))
+    assert body["rooms"][0]["resources"] == [
+        {"id": "res_203_hum", "kind": "sensor", "label": "Label res_203_hum", "icon": None}
+    ]
+    # only real unknowns are null: no icon, the on/off bedside light has no level
+    assert nulls(dump_public(project())) == {"icon", "level_pct"}
+    # a sensor state carries only its own fields, never another kind's as null
+    assert set(resources(project())["res_203_hum"]["state"]) == {
+        "availability",
+        "observed_at",
+        "value",
+        "unit",
+    }
+
+
+@pytest.mark.parametrize("broken", ["context_for_session", "load_layout"])
+async def test_loader_error_is_upstream_unavailable_and_audited(
+    world: World, monkeypatch: pytest.MonkeyPatch, broken: str
+) -> None:
+    async def fail(*args: Any) -> None:
+        raise ValueError("the session belongs to another principal")
+
+    if broken == "load_layout":
+        monkeypatch.setattr("myha_gateway.api.public.dashboard.load_layout", fail)
+    else:
+        monkeypatch.setattr(world.ctx.policy, "context_for_session", fail)
+    r = await get_dashboard(world, world.secrets[0])
+    assert (r.status_code, r.json()["error"]["code"]) == (500, "UPSTREAM_UNAVAILABLE")
+    assert "principal" not in r.text
+    events = [e for e in await rows(world.ctx, db.AuditEvent) if e.operation == "decide_error"]
+    assert [(e.result, e.policy_version) for e in events] == [("error", None)]

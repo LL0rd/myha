@@ -105,6 +105,7 @@ def _rank(layout: Any) -> dict[str, int]:
 
 def dashboard_status(ctx: EffectiveContext, now: datetime) -> DashboardStatus:
     """``expired`` once inactive or past the window's end, ``waiting`` before its start."""
+    # untrusted time: online with no rooms (decide refuses), not a start time it cannot vouch for
     if not ctx.session_active or (ctx.not_after is not None and now >= ctx.not_after):
         return "expired"
     if ctx.not_before is not None and now < ctx.not_before:

@@ -6,7 +6,7 @@ fields of its kind.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -69,3 +69,8 @@ class Room(_Public):
 class DashboardView(_Public):
     status: DashboardStatus
     rooms: tuple[Room, ...]
+
+
+def dump_public(model: BaseModel) -> dict[str, Any]:
+    """The JSON form a client receives, over HTTP and WebSocket alike: unset fields stay absent."""
+    return model.model_dump(mode="json", exclude_unset=True)
