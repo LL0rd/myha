@@ -111,7 +111,7 @@ class AdminGuard:
         if self._supervisor is None or now >= self._supervisor[0]:
             outcome = await self._check_supervisor()
             ttl = SUPERVISOR_TTL if isinstance(outcome, SupervisorInfo) else SUPERVISOR_RETRY
-            self._supervisor = (now + ttl, outcome)
+            self._supervisor = (self._monotonic() + ttl, outcome)  # from the answer
         outcome = self._supervisor[1]
         if isinstance(outcome, SupervisorInfo):
             return outcome

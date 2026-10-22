@@ -297,6 +297,7 @@ async def test_supervisor_outage_costs_one_request_per_5_seconds(
 
     def refuse(request: httpx.Request) -> httpx.Response:
         requests.append(request.url.path)
+        clocks.advance(5)  # the time a hanging Supervisor costs until the client gives up
         raise httpx.ConnectError("Connection refused", request=request)
 
     transport = httpx.MockTransport(refuse)
