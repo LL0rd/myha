@@ -4,9 +4,8 @@ import ipaddress
 import logging
 import re
 import ssl
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Self
 from urllib.parse import urlsplit
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -14,10 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from myha_gateway.db import create_engine, session_factory
 from myha_gateway.db.models import Instance
 from myha_gateway.ha.client import HAClient
-from myha_gateway.ha.messages import ConnectionStatus, StateChanged
 from myha_gateway.ha.supervisor import SupervisorClient
-from myha_gateway.policy.loader import PolicyLoader
-from myha_gateway.services.audit import AuditEvent, audit
 from myha_gateway.services.timeguard import TimeGuard
 from myha_gateway.settings import Settings
 
@@ -25,29 +21,8 @@ logger = logging.getLogger(__name__)
 _DNS_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*")
 
 
-async def _fan_out[T](handlers: list[Callable[[T], Awaitable[None]]], update: T) -> None:
-    """Hand an HA event or status change to each handler in order (the event bus joins in 6.3)."""
-    for handler in handlers:
-        await handler(update)
-
-
-async def _audit_policy(
-    session: AsyncSession,
-    operation: str,
-    resource_id: str | None,
-    policy_version: int,
-    params: dict[str, Any],
-) -> None:
-    """Audit row of a binding or policy change that the system made, not an admin."""
-    event = AuditEvent(
-        actor="system",
-        operation=operation,
-        result="ok",
-        resource_id=resource_id,
-        policy_version=policy_version,
-        normalized_params=params,
-    )
-    await audit(session, event)
+async def _unused(update: object) -> None:
+    """HA events and status changes go nowhere until the event bus subscribes (task 6.3)."""
 
 
 def _is_origin(origin: str, *, allow_http: bool) -> bool:
@@ -88,14 +63,13 @@ def _no_password() -> bytes:
 
 @dataclass
 class AppContext:
-    """Shared backend context; the event bus joins in a later task."""
+    """Shared backend context; event bus and policy join in later tasks."""
 
     settings: Settings
     supervisor: SupervisorClient
     ha: HAClient  # started and stopped by the admin app's lifespan
     engine: AsyncEngine  # connects on first use, after the admin lifespan has migrated
     sessions: async_sessionmaker[AsyncSession]  # reads; writes go through db.write_session
-    policy: PolicyLoader  # index, contexts and drift; its worker starts with the HA connection
     instance: Instance | None = None  # loaded at startup; services that change it replace it
     restore_mode: bool = False  # backup_dir/restore.sqlite was there at startup (design 4.6)
     # Set by refresh_public(). public_origin is the only source for origin checks and join
@@ -112,26 +86,15 @@ class AppContext:
         token = settings.supervisor_token
         # The Supervisor token is also the Core token behind ws://supervisor/core/websocket.
         ha_token = "" if token is None else token.get_secret_value()
-        on_event: list[Callable[[StateChanged], Awaitable[None]]] = []
-        on_status: list[Callable[[ConnectionStatus], Awaitable[None]]] = []
-        ha = HAClient(
-            settings.ha_ws_url,
-            ha_token,
-            on_event=lambda change: _fan_out(on_event, change),
-            on_status=lambda status: _fan_out(on_status, status),
-        )
+        ha = HAClient(settings.ha_ws_url, ha_token, on_event=_unused, on_status=_unused)
         engine = create_engine(settings.db_path)
-        policy = PolicyLoader(engine, ha, audit=_audit_policy)
-        on_event.append(policy.on_event)
-        on_status.append(policy.on_status)
         supervisor = SupervisorClient(settings.supervisor_url, token)
-        ctx = cls(settings, supervisor, ha, engine, session_factory(engine), policy)
+        ctx = cls(settings, supervisor, ha, engine, session_factory(engine))
         ctx.refresh_public()  # the settings override only; the admin lifespan decides again
         return ctx
 
     async def close(self) -> None:
-        """Stop the drift worker and close the database connections."""
-        await self.policy.close()
+        """Close the database connections; the engine would reopen them on use."""
         await self.engine.dispose()
 
     def refresh_public(self) -> str | None:
