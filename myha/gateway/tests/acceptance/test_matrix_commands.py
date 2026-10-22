@@ -14,10 +14,10 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from myha_gateway.api.public import actions as actions_api
-from myha_gateway.api.public import commands as commands_api
+from myha_gateway.app import create_admin_app
 from myha_gateway.db import bump_policy_version, write_session
 from myha_gateway.db import models as db
+from myha_gateway.deps import AppContext
 from myha_gateway.events.bus import CommandUpdated, Event, PolicyChanged
 from myha_gateway.services import audit as audit_module
 from myha_gateway.services import commands
@@ -35,9 +35,6 @@ TRV = "climate.room_203_trv"
 @pytest.fixture
 async def guest(world: World) -> AsyncIterator[tuple[httpx.AsyncClient, Guest]]:
     """A browser guest of room 203 on the public app with the command routes."""
-    # shortcut: app.py mounts these routers once Task 6.3 releases it; then drop the two lines
-    world.public.include_router(actions_api.router)
-    world.public.include_router(commands_api.router)
     async with world.client() as client:
         yield client, await browser_guest(world, client, world.secrets[0])
     await commands.settle()
@@ -140,7 +137,10 @@ async def test_a32_restart_marks_inflight_unknown(
                 )
             )
     await sim.control.post("service-calls/reset")
-    assert await commands.mark_in_flight_unknown(world.ctx.engine) == 2
+    restarted = await AppContext.create(world.ctx.settings)  # a new process on the same data
+    admin = create_admin_app(restarted)
+    async with admin.router.lifespan_context(admin):
+        assert restarted.ha.connected
     statuses = {row.id: row.status for row in await rows(world.ctx, db.Command)}
     assert statuses == {
         "cmd_accepted": "unknown",
@@ -270,7 +270,6 @@ async def test_a07_execute_path_rejects_disallowed(
 
 
 async def test_a24_action_before_stay_start_access_expired(world: World, sim: SimHandle) -> None:
-    world.public.include_router(actions_api.router)
     start = now() + timedelta(hours=2)
     _, [secret] = await new_stay(world.ctx, starts_at=start, ends_at=start + timedelta(days=1))
     await sim.control.post("service-calls/reset")

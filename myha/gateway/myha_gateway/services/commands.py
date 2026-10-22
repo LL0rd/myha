@@ -174,7 +174,7 @@ async def settle() -> None:
         await asyncio.gather(*_tasks, return_exceptions=True)
 
 
-async def stop() -> None:
+async def stop_commands() -> None:
     """Cancel every running send; the next start marks their commands ``unknown``."""
     for task in list(_tasks):
         task.cancel()

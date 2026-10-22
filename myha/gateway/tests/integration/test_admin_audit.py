@@ -10,7 +10,6 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from myha_gateway.api.admin import audit as audit_api
 from myha_gateway.app import create_admin_app
 from myha_gateway.db import write_session
 from myha_gateway.ha.client import utcnow
@@ -46,9 +45,8 @@ GUEST = AuditEvent(
 
 @pytest.fixture
 async def admin(world: World) -> AsyncIterator[httpx.AsyncClient]:
-    """The owner through the ingress, on an admin app with the audit router mounted."""
+    """The owner through the ingress."""
     app: FastAPI = create_admin_app(world.ctx)
-    app.include_router(audit_api.router)  # shortcut: app.py mounts it with Task 6.4 phase 2
     transport = httpx.ASGITransport(app=app, client=(TRUSTED, 1))
     headers = {"X-Remote-User-Id": USERS[0]["id"]}
     async with httpx.AsyncClient(

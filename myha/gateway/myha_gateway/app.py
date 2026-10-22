@@ -9,8 +9,17 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
-from myha_gateway.api.admin import invites, session, sessions, stays
-from myha_gateway.api.public import auth, config, dashboard, health, me, ws_ticket
+from myha_gateway.api.admin import audit, invites, session, sessions, stays
+from myha_gateway.api.public import (
+    actions,
+    auth,
+    commands,
+    config,
+    dashboard,
+    health,
+    me,
+    ws_ticket,
+)
 from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
@@ -19,6 +28,7 @@ from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_respon
 from myha_gateway.events import ws
 from myha_gateway.ha.supervisor import SupervisorUnavailable
 from myha_gateway.limits import BodyLimitMiddleware
+from myha_gateway.services.commands import mark_in_flight_unknown, stop_commands
 from myha_gateway.services.timeguard import TimeGuard, system_audit
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
 
@@ -96,6 +106,8 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             async with write_session(ctx.engine) as session:
                 ctx.instance = await ensure_instance(session)
+            # Before HA connects: a previous process's commands are never sent again (A32).
+            await mark_in_flight_unknown(ctx.engine)
     except Exception:
         # Nothing works without the schema; uvicorn then exits with code 3 and s6 halts the app.
         logger.exception("startup aborted: database %s is not usable", ctx.settings.db_path)
@@ -116,6 +128,7 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         if guard_task is not None:
             guard_task.cancel()
             await asyncio.gather(guard_task, return_exceptions=True)
+        await stop_commands()  # unfinished ones turn unknown at the next start
         await ctx.ha.stop()
         await ctx.close()
 
@@ -124,7 +137,7 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     """Guest-facing app: no admin route, never trusts forwarding headers."""
     settings = ctx.settings
     app = _app(ctx, validation_details=False)
-    for module in (health, config, auth, me, ws_ticket, dashboard, ws):
+    for module in (health, config, auth, me, ws_ticket, dashboard, ws, actions, commands):
         app.include_router(module.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
     # WebSockets only to the public origin itself: wss://host, ws://host for the http override.
@@ -145,6 +158,7 @@ def create_admin_app(ctx: AppContext) -> FastAPI:
     app.include_router(stays.router)
     app.include_router(invites.router)
     app.include_router(sessions.router)
+    app.include_router(audit.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.
     csp = content_security_policy(frame_ancestors="'self'", connect="'self' wss: ws:")
