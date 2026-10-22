@@ -33,7 +33,7 @@ ignore = ["S101"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["myha_gateway"]
+files = ["myha_gateway", "myha_simulator"]
 
 [build-system]
 requires = ["hatchling"]
