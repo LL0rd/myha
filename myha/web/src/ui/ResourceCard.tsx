@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { CommandStatus } from "./CommandStatus";
 import type { Strings } from "./GuestPanel";
 import styles from "./guest-panel.module.css";
-import { actionIcon, kindIcon, modeIcon } from "./icons";
+import { actionIcon, kindIcon, modeIcon, resourceIcon } from "./icons";
 import type { Action, ActionParams, Command, Interval, Resource } from "./types";
 
 interface Props {
@@ -133,7 +133,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
       const lower = stepTarget(intervals, value, -1);
       const raise = stepTarget(intervals, value, 1);
       const set = (v: string) => {
-        setTarget(v);
+        if (!simulate) setTarget(v); // a simulation changes nothing, so the shown target stays
         send("climate.set_temperature", { target_c: v });
       };
       const ranges = intervals.map((i) => `${trimZero(i.min)}–${trimZero(i.max)}`).join(", ");
@@ -156,6 +156,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
         </div>
       );
     }
+    // No dashed buttons for unpermitted modes in simulate: without the right the projection carries no mode list.
     buttons = (caps["climate.set_mode"]?.allowed ?? []).map((mode) =>
       button("climate.set_mode", t.mode[mode] ?? mode, modeIcon[mode] ?? kindIcon.climate, "secondary", { mode }, state?.hvac_mode === mode),
     );
@@ -171,7 +172,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
   }
 
   buttons = buttons.filter(Boolean);
-  const KindIcon = kindIcon[kind];
+  const KindIcon = resourceIcon(kind, resource.icon);
   return (
     <div role="group" aria-label={label} className={styles.card} data-kind={kind}>
       <div className={styles.head}>

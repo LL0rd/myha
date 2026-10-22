@@ -112,8 +112,21 @@ it("announces the latest command of a resource politely", () => {
   expect(card("Blind").queryByText(/Confirmed/)).toBeNull();
 });
 
-it("simulation also shows denied actions", () => {
-  render(<GuestPanel title="Room 203" rooms={rooms()} status="online" simulate onAction={() => {}} />);
+it("simulation shows denied actions and keeps the shown target", async () => {
+  const onAction = vi.fn();
+  render(<GuestPanel title="Room 203" rooms={rooms()} status="online" simulate onAction={onAction} />);
   expect(card("Blind").getByRole("button", { name: "Stop" })).toBeTruthy();
   expect(card("Bedside").getByRole("button", { name: "Turn on" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Raise target" }));
+  expect(onAction).toHaveBeenCalledWith("res_climate", "climate.set_temperature", { target_c: "22.0" });
+  expect(card("Air conditioning").getByText("21.5")).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Raise target" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("shows the binding icon and falls back to the kind icon", () => {
+  const lamp: Resource = { ...readOnlyLight, icon: "tabler:lamp" };
+  const odd: Resource = { ...sensor, icon: "no-such-icon" };
+  render(<GuestPanel title="Room 203" rooms={[{ id: "u", name: "Room", resources: [lamp, odd] }]} status="online" onAction={() => {}} />);
+  expect(screen.getByRole("group", { name: "Bedside" }).querySelector("svg")?.getAttribute("class")).toContain("tabler-icon-lamp");
+  expect(screen.getByRole("group", { name: "Humidity" }).querySelector("svg")?.getAttribute("class")).toContain("tabler-icon-droplet");
 });
