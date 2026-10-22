@@ -194,42 +194,69 @@ class PolicyIndex:
         if resource is None:
             return {}
         capabilities = resource.capabilities
+        grants = self.grants(ctx, resource_id, action)
         limits = _limits(name, capabilities)
         steps = _grid_steps(name, capabilities)
+        if limits is None or steps is None:  # broken device data: granted, nothing settable
+            return dict.fromkeys(grants, ())
         result: dict[str, tuple[Interval, ...]] = {}
-        for grant_id, grant in self.grants(ctx, resource_id, action).items():
+        for grant_id, grant in grants.items():
             rule = getattr(grant.parameters, name)
             spans = (_full_range(name, capabilities),) if rule is None else rule.intervals
-            cuts = [] if limits is None else [_on_grid(span, steps, *limits) for span in spans]
+            cuts = (_on_grid(span, steps, *limits) for span in spans)
             result[grant_id] = tuple(cut for cut in cuts if cut is not None)
         return result
+
+    def check_ranges(
+        self, ctx: EffectiveContext, resource_id: str
+    ) -> tuple[tuple[Decimal, Decimal], ...] | None:
+        """The ranges a reported target may lie in for ``climate.set_mode`` cool or heat (E7).
+
+        Unsnapped: a device's setpoint need not lie on the grid (design §4.1). With
+        ``climate.set_temperature`` granted and not denied: each grant interval's part inside
+        the device limits and every fence (a grant without a rule: the request schema range),
+        also while the resource cannot offer the action. Otherwise the fences cut to the
+        device limits, as one range. Neither grant nor fence: ``None``, no check. An empty
+        tuple lets no target pass.
+        """
+        action = Action.CLIMATE_SET_TEMPERATURE
+        resource = self.resource(resource_id)
+        if resource is None:
+            return None
+        denied = self.denied(ctx, resource_id, action)
+        grants = {} if denied else self.grants(ctx, resource_id, action)
+        fences = self.fences(ctx, resource_id, action)
+        bounds = [b for fence in fences if (b := fence.parameters.target_c) is not None]
+        if not grants and not bounds:
+            return None
+        limits = _limits("target_c", resource.capabilities)
+        if limits is None:
+            return ()
+        low, high = limits
+        for bound in bounds:
+            low, high = max(low, bound.min), min(high, bound.max)
+        if not grants:
+            return ((low, high),) if low <= high else ()
+        ranges: list[tuple[Decimal, Decimal]] = []
+        for grant in grants.values():
+            rule = grant.parameters.target_c
+            spans = [(low, high)] if rule is None else [(i.min, i.max) for i in rule.intervals]
+            ranges += [(max(a, low), min(b, high)) for a, b in spans]
+        return tuple(dict.fromkeys((a, b) for a, b in ranges if a <= b))
 
     def check_range(
         self, ctx: EffectiveContext, resource_id: str
     ) -> tuple[Decimal, Decimal] | None:
-        """The range the reported target must lie in for ``climate.set_mode`` cool or heat (E7).
+        """The hull of ``check_ranges``, for the expectation after the switch (E7).
 
-        With ``climate.set_temperature`` granted: the hull of its effective intervals. Without:
-        the applicable set_temperature fences cut to the device range. Neither: ``None``, no
-        check. ``low > high`` means that no target passes (fail closed).
+        ``None``: no check. ``low > high``: no target passes (fail closed).
         """
-        action = Action.CLIMATE_SET_TEMPERATURE
-        capability = self.effective_capability(ctx, resource_id, action)
-        if capability is not None:
-            if not capability.intervals:
-                return _NOTHING
-            return min(i.min for i in capability.intervals), max(
-                i.max for i in capability.intervals
-            )
-        resource = self.resource(resource_id)
-        fences = self.fences(ctx, resource_id, action)
-        bounds = [b for fence in fences if (b := fence.parameters.target_c) is not None]
-        if resource is None or not bounds:
+        ranges = self.check_ranges(ctx, resource_id)
+        if ranges is None:
             return None
-        limits = _limits("target_c", resource.capabilities)
-        if limits is None:
+        if not ranges:
             return _NOTHING
-        return max(limits[0], *(b.min for b in bounds)), min(limits[1], *(b.max for b in bounds))
+        return min(low for low, _ in ranges), max(high for _, high in ranges)
 
 
 def _offered(resource: ResourceRef, action: Action) -> bool:
@@ -252,11 +279,22 @@ def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
     return Interval(min=low, max=high, step=step)
 
 
-def _grid_steps(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, ...]:
-    """The steps from 0 every settable value lies on: the request schema's and the device's."""
+def _grid_steps(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, ...] | None:
+    """The steps from 0 every settable value lies on: the request schema's and the device's.
+
+    ``None`` for a device step that is no positive whole number of millionths below 1e6 (zero,
+    negative, too fine, not finite): such a device offers nothing, as with broken limits.
+    """
     schema_step = _SCHEMA[name][2]
     device_step = capabilities.target_c_step if name == "target_c" else None
-    return (schema_step,) if device_step is None else (schema_step, device_step)
+    if device_step is None:
+        return (schema_step,)
+    if not (device_step.is_finite() and 0 < device_step < _FAR):  # NaN raises when compared
+        return None
+    millionths = device_step.scaleb(6, _CONTEXT)
+    if millionths != millionths.to_integral_value(context=_CONTEXT):
+        return None
+    return schema_step, device_step
 
 
 def _limits(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, Decimal] | None:

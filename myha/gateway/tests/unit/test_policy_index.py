@@ -1147,3 +1147,61 @@ def test_the_capability_offers_nothing_the_device_or_its_review_rules_out() -> N
     assert light_capability(Action.STATE_READ, "needs_review") is not None
     assert light_capability(Action.LIGHT_ON, "needs_review") is None
     assert light_capability(Action.HISTORY_READ) is None
+
+
+def test_check_ranges_are_the_unsnapped_grant_parts_inside_device_and_fences() -> None:
+    # a device that restores 21.2 under a fence of 21.3 conforms: the range ends at 21.3
+    at_most = fence(parameters={"target_c": {"min": "0", "max": "21.3"}})
+    living = ctx(LIVING_BINDING, fences=(at_most,))
+    assert INDEX.check_ranges(living, "res_lr_ac") == ((Decimal(8), Decimal("21.3")),)
+    assert INDEX.check_ranges(ctx(STAY_BINDING), "res_203_trv") == (
+        (Decimal(18), Decimal(20)),
+        (Decimal(22), Decimal(24)),
+    )
+    gap = ctx(STAY_BINDING, fences=(fence(parameters={"target_c": {"min": "20.5", "max": "21"}}),))
+    assert INDEX.check_ranges(gap, "res_203_trv") == ()
+    broken = trv_index(ROOM_GUEST, climate(high="NaN"))
+    assert broken.check_ranges(ctx(STAY_BINDING), "res_203_trv") == ()
+
+
+def test_check_ranges_count_a_grant_the_device_cannot_offer_now() -> None:
+    review = replace(RESOURCES["res_203_trv"], status="needs_review")
+    rules = temperature_rule({"min": "19", "max": "24", "step": "0.5"})
+    index = PolicyIndex({("room_guest", 1): rules}, {review.id: review}, {"unit_203": {review.id}})
+    fenced = ctx(STAY_BINDING, fences=(fence(),))  # at most 22
+    assert index.effective_capability(fenced, review.id, Action.CLIMATE_SET_TEMPERATURE) is None
+    assert index.check_ranges(fenced, review.id) == ((Decimal(19), Decimal(22)),)  # not 8..22
+
+
+def test_a_denied_temperature_grant_leaves_the_check_to_the_fences() -> None:
+    grant = {
+        "resources": ["res_203_trv"],
+        "actions": ["climate.set_temperature"],
+        "parameters": target_c(("19", "24", "0.5")),
+    }
+    deny = {"resources": ["res_203_trv"], "actions": ["climate.set_temperature"]}
+    rules = RoleRules.model_validate({"grants": [grant], "denies": [deny]})
+    index = trv_index(rules, climate())
+    assert index.check_ranges(ctx(STAY_BINDING), "res_203_trv") is None
+    fenced = ctx(STAY_BINDING, fences=(fence(),))
+    assert index.check_ranges(fenced, "res_203_trv") == ((Decimal(8), Decimal(22)),)
+    below = ctx(STAY_BINDING, fences=(fence(parameters={"target_c": {"min": "0", "max": "5"}}),))
+    assert index.check_ranges(below, "res_203_trv") == ()  # the device starts at 8
+
+
+def test_check_range_is_the_hull_of_the_check_ranges() -> None:
+    fenced = ctx(
+        LIVING_BINDING, fences=(fence(parameters={"target_c": {"min": "0", "max": "21.3"}}),)
+    )
+    assert INDEX.check_range(fenced, "res_lr_ac") == (Decimal(8), Decimal("21.3"))
+
+
+@pytest.mark.parametrize("step", ["0", "-0.5", "0.0000001", "0.0000015", "NaN", "sNaN", "Infinity"])
+def test_a_broken_device_step_offers_nothing(step: str) -> None:
+    assert living_temperatures(climate(step=step)) == ()
+
+
+def test_a_joint_step_of_exactly_one_million_offers_nothing() -> None:
+    # 5^12 and 2^12 * 5^4 millionths meet the schema's tenths on exactly 10^12 millionths
+    rule = temperature_rule({"min": "-10", "max": "10", "step": "244.140625"})
+    assert trv_temperatures(rule, climate(low="-10", high="10", step="2.56")) == ()
