@@ -10,6 +10,8 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
+  timeout: 30_000, // per test
+  globalTimeout: 10 * 60_000, // the whole run, stack start included
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: PUBLIC_ORIGIN,
