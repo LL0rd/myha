@@ -37,7 +37,7 @@ async def test_info_sends_the_token_and_reads_the_version() -> None:
         return ok(data)(request)
 
     info = await client(handler).info()
-    assert info == SupervisorInfo("2026.10.3", "stable", "amd64", None, True)
+    assert info == SupervisorInfo("2026.10.3", "stable", "amd64", True)
     assert str(seen[0].url) == "http://supervisor/info"
     assert seen[0].headers["authorization"] == "Bearer sup-secret"
 
@@ -112,15 +112,15 @@ async def test_self_info_reads_ingress_entry() -> None:
         ("2026.11.0", "2026.10.3", True),
         ("2026.10", "2026.10.0", True),
         ("2026.10", "2026.10.1", False),
+        ("2026.11.0.dev20261101", "2026.10.3", True),  # dev channel
+        ("2026.10.0.dev20261001", "2026.10.3", False),
     ],
 )
 def test_is_at_least_compares_numerically(version: str, minimum: str, expected: bool) -> None:
-    assert SupervisorInfo(version, None, None, None, None).is_at_least(minimum) is expected
+    assert SupervisorInfo(version).is_at_least(minimum) is expected
 
 
-@pytest.mark.parametrize(
-    "version", ["garbage", "2026", "2026.10.0.dev1", "2026.x.1", "", "2026.10."]
-)
+@pytest.mark.parametrize("version", ["garbage", "2026", "2026.x.1", "", "dev.2026.10"])
 def test_unparsable_version_is_unavailable(version: str) -> None:
     with pytest.raises(SupervisorUnavailable, match="unparsable"):
-        SupervisorInfo(version, None, None, None, None).is_at_least("2026.10.3")
+        SupervisorInfo(version).is_at_least("2026.10.3")

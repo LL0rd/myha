@@ -70,13 +70,13 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
     ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-secret")
+    (ctx.settings.data_dir / "options.json").write_text("{}", encoding="utf-8")
     r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
     body = r.json()
     assert body["supervisor_info"] == {
         "version": "2026.10.3",
         "channel": "stable",
         "arch": "amd64",
-        "healthy": None,
         "supported": True,
     }
     assert body["host_info"] is None  # 403: the app has no hassio_api
@@ -84,6 +84,7 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
     assert "SUPERVISOR_TOKEN" in body["env_names"] and "sup-secret" not in r.text
     assert set(body["paths"]) == {"data_dir", "state_dir", "backup_dir", "web_dist"}
     assert body["paths"]["data_dir"] is True and body["paths"]["state_dir"] is False
+    assert body["data_entries"] == ["options.json"]  # names only
     assert datetime.fromisoformat(body["time"]).utcoffset() == timedelta(0)
 
 
@@ -125,6 +126,26 @@ async def test_probe_mode_startup_logs_evidence_and_writes_marker(
     else:  # dev without Supervisor: logged, startup goes on
         assert "probe: supervisor_info {'error': 'SupervisorUnavailable: GET /info" in caplog.text
     assert "argon2id t=4 m=8 KiB: " in caplog.text
+
+
+async def test_probe_mode_startup_survives_marker_and_argon2_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "options.json").write_text('{"probe_mode": true}', encoding="utf-8")
+    (tmp_path / "state").write_text("a file where the directory belongs", encoding="utf-8")
+    monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
+
+    def broken_argon2() -> list[Argon2Timing]:
+        raise MemoryError("argon2 needs more memory")
+
+    monkeypatch.setattr(probe, "measure_argon2", broken_argon2)
+    ctx = await AppContext.create()
+    ctx.supervisor = fake_supervisor()
+    app = create_admin_app(ctx)
+    async with app.router.lifespan_context(app):
+        pass  # reached: the app starts despite both failures
+    assert "probe: marker not written" in caplog.text and "FileExistsError" in caplog.text
+    assert "probe: argon2id timing failed" in caplog.text and "MemoryError" in caplog.text
 
 
 async def test_admin_startup_without_probe_mode_leaves_no_marker(

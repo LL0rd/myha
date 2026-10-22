@@ -1,5 +1,6 @@
 """Supervisor REST client: version gate, host time source and the app's own ingress data."""
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,21 +16,24 @@ class SupervisorUnavailable(Exception):
         self.status = status
 
 
-def _version(text: str) -> tuple[int, ...]:
-    """``YYYY.MM.P`` as a tuple of three ints; a missing patch counts as 0."""
-    parts = text.split(".")
-    if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
+def _version(text: str) -> tuple[int, int, int]:
+    """Leading ``YYYY.MM.P`` as ints; a missing patch counts as 0.
+
+    Suffixes such as ``.dev20261101`` are ignored, so a dev-channel build can meet the minimum.
+    """
+    match = re.match(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", text)
+    if match is None:
         raise SupervisorUnavailable(f"unparsable Supervisor version {text!r}")
-    return tuple(int(part) for part in parts) + (0,) * (3 - len(parts))
+    year, month, patch = match.groups()
+    return int(year), int(month), int(patch or 0)
 
 
 @dataclass(frozen=True)
 class SupervisorInfo:
     version: str
-    channel: str | None
-    arch: str | None
-    healthy: bool | None  # only /supervisor/info has it, which needs hassio_api
-    supported: bool | None
+    channel: str | None = None
+    arch: str | None = None
+    supported: bool | None = None
 
     def is_at_least(self, minimum: str) -> bool:
         """Numeric comparison, so 2026.9.9 is older than 2026.10.0."""
@@ -38,16 +42,16 @@ class SupervisorInfo:
 
 @dataclass(frozen=True)
 class HostInfo:
-    dt_synchronized: bool | None
-    operating_system: str | None
+    dt_synchronized: bool | None = None
+    operating_system: str | None = None
 
 
 @dataclass(frozen=True)
 class AddonSelfInfo:
-    name: str | None
-    version: str | None
-    ingress_entry: str | None
-    ingress_url: str | None
+    name: str | None = None
+    version: str | None = None
+    ingress_entry: str | None = None
+    ingress_url: str | None = None
 
 
 class SupervisorClient:
@@ -57,7 +61,6 @@ class SupervisorClient:
         self,
         base_url: str,
         token: SecretStr | None,
-        *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url
@@ -91,11 +94,7 @@ class SupervisorClient:
         if not isinstance(data.get("supervisor"), str):
             raise SupervisorUnavailable("GET /info: no Supervisor version")
         return SupervisorInfo(
-            data["supervisor"],
-            data.get("channel"),
-            data.get("arch"),
-            data.get("healthy"),
-            data.get("supported"),
+            data["supervisor"], data.get("channel"), data.get("arch"), data.get("supported")
         )
 
     async def host_info(self) -> HostInfo | None:

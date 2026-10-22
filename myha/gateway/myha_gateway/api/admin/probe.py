@@ -33,12 +33,14 @@ async def _outcome(call: Awaitable[Any]) -> dict[str, Any] | None:
 async def details(ctx: AppContext) -> dict[str, Any]:
     """Supervisor answers, environment variable names (never values) and data paths."""
     supervisor = ctx.supervisor
+    data_dir = ctx.settings.data_dir
     return {
         "supervisor_info": await _outcome(supervisor.info()),
         "host_info": await _outcome(supervisor.host_info()),
         "self_info": await _outcome(supervisor.self_info()),
         "env_names": sorted(os.environ),
         "paths": {name: getattr(ctx.settings, name).exists() for name in _PATHS},
+        "data_entries": sorted(p.name for p in data_dir.iterdir()) if data_dir.is_dir() else None,
         "time": datetime.now(UTC).isoformat(),
     }
 
@@ -62,11 +64,18 @@ async def log_startup(ctx: AppContext) -> None:
     host_info = await _outcome(supervisor.host_info())
     logger.info("probe: host_info %s", "not permitted" if host_info is None else host_info)
     logger.info("probe: self_info %s", await _outcome(supervisor.self_info()))
-    # Must be missing from backups: proves that backup_exclude keeps state/ out.
-    marker = ctx.settings.state_dir / "probe-live.marker"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f"{datetime.now(UTC).isoformat()}\n", encoding="utf-8")
-    logger.info("probe: wrote %s", marker)
-    # In a thread: about 27 hashes of up to 64 MiB would block the event loop for seconds.
-    table = format_table(await asyncio.to_thread(measure_argon2))
-    logger.info("probe: argon2id timing, median of 3 runs, parallelism 1\n%s", table)
+    # Each step logs its own failure (read-only /data, too little memory); startup goes on.
+    try:
+        # Must be missing from backups: proves that backup_exclude keeps state/ out.
+        marker = ctx.settings.state_dir / "probe-live.marker"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f"{datetime.now(UTC).isoformat()}\n", encoding="utf-8")
+        logger.info("probe: wrote %s", marker)
+    except Exception:
+        logger.exception("probe: marker not written")
+    try:
+        # In a thread: about 27 hashes of up to 64 MiB would block the event loop for seconds.
+        table = format_table(await asyncio.to_thread(measure_argon2))
+        logger.info("probe: argon2id timing, median of 3 runs, parallelism 1\n%s", table)
+    except Exception:
+        logger.exception("probe: argon2id timing failed")
