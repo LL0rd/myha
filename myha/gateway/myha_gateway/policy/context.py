@@ -221,11 +221,12 @@ def _guest_context(
 
 
 def _capped(bindings: Iterable[RoleBinding], session: db.Session | None) -> tuple[RoleBinding, ...]:
-    """Distinct bindings, cut to the session's units when it names any (an empty list: no cap).
+    """Distinct bindings, cut to the session's units: ``None`` sets no cap, a list (also an
+    empty one) is exactly the units in scope.
 
     A binding cut to no unit stays: it grants nothing, but its denies still apply.
     """
-    cap = frozenset(session.unit_ids) if session is not None and session.unit_ids else None
+    cap = None if session is None or session.unit_ids is None else frozenset(session.unit_ids)
     return tuple(
         dict.fromkeys(b if cap is None else replace(b, unit_ids=b.unit_ids & cap) for b in bindings)
     )

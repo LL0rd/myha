@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Literal, get_args
 
 from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities
+from myha_gateway.adapters.climate import DEFAULT_STEP
 from myha_gateway.policy.codes import DecisionCode
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.model import Bound, Fence, Grant, Interval, Mode, RoleRules, parameter_name
@@ -19,11 +20,10 @@ _SCHEMA: Mapping[str, tuple[Decimal, Decimal, Decimal]] = {
     "position_pct": (Decimal(0), Decimal(100), Decimal(1)),
     "target_c": (Decimal("-99.9"), Decimal("99.9"), Decimal("0.1")),
 }
-_HALF, _CENT = Decimal("0.5"), Decimal("0.01")
+_CENT = Decimal("0.01")
 _FAR = 1_000_000  # rule decimals have at most six integer digits ...
 _MICRO = 1_000_000  # ... and six decimals, so each is a whole number of millionths
 _CONTEXT = Context(prec=28)  # independent of the caller's decimal context
-_NOTHING = (Decimal(1), Decimal(0))  # an empty check range: low > high, no target passes
 _ENDS: Mapping[Action, Decimal] = {Action.COVER_OPEN: Decimal(100), Action.COVER_CLOSE: Decimal(0)}
 
 
@@ -59,6 +59,7 @@ class PolicyIndex:
     role_versions: Mapping[tuple[str, int], RoleRules]
     resources: Mapping[str, ResourceRef]
     units: Mapping[str, frozenset[str]]  # unit_id -> resource ids
+    policy_version: int  # decide() refuses a context of another version
 
     def __post_init__(self) -> None:
         # read-only copies: the caller's mappings may change later, the index never does
@@ -68,6 +69,8 @@ class PolicyIndex:
         object.__setattr__(self, "units", units)
         if any(key != ref.id for key, ref in self.resources.items()):
             raise ValueError("a resource is filed under another id")
+        if any(ref.kind != ref.capabilities.kind for ref in self.resources.values()):
+            raise ValueError("a resource's kind differs from its capabilities' kind")
         listed = {(unit, resource_id) for unit, ids in units.items() for resource_id in ids}
         if listed != {(ref.unit_id, ref.id) for ref in self.resources.values()}:
             raise ValueError("units must list every resource under its own unit and nothing else")
@@ -275,20 +278,6 @@ class PolicyIndex:
             return DecisionCode.FENCE_VIOLATION
         return None
 
-    def check_range(
-        self, ctx: EffectiveContext, resource_id: str
-    ) -> tuple[Decimal, Decimal] | None:
-        """The hull of ``check_ranges``, for the expectation after the switch (E7).
-
-        ``None``: no check. ``low > high``: no target passes (fail closed).
-        """
-        ranges = self.check_ranges(ctx, resource_id)
-        if ranges is None:
-            return None
-        if not ranges:
-            return _NOTHING
-        return min(low for low, _ in ranges), max(high for _, high in ranges)
-
 
 def _cut(
     grants: Mapping[str, Grant], name: str, low: Decimal, high: Decimal
@@ -316,7 +305,7 @@ def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
     """A grant without a rule for ``name``: all the request schema accepts, before the grid."""
     low, high, step = _SCHEMA[name]
     if name == "target_c" and capabilities.target_c_step is None:
-        step = _HALF  # the Home Assistant frontend's step for a device that names none
+        step = DEFAULT_STEP  # the Home Assistant frontend's step for a device that names none
     return Interval(min=low, max=high, step=step)
 
 

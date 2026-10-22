@@ -504,7 +504,8 @@ def test_granted_but_nothing_admissible_is_out_of_range_or_fenced_never_no_grant
     resources = {"res_lr_ac": replace(climate, capabilities=huge)}
     both = grant("res_lr_ac", "climate.set_temperature", "climate.set_mode")
     rules = RoleRules.model_validate({"grants": [both]})
-    beyond = PolicyIndex({("room_guest", 1): rules}, resources, {"unit_lr": frozenset(resources)})
+    units = {"unit_lr": frozenset(resources)}
+    beyond = PolicyIndex({("room_guest", 1): rules}, resources, units, policy_version=1)
     ctx = resident_context()
     # a device limit beyond the rule format: the index offers nothing (fail closed)
     capability = beyond.effective_capability(ctx, "res_lr_ac", Action.CLIMATE_SET_TEMPERATURE)

@@ -226,7 +226,7 @@ def room203_index(
         for res_id in members
     }
     units = {unit_id: frozenset(members) for unit_id, members in UNITS.items()}
-    return PolicyIndex({("room_guest", 1): rules}, resources, units)
+    return PolicyIndex({("room_guest", 1): rules}, resources, units, policy_version=1)
 
 
 # The stay of spec §7 in room 203.

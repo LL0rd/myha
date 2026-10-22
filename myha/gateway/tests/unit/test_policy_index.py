@@ -47,7 +47,7 @@ def session(
         "not_before": None,
         "not_after": NOW + 30 * DAY,
         "revoked_at": None,
-        "unit_ids": [],
+        "unit_ids": None,  # no cap
     }
     return db.Session(**(base | fields))
 
@@ -205,7 +205,7 @@ def test_identical_assignments_give_one_binding() -> None:
     assert ctx.role_bindings == (RoleBinding("family", 1, frozenset({"unit_203"})),)
 
 
-def test_session_units_cap_every_binding_and_an_empty_list_sets_no_cap() -> None:
+def test_session_units_cap_every_binding_and_none_sets_no_cap() -> None:
     assignments = [
         assignment("prn_res", "family", ["unit_203", "unit_lr"]),
         assignment("grp_family", "family", ["unit_203"], group=True),
@@ -221,6 +221,9 @@ def test_session_units_cap_every_binding_and_an_empty_list_sets_no_cap() -> None
     assert not INDEX.in_scope(capped, "res_lr_ac")
     uncapped = for_session(session(), principal(), **rows)
     assert INDEX.in_scope(uncapped, "res_lr_ac")
+    nothing = for_session(session(unit_ids=[]), principal(), **rows)  # an empty cap: no unit
+    assert all(not binding.unit_ids for binding in nothing.role_bindings)
+    assert not INDEX.in_scope(nothing, "res_203_trv")
     preview = build_context_for_preview(
         {"principal_id": "prn_res", "session_id": "ses_1"},
         principal=principal(),
@@ -241,7 +244,7 @@ def test_a_session_cap_keeps_the_denies_of_the_bindings_it_empties() -> None:
     deny = assignment("prn_res", "living", ["unit_lr"], version=3)
     granted = for_session(session(unit_ids=["unit_203"]), principal(), assignments=[grant])
     assert INDEX.effective_capability(granted, "res_203_light", Action.LIGHT_SET_LEVEL)
-    for unit_ids in ([], ["unit_203"]):
+    for unit_ids in (None, ["unit_203"]):
         both = for_session(session(unit_ids=unit_ids), principal(), assignments=[grant, deny])
         assert INDEX.effective_capability(both, "res_203_light", Action.LIGHT_SET_LEVEL) is None
     no_units = assignment("prn_res", "living", [], version=3)
@@ -569,6 +572,14 @@ def test_preview_rows_must_match_the_target(target: dict[str, str], rows: dict[s
 # --- policy index ---
 
 
+def index_of(
+    role_versions: dict[tuple[str, int], RoleRules],
+    resources: dict[str, ResourceRef],
+    units: dict[str, Any],
+) -> PolicyIndex:
+    return PolicyIndex(role_versions, resources, units, policy_version=7)
+
+
 def climate(
     confirmed_modes: frozenset[str] = frozenset({"off", "heat"}),
     low: str | None = "8",
@@ -650,7 +661,7 @@ LIVING = RoleRules.model_validate(
         "denies": [{"resources": ["res_203_light"], "actions": ["light.set_level"]}],
     }
 )
-INDEX = PolicyIndex({("room_guest", 1): ROOM_GUEST, ("living", 3): LIVING}, RESOURCES, UNITS)
+INDEX = index_of({("room_guest", 1): ROOM_GUEST, ("living", 3): LIVING}, RESOURCES, UNITS)
 LIVING_BINDING = RoleBinding("living", 3, frozenset({"unit_lr"}))
 
 
@@ -750,7 +761,7 @@ def living_temperatures(
 ) -> tuple[Interval, ...]:
     """LIVING's set_temperature grants on res_lr_ac: one without rule, one 5-40 in steps of 1."""
     ref = replace(RESOURCES["res_lr_ac"], capabilities=capabilities)
-    index = PolicyIndex({("living", 3): LIVING}, {ref.id: ref}, {"unit_lr": frozenset({ref.id})})
+    index = index_of({("living", 3): LIVING}, {ref.id: ref}, {"unit_lr": frozenset({ref.id})})
     capability = index.effective_capability(
         ctx(LIVING_BINDING, fences=fences), ref.id, Action.CLIMATE_SET_TEMPERATURE
     )
@@ -831,7 +842,7 @@ def test_grant_intervals_cut_each_grant_to_the_device_but_not_to_fences() -> Non
         "living@3:1": (interval("8", "30", "1"),),
     }
     beyond = replace(RESOURCES["res_lr_ac"], capabilities=climate(high="1E+40"))
-    index = PolicyIndex(
+    index = index_of(
         {("living", 3): LIVING}, {beyond.id: beyond}, {"unit_lr": frozenset({beyond.id})}
     )
     # granted, but nothing admissible: every grant stays, without an interval
@@ -853,7 +864,7 @@ def temperature_rule(*intervals: dict[str, str]) -> RoleRules:
 def trv_index(rules: RoleRules, capabilities: DeviceCapabilities) -> PolicyIndex:
     """``rules`` as room_guest@1 with res_203_trv reporting ``capabilities``."""
     ref = replace(RESOURCES["res_203_trv"], capabilities=capabilities)
-    return PolicyIndex({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": frozenset({ref.id})})
+    return index_of({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": frozenset({ref.id})})
 
 
 def trv_temperatures(
@@ -928,28 +939,26 @@ def test_grant_intervals_are_snapped_but_not_fenced() -> None:
     }
 
 
-def test_check_range_is_the_hull_of_the_effective_temperatures() -> None:
-    assert INDEX.check_range(ctx(STAY_BINDING), "res_203_trv") == (Decimal(18), Decimal(24))
+def test_check_ranges_cut_each_temperature_grant_to_the_fences() -> None:
     fenced = ctx(STAY_BINDING, fences=(fence(),))
-    assert INDEX.check_range(fenced, "res_203_trv") == (Decimal(18), Decimal(22))
-    gap = fence(parameters={"target_c": {"min": "20.5", "max": "21"}})
-    nothing = INDEX.check_range(ctx(STAY_BINDING, fences=(gap,)), "res_203_trv")
-    assert nothing is not None and nothing[0] > nothing[1]  # granted, but no target passes
+    assert INDEX.check_ranges(fenced, "res_203_trv") == (
+        (Decimal(18), Decimal(20)),
+        (Decimal(22), Decimal(22)),
+    )
 
 
-def test_check_range_without_a_temperature_grant_is_its_fences_cut_to_the_device() -> None:
+def test_check_ranges_without_a_temperature_grant_are_its_fences_cut_to_the_device() -> None:
     modes_only = RoleBinding("room_guest", 1, frozenset({"unit_lr"}))  # set_mode on res_lr_ac
-    assert INDEX.check_range(ctx(modes_only), "res_lr_ac") is None  # neither grant nor fence
+    assert INDEX.check_ranges(ctx(modes_only), "res_lr_ac") is None  # neither grant nor fence
     fenced = ctx(modes_only, fences=(fence(),))
-    assert INDEX.check_range(fenced, "res_lr_ac") == (Decimal(8), Decimal(22))
+    assert INDEX.check_ranges(fenced, "res_lr_ac") == ((Decimal(8), Decimal(22)),)
     raw = replace(RESOURCES["res_lr_ac"], capabilities=climate(low="7.123456789", high="21.987"))
-    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {raw.id: raw}, {"unit_lr": {raw.id}})
-    assert index.check_range(fenced, raw.id) == (Decimal("7.13"), Decimal("21.98"))
+    index = index_of({("room_guest", 1): ROOM_GUEST}, {raw.id: raw}, {"unit_lr": {raw.id}})
+    assert index.check_ranges(fenced, raw.id) == ((Decimal("7.13"), Decimal("21.98")),)
     beyond = replace(raw, capabilities=climate(high="1E+40"))
-    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {raw.id: beyond}, {"unit_lr": {raw.id}})
-    closed = index.check_range(fenced, raw.id)
-    assert closed is not None and closed[0] > closed[1]  # a limit beyond the format: fail closed
-    assert INDEX.check_range(fenced, "res_unknown") is None
+    index = index_of({("room_guest", 1): ROOM_GUEST}, {raw.id: beyond}, {"unit_lr": {raw.id}})
+    assert index.check_ranges(fenced, raw.id) == ()  # a limit beyond the format: fail closed
+    assert INDEX.check_ranges(fenced, "res_unknown") is None
 
 
 def test_fences_reach_only_their_own_action() -> None:
@@ -982,7 +991,7 @@ def test_percent_rules_are_clipped_to_zero_to_hundred() -> None:
             ]
         }
     )
-    index = PolicyIndex({("room_guest", 1): rules}, RESOURCES, UNITS)
+    index = index_of({("room_guest", 1): rules}, RESOURCES, UNITS)
     capability = index.effective_capability(
         ctx(STAY_BINDING), "res_203_light", Action.LIGHT_SET_LEVEL
     )
@@ -1115,11 +1124,11 @@ def test_resources_and_units_must_agree(
     resources: dict[str, ResourceRef], units: dict[str, frozenset[str]]
 ) -> None:
     with pytest.raises(ValueError):
-        PolicyIndex({}, resources, units)
+        index_of({}, resources, units)
 
 
 def test_a_unit_without_resources_is_fine() -> None:
-    index = PolicyIndex({}, {}, {"unit_empty": frozenset()})
+    index = index_of({}, {}, {"unit_empty": frozenset()})
     assert index.units == {"unit_empty": frozenset()}
 
 
@@ -1131,7 +1140,7 @@ def light_capability(
         "actions": ["state.read", "history.read", "light.on", "light.set_level"],
     }
     ref = ResourceRef("res_203_light", "unit_203", "light", status, capabilities)  # type: ignore[arg-type]
-    index = PolicyIndex(
+    index = index_of(
         {("room_guest", 1): RoleRules.model_validate({"grants": [grant]})},
         {ref.id: ref},
         {"unit_203": frozenset({ref.id})},
@@ -1172,7 +1181,7 @@ def test_check_ranges_are_the_unsnapped_grant_parts_inside_device_and_fences() -
 def test_check_ranges_count_a_grant_the_device_cannot_offer_now() -> None:
     review = replace(RESOURCES["res_203_trv"], status="needs_review")
     rules = temperature_rule({"min": "19", "max": "24", "step": "0.5"})
-    index = PolicyIndex({("room_guest", 1): rules}, {review.id: review}, {"unit_203": {review.id}})
+    index = index_of({("room_guest", 1): rules}, {review.id: review}, {"unit_203": {review.id}})
     fenced = ctx(STAY_BINDING, fences=(fence(),))  # at most 22
     assert index.effective_capability(fenced, review.id, Action.CLIMATE_SET_TEMPERATURE) is None
     assert index.check_ranges(fenced, review.id) == ((Decimal(19), Decimal(22)),)  # not 8..22
@@ -1193,13 +1202,6 @@ def test_a_deny_on_set_temperature_never_widens_the_check() -> None:
     assert index.check_ranges(fenced, "res_203_trv") == ((Decimal(19), Decimal(22)),)
     below = ctx(STAY_BINDING, fences=(fence(parameters={"target_c": {"min": "0", "max": "5"}}),))
     assert index.check_ranges(below, "res_203_trv") == ()  # the grant starts at 19
-
-
-def test_check_range_is_the_hull_of_the_check_ranges() -> None:
-    fenced = ctx(
-        LIVING_BINDING, fences=(fence(parameters={"target_c": {"min": "0", "max": "21.3"}}),)
-    )
-    assert INDEX.check_range(fenced, "res_lr_ac") == (Decimal(8), Decimal("21.3"))
 
 
 @pytest.mark.parametrize("step", ["0", "-0.5", "0.0000001", "0.0000015", "NaN", "sNaN", "Infinity"])
@@ -1225,7 +1227,7 @@ def test_check_ranges_write_device_limits_plainly(low: str, high: str, written: 
     modes_only = RoleBinding("room_guest", 1, frozenset({"unit_lr"}))  # set_mode on res_lr_ac
     wide = ctx(modes_only, fences=(fence(parameters={"target_c": {"min": "0", "max": "50"}}),))
     ref = replace(RESOURCES["res_lr_ac"], capabilities=climate(low=low, high=high))
-    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {ref.id: ref}, {"unit_lr": {ref.id}})
+    index = index_of({("room_guest", 1): ROOM_GUEST}, {ref.id: ref}, {"unit_lr": {ref.id}})
     ranges = index.check_ranges(wide, ref.id)
     assert ranges is not None and [str(limit) for limit in ranges[0]] == written
 
@@ -1250,7 +1252,7 @@ def positions(*ranges: tuple[str, str, str]) -> dict[str, Any]:
 def blind_index(*grants: dict[str, Any], denies: tuple[dict[str, Any], ...] = ()) -> PolicyIndex:
     ref = ResourceRef(BLIND, "unit_203", "cover", "confirmed", COVER)
     rules = RoleRules.model_validate({"grants": [OPEN_CLOSE, *grants], "denies": list(denies)})
-    return PolicyIndex({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": {ref.id}})
+    return index_of({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": {ref.id}})
 
 
 def position_fence(low: str, high: str) -> dict[str, Any]:
@@ -1326,3 +1328,15 @@ def test_the_capability_offers_no_end_its_check_refuses() -> None:
     assert index.effective_capability(context, BLIND, Action.COVER_CLOSE) == EffectiveCapability(
         matched=("room_guest@1:0",)
     )
+
+
+def test_the_index_carries_its_policy_version() -> None:
+    assert INDEX.policy_version == 7
+    with pytest.raises(TypeError):
+        PolicyIndex({}, {}, {})  # type: ignore[call-arg]
+
+
+def test_a_resource_kind_must_match_its_capabilities() -> None:
+    odd = replace(RESOURCES["res_203_trv"], kind="light")
+    with pytest.raises(ValueError, match="kind"):
+        index_of({}, {odd.id: odd}, {"unit_203": {odd.id}})

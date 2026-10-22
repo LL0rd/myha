@@ -279,7 +279,7 @@ def upgrade() -> None:
         sa.Column("audience", sa.String(), nullable=False),
         sa.Column("purpose", sa.String(), nullable=False),
         sa.Column("stay_id", sa.String(), nullable=True),
-        sa.Column("unit_ids", sa.JSON(none_as_null=True), nullable=False),
+        sa.Column("unit_ids", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("not_before", sa.String(), nullable=True),
         sa.Column("not_after", sa.String(), nullable=False),
         sa.Column("last_seen_at", sa.String(), nullable=False),

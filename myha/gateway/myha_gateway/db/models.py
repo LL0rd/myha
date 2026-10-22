@@ -237,7 +237,7 @@ class Session(Base):
     audience: Mapped[str]  # browser | native
     purpose: Mapped[str]  # access | preview | pairing | test
     stay_id: Mapped[str | None] = mapped_column(ForeignKey("stay.id"), index=True)
-    unit_ids: Mapped[list[str]]
+    unit_ids: Mapped[list[str] | None]  # scope cap: None none, a list exactly these units
     not_before: Mapped[datetime | None]
     not_after: Mapped[datetime]
     last_seen_at: Mapped[datetime]
