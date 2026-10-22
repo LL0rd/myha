@@ -62,12 +62,12 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("startup aborted: database %s is not usable", ctx.settings.db_path)
         await ctx.close()
         raise RuntimeError("database not usable") from None  # uvicorn logs this short copy
-    if ctx.settings.probe_mode:
-        await probe.log_startup(ctx)
-    await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
     try:
+        if ctx.settings.probe_mode:
+            await probe.log_startup(ctx)
+        await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
         yield
-    finally:
+    finally:  # also after an aborted startup; stop() tolerates a client that never started
         await ctx.ha.stop()
         await ctx.close()
 

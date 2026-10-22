@@ -321,7 +321,7 @@ class AuditEvent(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     ts: Mapped[datetime] = mapped_column(index=True)
     actor: Mapped[str]
-    effective_principal: Mapped[str | None]  # None for anonymous events
+    effective_principal: Mapped[str | None]  # NULL: an event without a principal
     session_id: Mapped[str | None]
     operation: Mapped[str]
     result: Mapped[str]
