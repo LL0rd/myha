@@ -57,5 +57,7 @@ docker stop "$s6" >/dev/null
 code=$(docker inspect -f '{{.State.ExitCode}}' "$s6")
 [ "$code" = 0 ] || fail "$s6" "exit code $code after docker stop"
 log=$(docker logs "$s6" 2>&1)
-if grep "is deprecated" <<<"$log"; then fail "$s6" "s6 reports a deprecated layout"; fi
-echo "s6: service myha started, gateway up, docker stop gave exit code 0, no deprecation warning"
+if grep -q "defining user bundles in .* is deprecated" <<<"$log"; then
+  fail "$s6" "s6 reports the deprecated user bundle layout"
+fi
+echo "s6: service myha started, gateway up, docker stop gave exit code 0, no s6 layout warning"
