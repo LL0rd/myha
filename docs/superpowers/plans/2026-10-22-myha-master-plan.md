@@ -44,6 +44,7 @@ myHA ist ein Produkt für beliebige Betreiber und wird öffentlich vertrieben: d
 - **Keine Geheimnisse im Repo:** `.env`, `.dev/`, Token-Dateien sind ignoriert. `scripts/install-on-ha.py` ist generisch und liest `HA_URL` und `HA_TOKEN` aus der Umgebung; Fable setzt sie lokal aus der ungetrackten Datei `.dev/ha.env`. Kein Skript gibt Tokens aus.
 - **Commit-Trailer:** Jeder Commit endet mit dem `Co-Authored-By`-Trailer des Modells, das ihn erstellt hat (Opus-Subagenten: `Claude Opus 5.5 <noreply@anthropic.com>`, Fable: `Claude Fable 5.1 <noreply@anthropic.com>`).
 - **Dokumentation:** README und `docs/*.md` englisch; `docs/s0-report.md` enthält die S0-Ergebnisse.
+- **Migrationen:** Bis zur ersten echten Installation darf `0001_initial` in place geändert werden (lokale `.dev/data` dann löschen); ab der ersten Installation auf einer realen HA-Instanz (Teilplan 3, WP13) ist jede Schemaänderung eine neue Alembic-Revision, nie eine Änderung an einer ausgelieferten.
 - **Secrets und IDs:** Produkt-IDs `unit_<12 hex>`, `res_<12 hex>`, `stay_<12 hex>`, `inv_<12 hex>`, `sess_<12 hex>`, `cmd_<12 hex>`; Secrets 32 Byte aus `secrets.token_bytes`, base64url ohne Padding; gespeichert nur als SHA-256-Hex.
 
 ## Gates zwischen den Teilplänen
