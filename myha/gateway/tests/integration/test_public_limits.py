@@ -185,6 +185,15 @@ async def test_silent_connection_is_closed_at_the_deadline(port: int) -> None:
     assert within_deadline(started)
 
 
+def answer_length(answer: bytes) -> int:
+    """Length of the response whose head ``answer`` contains; the head only if its body runs
+    until the close (uvicorn's 400), which the raw read below TLS then discards."""
+    head, _, _ = answer.partition(b"\r\n\r\n")
+    lines = head.decode().lower().split("\r\n")
+    lengths = [int(line.split(":")[1]) for line in lines if line.startswith("content-length")]
+    return len(head) + 4 + sum(lengths)
+
+
 def tls_close_seconds(port: int, request: bytes = b"") -> float:
     """Seconds until the server drops a TLS connection after ``request`` and its answer.
 
@@ -203,9 +212,11 @@ def tls_close_seconds(port: int, request: bytes = b"") -> float:
         if request:
             tls.sendall(request)
             answer = b""
-            while not answer.endswith(b"}"):  # the JSON body of /healthz
-                answer += tls.recv(65536)
-            started = time.monotonic()  # from here on the connection is idle
+            while b"\r\n\r\n" not in answer or len(answer) < answer_length(answer):
+                data = tls.recv(65536)
+                if not data:
+                    raise AssertionError("closed before the answer")
+                answer += data
         raw.settimeout(10)
         with contextlib.suppress(ConnectionResetError):
             while raw.recv(65536):
@@ -213,12 +224,22 @@ def tls_close_seconds(port: int, request: bytes = b"") -> float:
     return time.monotonic() - started
 
 
+# A server-side close after an exception mid-response is an app bug and not covered here.
 @pytest.mark.parametrize("port", ["https"], indirect=True)
-async def test_tls_connection_is_dropped_at_the_deadline_without_close_notify_wait(
-    port: int,
+@pytest.mark.parametrize(
+    "request_bytes",
+    [
+        b"",  # silent: the request deadline
+        b"BROKEN\r\n\r\n",  # uvicorn answers 400 and closes
+        b"GET /healthz HTTP/1.1\r\nHost: testserver\r\nConnection: close\r\n\r\n",
+    ],
+    ids=["silent", "400", "connection-close"],
+)
+async def test_silent_tls_client_is_dropped_without_close_notify_wait(
+    port: int, request_bytes: bytes
 ) -> None:
-    seconds = await asyncio.to_thread(tls_close_seconds, port)
-    assert DEADLINE <= seconds < DEADLINE + SLACK
+    seconds = await asyncio.to_thread(tls_close_seconds, port, request_bytes)
+    assert DEADLINE <= seconds < DEADLINE + SLACK  # a server-side close waits one deadline
 
 
 @pytest.mark.parametrize("port", ["https"], indirect=True)
@@ -231,12 +252,12 @@ async def test_idle_tls_keep_alive_is_dropped_without_close_notify_wait(
     assert 5 <= seconds < 5 + SLACK  # uvicorn's keep-alive timeout of _server
 
 
-async def test_deadline_rearms_for_the_next_request_on_a_kept_alive_connection(port: int) -> None:
+async def test_deadline_runs_again_from_the_end_of_the_previous_response(port: int) -> None:
     get = b"GET /healthz HTTP/1.1\r\nHost: testserver\r\n\r\n"
+    started = time.monotonic()  # earlier than the deadline's start: the lower bound holds
     async with connect(port) as (reader, writer):
         writer.write(get)
         assert (await response(reader))[0] == 200
-        started = time.monotonic()
         writer.write(get[:10])  # the next head starts, but never ends
         assert await closed_by_server(reader)
     assert within_deadline(started)

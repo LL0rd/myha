@@ -65,9 +65,11 @@ class RequestDeadlineProtocol(H11Protocol):
     The deadline starts when the connection opens and when a kept-alive one waits for its
     next request (uvicorn's shorter keep-alive timeout usually ends that wait first); it ends
     once h11 has the whole request, head and body (with the body cap, 10 s is ample), or once
-    the connection became a WebSocket. Data arriving in between does
-    not extend it. Expiry aborts the transport: a graceful TLS close would wait up to 30 s for
-    the client's close_notify. uvicorn's keep-alive timeout aborts the same way.
+    the connection became a WebSocket. Data arriving in between does not extend it. Expiry
+    aborts the transport: a graceful TLS close would wait up to 30 s for the client's
+    close_notify. uvicorn's keep-alive timeout aborts the same way, and when the server closes
+    by itself (400, ``Connection: close``, the 413), the transport is aborted one
+    ``request_timeout`` later, which leaves a slow reader time for the last response.
 
     TLS connections stuck in the handshake never reach ``connection_made``: they count neither
     here nor against ``limit_concurrency``, but hold a descriptor until asyncio's 60 s
@@ -76,6 +78,7 @@ class RequestDeadlineProtocol(H11Protocol):
 
     request_timeout = 10.0  # seconds
     _deadline: asyncio.TimerHandle | None = None
+    _abort: asyncio.TimerHandle | None = None  # after a close by the server itself
 
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         super().connection_made(transport)
@@ -85,13 +88,22 @@ class RequestDeadlineProtocol(H11Protocol):
         # Runs for new data and after each response (pipelined requests), so it sees every
         # change of their_state.
         super().handle_events()
-        if self.transport.get_protocol() is not self or self.conn.their_state not in _PENDING:
+        if self.transport.is_closing():  # e.g. uvicorn's 400 for a malformed request
+            self._abort_later()
+        elif self.transport.get_protocol() is not self or self.conn.their_state not in _PENDING:
             self._cancel()  # after a WebSocket upgrade, connection_lost no longer reaches us
         elif self.conn.their_state is h11.IDLE and self._deadline is None:
             self._deadline = self.loop.call_later(self.request_timeout, self._expired)
 
+    def on_response_complete(self) -> None:
+        super().on_response_complete()
+        if self.transport.is_closing():  # Connection: close, from the app or the body cap
+            self._abort_later()
+
     def connection_lost(self, exc: Exception | None) -> None:
         self._cancel()
+        if self._abort is not None:
+            self._abort.cancel()
         super().connection_lost(exc)
 
     def timeout_keep_alive_handler(self) -> None:
@@ -103,6 +115,11 @@ class RequestDeadlineProtocol(H11Protocol):
         if self._deadline is not None:
             self._deadline.cancel()
             self._deadline = None
+
+    def _abort_later(self) -> None:
+        self._cancel()
+        if self._abort is None:
+            self._abort = self.loop.call_later(self.request_timeout, self.transport.abort)
 
     def _expired(self) -> None:
         self._deadline = None
