@@ -16,16 +16,17 @@ class SupervisorUnavailable(Exception):
         self.status = status
 
 
-def _version(text: str) -> tuple[int, int, int]:
-    """Leading ``YYYY.MM.P`` as ints; a missing patch counts as 0.
+def _version(text: str) -> tuple[int, int, int, int]:
+    """Leading ``YYYY.MM.P`` as ints (a missing patch counts as 0), then 0 for a dev build.
 
-    Suffixes such as ``.dev20261101`` are ignored, so a dev-channel build can meet the minimum.
+    As in PEP 440, ``2026.10.3.dev2108`` orders below 2026.10.3: dev builds of a release
+    predate it and may lack what the minimum version stands for. Other suffixes are ignored.
     """
-    match = re.match(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", text)
+    match = re.match(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?(\.dev)?", text)
     if match is None:
         raise SupervisorUnavailable(f"unparsable Supervisor version {text!r}")
-    year, month, patch = match.groups()
-    return int(year), int(month), int(patch or 0)
+    year, month, patch, dev = match.groups()
+    return int(year), int(month), int(patch or 0), 0 if dev else 1
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ class SupervisorInfo:
     supported: bool | None = None
 
     def is_at_least(self, minimum: str) -> bool:
-        """Numeric comparison, so 2026.9.9 is older than 2026.10.0."""
+        """Numeric comparison: 2026.9.9 is older than 2026.10.0, a dev build than its release."""
         return _version(self.version) >= _version(minimum)
 
 

@@ -34,7 +34,6 @@ from websockets.uri import parse_uri
 
 DEFAULT_REPO = "https://github.com/LL0rd/myha"
 HA_DEFAULT = object()  # sentinel: omit the field, HA Core then applies its 10 s default
-USAGE = "error: set HA_URL (http:// or https://) and HA_TOKEN (a long-lived access token)"
 
 
 class Failure(Exception):
@@ -47,13 +46,19 @@ def mask(text: str, token: str) -> str:
 
 
 def environment() -> tuple[str, str]:
-    """HA_URL without a trailing slash and HA_TOKEN, checked before either is used."""
+    """HA_URL without a trailing slash and HA_TOKEN; errors name the cause, never the value."""
     base = os.environ.get("HA_URL", "").strip().rstrip("/")
     token = os.environ.get("HA_TOKEN", "")
+    if not base:
+        sys.exit("error: HA_URL is not set, for example http://homeassistant.local:8123")
+    if not base.startswith(("http://", "https://")):
+        sys.exit("error: HA_URL must start with http:// or https://")
+    if not token:
+        sys.exit("error: HA_TOKEN is not set; it takes a long-lived access token")
     # The token is not stripped: with a control character in it, httpx's header error would
     # quote it in a form mask() cannot find, so anything but a plain token stops here.
-    if not base.startswith(("http://", "https://")) or not re.fullmatch(r"[A-Za-z0-9._-]+", token):
-        sys.exit(USAGE)
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", token):
+        sys.exit("error: HA_TOKEN: only letters, digits, . _ - allowed (trailing CR or space?)")
     return base, token
 
 
@@ -240,6 +245,8 @@ async def command(ha: Supervisor, base: str, token: str) -> str:
             except ValueError:
                 text = response.text
             return f"HTTP {response.status_code}\n{text}"
+        case _:  # argparse admits no other command; backup-download is handled in main()
+            raise Failure(f"unknown command {args.command!r}; see --help")
     return json.dumps(result, indent=2) if result else "ok"
 
 
@@ -309,6 +316,10 @@ def main(argv: list[str] | None = None) -> None:
     except (OSError, httpx.HTTPError, httpx.InvalidURL, WebSocketException) as exc:
         sys.exit(mask(f"error: {type(exc).__name__}: {exc}", token))
     except KeyboardInterrupt:
+        if args.command == "backup-download":
+            part = f"{args.out}.part"
+            left = f"; {part} was left" if os.path.exists(part) else ""
+            sys.exit(f"\nerror: download aborted{left}")
         sys.exit("\nerror: aborted; a request already sent keeps running, check with status")
     print(mask(output, token))
 

@@ -112,8 +112,10 @@ async def test_self_info_reads_ingress_entry() -> None:
         ("2026.11.0", "2026.10.3", True),
         ("2026.10", "2026.10.0", True),
         ("2026.10", "2026.10.1", False),
-        ("2026.11.0.dev20261101", "2026.10.3", True),  # dev channel
-        ("2026.10.0.dev20261001", "2026.10.3", False),
+        ("2026.10.", "2026.10.0", True),
+        ("2026.10.4.dev2108", "2026.10.3", True),  # dev channel, after the minimum
+        ("2026.10.3.dev2108", "2026.10.3", False),  # dev build before its release
+        ("2026.10.3.dev2108", "2026.10.2", True),
     ],
 )
 def test_is_at_least_compares_numerically(version: str, minimum: str, expected: bool) -> None:

@@ -144,6 +144,13 @@ async def test_redirected_websocket_never_gets_the_token(monkeypatch: pytest.Mon
     assert ws.sent == []
 
 
+async def test_command_rejects_an_unknown_command() -> None:
+    args = argparse.Namespace(command="frobnicate", yes=False, slug=None)
+    ha = script.Supervisor(FakeWebSocket(), args, "ha.local:8123")
+    with pytest.raises(script.Failure, match="^unknown command 'frobnicate'; see --help$"):
+        await script.command(ha, "http://ha.local:8123", TOKEN)
+
+
 def test_pick_slug_finds_the_one_myha_app() -> None:
     apps = [{"slug": "core_ssh"}, {"slug": "a0d7b954_myha"}, {"slug": "5c53de3b_notmyha"}]
     assert script.pick_slug(apps) == "a0d7b954_myha"
@@ -170,25 +177,31 @@ def ha_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("url", "token"),
+    ("url", "token", "cause"),
     [
-        ("http://ha.local:8123", "a.b.c\r"),
-        ("http://ha.local:8123", "a.b.c d"),
-        ("http://ha.local:8123", ""),
-        ("ha.local:8123", "a.b.c"),
-        ("", "a.b.c"),
+        ("", "a.b.c", "HA_URL is not set"),
+        (" / ", "a.b.c", "HA_URL is not set"),
+        ("ha-test.example:8123", "a.b.c", "HA_URL must start with http:// or https://"),
+        ("http://ha-test.example:8123", "", "HA_TOKEN is not set"),
+        ("http://ha-test.example:8123", "a.b.c\r", "HA_TOKEN: only letters, digits, . _ -"),
+        ("http://ha-test.example:8123", "a.b.c d", "HA_TOKEN: only letters, digits, . _ -"),
     ],
 )
-def test_main_refuses_unusable_settings_without_echoing_them(
-    url: str, token: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_main_names_unusable_settings_without_echoing_them(
+    url: str,
+    token: str,
+    cause: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HA_URL", url)
     monkeypatch.setenv("HA_TOKEN", token)
     with pytest.raises(SystemExit) as stopped:
         script.main(["status"])
-    assert stopped.value.code == script.USAGE  # a string code exits with status 1
+    message = str(stopped.value.code)  # a string code exits with status 1
+    assert message.startswith(f"error: {cause}")
     out, err = capsys.readouterr()
-    assert "a.b.c" not in out + err
+    assert "a.b.c" not in out + err + message and "ha-test" not in message
 
 
 def test_main_passes_cleaned_settings_and_masks_output(
@@ -227,3 +240,21 @@ def test_main_errors_exit_1_without_the_token(
     with pytest.raises(SystemExit) as stopped:
         script.main(["status"])
     assert stopped.value.code == code  # a string code exits with status 1
+
+
+@pytest.mark.parametrize("started", [True, False])
+def test_ctrl_c_during_download_names_the_partial_file(
+    started: bool, ha_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "probe.tar"
+
+    def interrupted(base: str, token: str, backup: str, target: str) -> str:
+        if started:
+            Path(f"{target}.part").write_bytes(b"first chunks")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(script, "download_backup", interrupted)
+    with pytest.raises(SystemExit) as stopped:
+        script.main(["backup-download", "abcd1234", str(out)])
+    left = f"; {out}.part was left" if started else ""
+    assert stopped.value.code == f"\nerror: download aborted{left}"
