@@ -75,8 +75,13 @@ class SupervisorClient:
         headers = {"Authorization": f"Bearer {token.get_secret_value()}"} if token else {}
         try:
             # One short-lived client per call: rare calls, and nothing to close on shutdown.
+            # trust_env=False: a proxy from the environment must never see the token.
             async with httpx.AsyncClient(
-                base_url=self._base_url, headers=headers, timeout=5, transport=self._transport
+                base_url=self._base_url,
+                headers=headers,
+                timeout=5,
+                transport=self._transport,
+                trust_env=False,
             ) as client:
                 response = await client.get(path)
             response.raise_for_status()

@@ -11,6 +11,7 @@ from myha_gateway.ha.supervisor import (
     SupervisorInfo,
     SupervisorUnavailable,
 )
+from tests.helpers import SIM_TOKEN, SimHandle
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -46,6 +47,18 @@ async def test_info_sends_the_token_and_reads_the_versions() -> None:
     assert info == SupervisorInfo("2026.10.3", "stable", "amd64", True, "2026.10.2")
     assert str(seen[0].url) == "http://supervisor/info"
     assert seen[0].headers["authorization"] == "Bearer sup-secret"
+
+
+async def test_proxy_variables_never_see_the_token(
+    sim: SimHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real connection: httpx ignores proxy variables anyway when a test transport is set.
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:1")  # a proxy would get the Bearer token
+    info = await SupervisorClient(sim.http_url, SecretStr(SIM_TOKEN)).info()
+    assert info.version == "2026.10.3"  # straight to the Supervisor, not via the proxy
 
 
 async def test_without_token_no_authorization_header() -> None:
