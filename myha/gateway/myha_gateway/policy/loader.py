@@ -138,6 +138,11 @@ class PolicyLoader:
             return None
         return adapter_for(kind).state_view(self._ha.state(binding.entity_id), self.adapter_locked)
 
+    def resource_for_entity(self, entity_id: str) -> str | None:
+        """The resource bound to ``entity_id`` as of the last index build, or ``None``."""
+        binding = self._by_entity.get(entity_id)
+        return None if binding is None else binding.id
+
     def invalidate(self) -> None:
         """Build anew on the next call, also if the cache key looks the same."""
         self._cache = None
@@ -199,8 +204,8 @@ class PolicyLoader:
             except (ValueError, TypeError, KeyError) as exc:
                 logger.error("binding %s is broken and stays hidden: %s", binding.id, exc)
                 continue
-            drifted = drift_reason(binding, self._ha, self._gone)
-            if connected and ref.status == "confirmed" and drifted:
+            confirmed = connected and ref.status == "confirmed"
+            if confirmed and drift_reason(binding, self._ha, self._gone):
                 ref = replace(ref, status="needs_review")
                 self._dirty.set()
             resources[ref.id] = ref
@@ -208,6 +213,7 @@ class PolicyLoader:
         return resources, members
 
     def _remember(self, bindings: Iterable[db.ResourceBinding], version: int) -> None:
+        # policy_version only grows in a running process: a restore applies at start (§4.6)
         if version < self._known_version:
             return  # a build that read before the worker's commit
         self._known_version = version
