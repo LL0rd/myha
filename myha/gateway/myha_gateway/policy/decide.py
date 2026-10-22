@@ -58,20 +58,25 @@ def decide(
     now: datetime,
     state_view: StateView | None,
     *,
-    execute: bool = False,
+    execute: bool,
 ) -> Decision:
     """Whether ``ctx`` may do ``action`` with ``params`` on the resource at ``now``.
 
     ``state_view`` is the adapter's view of the device; without one a write counts as locked
-    and the target as unknown. ``execute`` marks the endpoints that act, where a preview
-    context is refused.
+    and the target as unknown. ``execute`` has no default: ``True`` at every endpoint that acts,
+    where a preview context is refused, ``False`` only for simulation and projection.
 
-    Raises ``ValueError`` for a naive ``now`` and, from the index, for a role version it does
-    not know; ``TypeError`` for an unhashable ``resource_id``. The API layer answers every
+    Raises ``ValueError`` for a naive ``now``, for a context and an index of different policy
+    versions and, from the index, for a role version it does not know; ``TypeError`` for an
+    unhashable ``resource_id``. The API layer answers every
     exception with a 500 and acts on nothing, so each of them fails closed.
     """
     if now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
+    if ctx.policy_version != index.policy_version:  # one of them is stale: decide nothing
+        raise ValueError(
+            f"policy version mismatch: context {ctx.policy_version}, index {index.policy_version}"
+        )
     code = _window_code(ctx, now, execute)
     if code is not None:
         return _denial(code)

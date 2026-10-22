@@ -488,6 +488,6 @@ def test_decide_p95_under_20ms() -> None:
     for i in range(1000):
         resource, action, params = requests[i % len(requests)]
         start = time.perf_counter()
-        decide(ctx, INDEX, resource, action, params, DURING_STAY, views[resource])
+        decide(ctx, INDEX, resource, action, params, DURING_STAY, views[resource], execute=True)
         timings.append(time.perf_counter() - start)
     assert sorted(timings)[949] < 0.020

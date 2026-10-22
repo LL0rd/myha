@@ -39,7 +39,7 @@ def run(
 ) -> Decision:
     context = resident_context() if ctx is None else ctx
     view = fixture_view(resource) if resource in ROOM_203 | LIVING_ROOM else None
-    return decide(context, index, resource, action, params or {}, NOW, view)
+    return decide(context, index, resource, action, params or {}, NOW, view, execute=True)
 
 
 def grant(resource: str, *actions: str, **parameters: Any) -> dict[str, Any]:
@@ -117,7 +117,9 @@ def test_mode_rule_runs_after_review_and_before_the_adapter_lock() -> None:
     ctx = resident_context()
 
     def switch(index: PolicyIndex, view: StateView) -> Code:
-        return decide(ctx, index, "res_lr_ac", "climate.set_mode", {"mode": "cool"}, NOW, view).code
+        return decide(
+            ctx, index, "res_lr_ac", "climate.set_mode", {"mode": "cool"}, NOW, view, execute=True
+        ).code
 
     review = room203_index(grants=grants, status={"res_lr_ac": "needs_review"})
     assert switch(review, hot_and_locked) is Code.RESOURCE_NEEDS_REVIEW
@@ -162,17 +164,40 @@ def test_without_a_state_view_writes_count_as_locked() -> None:
     index = room203_index()
 
     def unseen(action: str) -> Code:
-        return decide(guest_context(), index, "res_203_light", action, {}, NOW, None).code
+        return decide(
+            guest_context(), index, "res_203_light", action, {}, NOW, None, execute=True
+        ).code
 
     assert unseen("light.on") is Code.ADAPTER_LOCKED
     assert unseen("state.read") is Code.GRANTED
+
+
+def test_execute_has_no_default() -> None:
+    """A forgotten flag must not let a preview context act: the call itself fails."""
+    with pytest.raises(TypeError, match="execute"):
+        decide(guest_context(), room203_index(), "res_203_light", "light.on", {}, NOW, None)  # type: ignore[call-arg]
+
+
+def test_context_and_index_must_share_a_policy_version() -> None:
+    """A context built for another version than the index fails closed instead of deciding."""
+    for version in (0, 2):
+        with pytest.raises(ValueError, match="policy version mismatch"):
+            run(
+                room203_index(),
+                "res_203_light",
+                "state.read",
+                ctx=guest_context(policy_version=version),
+            )
+    assert run(room203_index(), "res_203_light", "state.read", ctx=guest_context()).allowed
 
 
 def test_now_must_be_timezone_aware() -> None:
     naive = NOW.replace(tzinfo=None)
     for ctx in (guest_context(), resident_context()):  # a resident has no window to compare
         with pytest.raises(ValueError, match="timezone-aware"):
-            decide(ctx, room203_index(), "res_203_light", "state.read", {}, naive, None)
+            decide(
+                ctx, room203_index(), "res_203_light", "state.read", {}, naive, None, execute=False
+            )
 
 
 # --- implicit metadata.read ---
@@ -443,7 +468,14 @@ def test_the_mode_rule_without_a_state_or_with_an_empty_temperature_range() -> N
     temperature = grant("res_lr_ac", "climate.set_temperature", target_c=interval("19", "24", "1"))
     index = room203_index(grants=[temperature, grant("res_lr_ac", "climate.set_mode")])
     blind = decide(
-        resident_context(), index, "res_lr_ac", "climate.set_mode", {"mode": "heat"}, NOW, None
+        resident_context(),
+        index,
+        "res_lr_ac",
+        "climate.set_mode",
+        {"mode": "heat"},
+        NOW,
+        None,
+        execute=True,
     )
     assert blind.code is Code.MODE_WOULD_BYPASS_FENCE  # no state view: the target is unknown
     above = {
@@ -566,7 +598,9 @@ def test_a_non_finite_target_counts_as_outside(target: str) -> None:
     index = room203_index(grants=[temperature, grant("res_lr_ac", "climate.set_mode")])
     view = fixture_view("res_lr_ac", target_c=Decimal(target))
     params = {"mode": "heat"}
-    decision = decide(resident_context(), index, "res_lr_ac", "climate.set_mode", params, NOW, view)
+    decision = decide(
+        resident_context(), index, "res_lr_ac", "climate.set_mode", params, NOW, view, execute=True
+    )
     assert decision.code is Code.MODE_WOULD_BYPASS_FENCE
 
 
