@@ -1,7 +1,8 @@
 """The policy index of the current policy version, cached, and contexts of the same version.
 
-The cache key is ``(policy_version, ha.generation, adapter_locked)``; ``policy_version`` comes
-from one small select per call, so changes by other processes (``dev-seed``) count at once.
+The cache key is ``(policy_version, ha.generation, adapter_locked, ha.registry_version)``;
+``policy_version`` comes from one small select per call, so changes by other processes
+(``dev-seed``) count at once.
 Capabilities come from the bindings as the admin confirmed them; Home Assistant only shows
 drift (``drift.py``), which turns a binding to ``needs_review`` in the database. A build that
 finds drift marks the binding in its index already and wakes the drift worker.
@@ -35,7 +36,7 @@ from myha_gateway.policy.model import RoleRules
 logger = logging.getLogger(__name__)
 REGISTRY_POLL = 0.5  # the HA client reloads registries 0.5 s after an event, without a hook
 Status = Literal["confirmed", "needs_review", "blocked"]
-_Key = tuple[int, int, bool]
+_Key = tuple[int, int, bool, int]
 
 
 class PolicyLoader:
@@ -45,9 +46,11 @@ class PolicyLoader:
         self._sessions = session_factory(engine)
         self._cache: tuple[_Key, PolicyIndex] | None = None
         self._by_id: dict[str, db.ResourceBinding] = {}
+        self._known_version = -1  # policy version of the maps: an older read never wins
         self._by_entity: dict[str, db.ResourceBinding] = {}
         self._dirty = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
+        self.passes_started = self.passes_done = 0  # worker passes; tests wait on them
 
     @property
     def adapter_locked(self) -> bool:
@@ -163,7 +166,8 @@ class PolicyLoader:
             await asyncio.gather(worker, return_exceptions=True)
 
     async def _index(self, session: AsyncSession, version: int) -> PolicyIndex:
-        key = (version, self._ha.generation, self.adapter_locked)
+        ha = self._ha
+        key = (version, ha.generation, self.adapter_locked, ha.registry_version)
         cached = self._cache
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -171,7 +175,7 @@ class PolicyLoader:
         bindings = await _all(session, select(db.ResourceBinding).order_by(db.ResourceBinding.id))
         roles = await _all(session, select(db.RoleVersion).order_by(db.RoleVersion.id))
         # No await from here on: the drift check sees the HA snapshot the index is cached with.
-        self._remember(bindings)
+        self._remember(bindings, version)
         resources, members = self._resources(units, bindings)
         units_map = {unit: frozenset(ids) for unit, ids in members.items()}
         index = PolicyIndex(_rules(roles), resources, units_map, policy_version=version)
@@ -197,12 +201,15 @@ class PolicyLoader:
             members.setdefault(ref.unit_id, set()).add(ref.id)
         return resources, members
 
-    def _remember(self, bindings: Iterable[db.ResourceBinding]) -> None:
+    def _remember(self, bindings: Iterable[db.ResourceBinding], version: int) -> None:
+        if version < self._known_version:
+            return  # a build that read before the worker's commit
+        self._known_version = version
         self._by_id = {binding.id: binding for binding in bindings}
         self._by_entity = {binding.entity_id: binding for binding in self._by_id.values()}
 
     async def _run(self) -> None:
-        """Reconcile on a flag or a newer registry; one failed pass waits for the next."""
+        """Reconcile on a flag or a newer registry; a failed pass is retried at the next poll."""
         seen = -1
         while True:
             with contextlib.suppress(TimeoutError):
@@ -213,19 +220,21 @@ class PolicyLoader:
                 continue
             self._dirty.clear()
             seen = registry
+            self.passes_started += 1
             try:
                 await self._reconcile()
             except Exception:
+                seen = -1
                 logger.exception("checking the bindings for drift failed")
+            self.passes_done += 1
 
     async def _reconcile(self) -> None:
         if not self._ha.connected:
             return  # the reconnect sets the flag again
         async with write_session(self._engine) as session:
-            bindings, changed = await reconcile(session, self._ha, self.audit)
-        self._remember(bindings)
-        if changed:
-            self.invalidate()
+            bindings, version = await reconcile(session, self._ha, self.audit)
+        self._remember(bindings, version)
+        self.invalidate()  # also unchanged: an index may still mark drift that is gone again
 
 
 async def _instance(session: AsyncSession) -> tuple[int, bool]:

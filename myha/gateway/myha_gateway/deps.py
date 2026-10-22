@@ -26,9 +26,15 @@ _DNS_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z
 
 
 async def _fan_out[T](handlers: list[Callable[[T], Awaitable[None]]], update: T) -> None:
-    """Hand an HA event or status change to each handler in order (the event bus joins in 6.3)."""
+    """Hand an HA event or status change to each handler in order (the event bus joins in 6.3).
+
+    A failing handler is logged and skips none of the others.
+    """
     for handler in handlers:
-        await handler(update)
+        try:
+            await handler(update)
+        except Exception:
+            logger.exception("a Home Assistant %s handler failed", type(update).__name__)
 
 
 async def _audit_policy(

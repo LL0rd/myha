@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from myha_gateway.db import models as db
 from myha_gateway.db import write_session
 from myha_gateway.deps import AppContext
+from myha_gateway.ha.messages import ConnectionStatus
 from myha_gateway.policy.codes import DecisionCode as Code
 from myha_gateway.policy.decide import Decision, decide
 from tests.helpers import SimHandle
@@ -84,6 +85,36 @@ async def registry_reloaded(ctx: AppContext, before: int) -> None:
     await eventually(check, 3)
 
 
+async def full_pass(ctx: AppContext) -> None:
+    """One whole drift pass that starts after this call, as after a reconnect."""
+    await ctx.policy.on_status(ConnectionStatus(True, ctx.ha.generation, None))
+    target = ctx.policy.passes_started + 1  # on_status never yields: that pass has not begun
+
+    async def done() -> bool:
+        return ctx.policy.passes_done >= target
+
+    await eventually(done, 3)
+
+
+class FailingAudit:
+    """Audit that raises while ``failing``, then records like ``Recorder``."""
+
+    def __init__(self, recorder: Recorder) -> None:
+        self.recorder, self.failing = recorder, True
+
+    async def __call__(self, *args: Any) -> None:
+        if self.failing:
+            raise RuntimeError("audit down")
+        await self.recorder(*args)
+
+
+async def drift_check_failed(caplog: pytest.LogCaptureFixture) -> None:
+    async def logged() -> bool:
+        return any("drift failed" in record.getMessage() for record in caplog.records)
+
+    await eventually(logged, 3)
+
+
 async def test_a14_new_entity_in_area_not_granted(ctx: AppContext, sim: SimHandle) -> None:
     before_index, version = await ctx.policy.index(NOW), await policy_version(ctx.engine)
     registry = ctx.ha.registry_version
@@ -91,7 +122,7 @@ async def test_a14_new_entity_in_area_not_granted(ctx: AppContext, sim: SimHandl
     new |= {"state": "on", "attributes": {"supported_color_modes": ["onoff"]}}
     await sim.control.post("entity", new)
     await registry_reloaded(ctx, registry)
-    await asyncio.sleep(0.6)  # the loader's registry poll; nothing may follow from it
+    await full_pass(ctx)  # a pass that saw the new registry entry: nothing may follow from it
     index = await ctx.policy.index(NOW)
     assert set(index.resources) == set(before_index.resources)
     assert index.units["unit_203"] == before_index.units["unit_203"]
@@ -183,7 +214,7 @@ async def test_blocked_never_becomes_needs_review(ctx: AppContext, sim: SimHandl
     registry = ctx.ha.registry_version
     await sim.control.post("registry/area", {"entity_id": "light.group_all", "area_id": "area_203"})
     await registry_reloaded(ctx, registry)
-    await asyncio.sleep(0.6)
+    await full_pass(ctx)  # after the attribute change and the move
     assert (await bindings(ctx.engine))["res_203_group"].status == "blocked"
     assert audited(ctx) == []
 
@@ -192,7 +223,13 @@ async def test_offline_states_are_no_drift(ctx: AppContext, sim: SimHandle) -> N
     """An unavailable device reports fewer attributes; that is no change of its abilities."""
     await sim.control.post("offline/climate.room_203_trv")
     await sim.control.post("offline/light.room_203_ceiling")
-    await asyncio.sleep(0.6)
+
+    async def offline() -> bool:  # on_event runs before the client yields after a state
+        state = ctx.ha.state("light.room_203_ceiling")
+        return state is not None and state.state == "unavailable"
+
+    await eventually(offline, 3)
+    await full_pass(ctx)
     ctx.policy.invalidate()
     index = await ctx.policy.index(NOW)  # a build checks too
     for resource in ("res_203_trv", "res_203_light"):
@@ -240,25 +277,69 @@ async def test_failed_check_fails_closed_and_is_retried(
 ) -> None:
     recorder = ctx.policy.audit
     assert isinstance(recorder, Recorder)
-    calls = 0
-
-    async def fails_once(*args: Any) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("audit down")
-        await recorder(*args)
-
-    ctx.policy.audit = fails_once
+    ctx.policy.audit = audit = FailingAudit(recorder)
     change = {"entity_id": "cover.room_203_blind", "attributes": {"supported_features": 3}}
     await sim.control.post("entity/attributes", change)
-
-    async def logged() -> bool:
-        return any("drift failed" in record.getMessage() for record in caplog.records)
-
-    await eventually(logged, 2)
+    await drift_check_failed(caplog)
     assert (await bindings(ctx.engine))["res_203_blind"].status == "confirmed"  # rolled back
     ref = (await ctx.policy.index(NOW)).resource("res_203_blind")
     assert ref is not None and ref.status == "needs_review"  # the index marks it meanwhile
+    audit.failing = False
     await eventually(status_is(ctx, "res_203_blind", "needs_review"), 2)  # and asks again
     assert [event[0] for event in recorder.events] == ["binding.needs_review", "policy.changed"]
+
+
+async def test_failed_registry_check_fails_closed_and_is_retried(
+    ctx: AppContext, sim: SimHandle, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A15 after a device replacement: no event follows, so the poll retries the failed pass."""
+    recorder = ctx.policy.audit
+    assert isinstance(recorder, Recorder)
+    ctx.policy.audit = audit = FailingAudit(recorder)
+    replace = {"entity_id": "light.room_203_ceiling", "new_unique_id": "govee-new"}
+    await sim.control.post("registry/replace", replace)
+    await drift_check_failed(caplog)
+    assert (await bindings(ctx.engine))["res_203_light"].status == "confirmed"  # rolled back
+    ref = (await ctx.policy.index(NOW)).resource("res_203_light")
+    assert ref is not None and ref.status == "needs_review"  # a newer registry: a new index
+    audit.failing = False
+    await eventually(status_is(ctx, "res_203_light", "needs_review"), 2)
+    assert recorder.events[0][:2] == ("binding.needs_review", "res_203_light")
+
+
+async def test_drift_gone_before_the_worker_ran_unmarks_the_index(
+    ctx: AppContext, sim: SimHandle
+) -> None:
+    """An index marks drift at once; a pass that finds none any more must lift the mark."""
+    held, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_the_write_lock() -> None:  # the worker's pass waits behind it
+        async with write_session(ctx.engine) as session:
+            await session.execute(select(1))  # BEGIN IMMEDIATE runs with the first statement
+            held.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_the_write_lock())
+    await held.wait()
+    blind = "cover.room_203_blind"
+    for features in (3, 15):  # away from the confirmed abilities and back
+        await sim.control.post(
+            "entity/attributes",
+            {"entity_id": blind, "attributes": {"supported_features": features}},
+        )
+
+        async def arrived(features: int = features) -> bool:
+            state = ctx.ha.state(blind)
+            return state is not None and state.attributes.get("supported_features") == features
+
+        await eventually(arrived, 3)
+        if features == 3:
+            ref = (await ctx.policy.index(NOW)).resource("res_203_blind")
+            assert ref is not None and ref.status == "needs_review"
+    release.set()
+    await holder
+    await full_pass(ctx)
+    assert (await bindings(ctx.engine))["res_203_blind"].status == "confirmed"
+    write = await guest_decides(ctx, "res_203_blind", "cover.open")
+    assert write.code is Code.GRANTED
+    assert audited(ctx) == []

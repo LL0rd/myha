@@ -70,11 +70,11 @@ def renamed_to(binding: ResourceBinding, registry: Registry) -> str | None:
 
 async def reconcile(
     session: AsyncSession, ha: HAClient, audit: Audit
-) -> tuple[Sequence[ResourceBinding], bool]:
+) -> tuple[Sequence[ResourceBinding], int]:
     """Follow renames and mark drifted bindings in the caller's write session.
 
     Any change raises ``policy_version`` once and is audited with it. Returns every binding,
-    as stored now, and whether anything changed.
+    as stored now, and the policy version they belong to.
     """
     bindings = (await session.scalars(select(ResourceBinding).order_by(ResourceBinding.id))).all()
     taken = {binding.entity_id for binding in bindings}
@@ -94,12 +94,12 @@ async def reconcile(
             changes.append(("binding.needs_review", binding.id, {"reason": reason}))
         if len(changes) > before:
             binding.version += 1  # an admin edit based on the old row must conflict
-    if not changes:
-        return bindings, False
     instance = (await session.scalars(select(Instance))).one()
+    if not changes:
+        return bindings, instance.policy_version
     instance.policy_version += 1
     await session.flush()
     for operation, resource_id, params in changes:
         await audit(session, operation, resource_id, instance.policy_version, params)
     await audit(session, "policy.changed", None, instance.policy_version, {})
-    return bindings, True
+    return bindings, instance.policy_version
