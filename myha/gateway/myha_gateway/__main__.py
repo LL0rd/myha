@@ -2,13 +2,14 @@
 
 import argparse
 import asyncio
+import json
 import logging
-import os
+from typing import Any
 
-import httpx
 import uvicorn
 from fastapi import FastAPI
 
+from myha_gateway.api.admin import probe
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
 from myha_gateway.logsetup import setup_logging
@@ -59,24 +60,12 @@ async def _serve(settings: Settings) -> None:
 
 
 def _probe(settings: Settings) -> None:
-    """Print Supervisor reachability, environment variable names and data paths (S0 only)."""
-    url = f"{settings.supervisor_url}/info"
-    token = settings.supervisor_token
-    headers = {"Authorization": f"Bearer {token.get_secret_value()}"} if token is not None else {}
-    try:
-        response = httpx.get(url, headers=headers, timeout=5)
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-        print(f"GET {url}: {type(exc).__name__}: {exc}")
-    else:
-        try:
-            version = response.json()["data"]["supervisor"]
-        except (ValueError, LookupError, TypeError):  # not JSON or without data.supervisor
-            version = None
-        print(f"GET {url}: HTTP {response.status_code}, supervisor {version}")
-    print("environment variable names:", " ".join(sorted(os.environ)))
-    for name in ("data_dir", "state_dir", "backup_dir", "web_dist"):
-        path = getattr(settings, name)
-        print(f"{name}: {path} ({'exists' if path.exists() else 'missing'})")
+    """Print what the admin probe endpoint reports, without starting a server (S0 only)."""
+
+    async def gather() -> dict[str, Any]:
+        return await probe.details(await AppContext.create(settings))
+
+    print(json.dumps(asyncio.run(gather()), indent=2))
 
 
 def main(argv: list[str] | None = None) -> None:

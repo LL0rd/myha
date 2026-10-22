@@ -1,7 +1,10 @@
 """The two ASGI apps: admin (Supervisor ingress only) and public (guests)."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from myha_gateway.api.admin import probe
 from myha_gateway.api.public import health
@@ -31,17 +34,29 @@ class PeerGuardMiddleware:
             await self.app(scope, receive, send)
 
 
-def _app(*, validation_details: bool) -> FastAPI:
-    """What both apps share: no docs, no slash redirects, one error shape."""
-    app = FastAPI(openapi_url=None, redirect_slashes=False)
+def _app(
+    ctx: AppContext, *, validation_details: bool, lifespan: Lifespan[FastAPI] | None = None
+) -> FastAPI:
+    """What both apps share: no docs, no slash redirects, one error shape, ``state.ctx``."""
+    app = FastAPI(openapi_url=None, redirect_slashes=False, lifespan=lifespan)
+    app.state.ctx = ctx
     add_error_handlers(app, validation_details=validation_details)
     return app
+
+
+@asynccontextmanager
+async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """S0 probe evidence in the log, once per process: the admin app always runs."""
+    ctx: AppContext = app.state.ctx
+    if ctx.settings.probe_mode:
+        await probe.log_startup(ctx)
+    yield
 
 
 def create_public_app(ctx: AppContext) -> FastAPI:
     """Guest-facing app: no admin route, never trusts forwarding headers."""
     settings = ctx.settings
-    app = _app(validation_details=False)
+    app = _app(ctx, validation_details=False)
     app.include_router(health.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
     # Plain ws: only while the public origin is plain http (dev and proxy setups).
@@ -53,7 +68,7 @@ def create_public_app(ctx: AppContext) -> FastAPI:
 
 def create_admin_app(ctx: AppContext) -> FastAPI:
     """Admin app behind the Supervisor ingress proxy, reachable only from its peer address."""
-    app = _app(validation_details=True)
+    app = _app(ctx, validation_details=True, lifespan=_admin_lifespan)
     app.include_router(probe.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.
