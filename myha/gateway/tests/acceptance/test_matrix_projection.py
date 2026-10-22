@@ -8,6 +8,7 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -218,9 +219,19 @@ def test_state_without_a_view_is_unknown() -> None:
         "kind": "light",
         "label": "Ceiling",
         "icon": "bulb",
-        "state": {"availability": "unknown"},
-        "capabilities": {"light.on": {}, "light.off": {}, "light.set_level": LEVEL},
+        "state": {"availability": "unknown"},  # no write controls without a view
     }
+
+
+def test_locked_adapter_offers_no_write_controls() -> None:
+    locked = partial(fixture_view, adapter_locked=True)
+    view = project_dashboard(guest_context(), room203_index(), locked, LAYOUT, DURING_STAY)
+    found = resources(view)
+    assert set(found) == set(resources(project()))  # still visible
+    for res in found.values():
+        assert "capabilities" not in res
+        assert "state" in res  # state.read still shows the state
+    assert found["res_203_trv"]["state"]["target_c"] == "21.5"
 
 
 LEVEL = {"intervals": [{"min": "0", "max": "100", "step": "1", "origin": "0"}]}

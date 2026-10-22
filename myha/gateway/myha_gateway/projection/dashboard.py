@@ -160,9 +160,11 @@ def project_resource(
     }
     if allowed(Action.STATE_READ):
         fields["state"] = _state(ref.kind, view)
+    # decide refuses every write without a view or while locked (ADAPTER_LOCKED): no controls
+    writable = view is not None and not view.adapter_locked
     capabilities = {
         action: capability
-        for action in _WRITES
+        for action in (_WRITES if writable else ())
         if (capability := _capability(action, index.effective_capability(ctx, resource_id, action)))
     }
     if capabilities:
