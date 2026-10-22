@@ -83,7 +83,8 @@ class DeviceCapabilities:
         if data["kind"] not in get_args(Kind):
             raise ValueError(f"unknown kind {data['kind']!r}")
         actions = frozenset(Action(action) for action in data["actions"])
-        hvac_modes, confirmed = frozenset(data["hvac_modes"]), frozenset(data["confirmed_modes"])
+        hvac_modes = _stored_strings(data["hvac_modes"])
+        confirmed = _stored_strings(data["confirmed_modes"])
         if not actions <= WRITE_ACTIONS:
             raise ValueError("capabilities name a read action")
         if not confirmed <= hvac_modes & _PRODUCT_MODES:
@@ -115,9 +116,19 @@ def _stored_decimal(value: Any) -> Decimal | None:
     if not isinstance(value, str):
         raise ValueError("a stored limit must be a decimal string")
     try:
-        return Decimal(value)
+        parsed = Decimal(value)
     except InvalidOperation as exc:
         raise ValueError(f"not a decimal: {value!r}") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"not a finite decimal: {value!r}")
+    return parsed
+
+
+def _stored_strings(value: Any) -> frozenset[str]:
+    """A mode list as ``to_json`` writes it: a list of strings."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("a stored mode list must be a list of strings")
+    return frozenset(value)
 
 
 @dataclass(frozen=True)

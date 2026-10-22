@@ -16,7 +16,7 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import URL, Connection, event, select
+from sqlalchemy import URL, Connection, event, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -199,3 +199,9 @@ async def ensure_instance(session: AsyncSession) -> Instance:
         session.add(instance)
         await session.flush()  # fills the defaults, e.g. version
     return instance
+
+
+async def bump_policy_version(session: AsyncSession) -> int:
+    """Raise ``instance.policy_version`` by one in the caller's write session; the new value."""
+    query = update(Instance).values(policy_version=Instance.policy_version + 1)
+    return (await session.execute(query.returning(Instance.policy_version))).scalar_one()

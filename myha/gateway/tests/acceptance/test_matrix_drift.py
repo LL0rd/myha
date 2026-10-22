@@ -343,3 +343,90 @@ async def test_drift_gone_before_the_worker_ran_unmarks_the_index(
     write = await guest_decides(ctx, "res_203_blind", "cover.open")
     assert write.code is Code.GRANTED
     assert audited(ctx) == []
+
+
+async def test_a16_unit_switch_locks_writes_without_review(ctx: AppContext, sim: SimHandle) -> None:
+    """Another temperature unit is no device change: the adapter lock alone keeps writes off."""
+    params = {"target_c": "21"}
+
+    async def unit_is(unit: str) -> bool:
+        return ctx.ha.temperature_unit == unit and ctx.ha.adapter_locked == (unit != "°C")
+
+    for unit, code in (("°F", Code.ADAPTER_LOCKED), ("°C", Code.GRANTED)):
+        await sim.control.post("config/temperature-unit", {"unit": unit})
+        await eventually(lambda unit=unit: unit_is(unit), 3)
+        change = {"entity_id": "climate.room_203_trv", "attributes": {"current_temperature": 20}}
+        change["attributes"]["current_temperature"] += unit == "°C"  # a new state each time
+        await sim.control.post("entity/attributes", change)
+        await full_pass(ctx)
+        found = await ctx.policy.context_for_session(GUEST_SESSION, NOW)
+        assert found is not None
+        guest, index = found
+        view = ctx.policy.state_view("res_203_trv")
+        action = "climate.set_temperature"
+        decision = decide(guest, index, "res_203_trv", action, params, NOW, view, execute=True)
+        assert decision.code is code
+        assert (await bindings(ctx.engine))["res_203_trv"].status == "confirmed"
+    assert audited(ctx) == []
+
+
+async def test_reconnect_alone_never_marks_a_binding_without_registry_entry(
+    ctx: AppContext, sim: SimHandle
+) -> None:
+    """Core restores states late at startup: a missing state after a reconnect proves nothing."""
+    async with write_session(ctx.engine) as session:
+        await session.execute(
+            update(db.ResourceBinding)
+            .where(db.ResourceBinding.id == "res_203_hum")
+            .values(unique_id=None)
+        )
+    await ctx.ha.stop()
+    await sim.control.post("entity/remove", {"entity_id": "sensor.room_203_humidity"})
+    await ctx.ha.start()
+    await full_pass(ctx)
+    assert (await bindings(ctx.engine))["res_203_hum"].status == "confirmed"
+    ref = (await ctx.policy.index(NOW)).resource("res_203_hum")
+    assert ref is not None and ref.status == "confirmed"
+    assert audited(ctx) == []
+
+
+async def test_rename_onto_a_bound_entity_id_counts_as_missing(
+    ctx: AppContext, sim: SimHandle
+) -> None:
+    """Two bindings never share an entity id: the rename is not followed."""
+    async with write_session(ctx.engine) as session:  # a binding of a vanished entity
+        await session.execute(
+            update(db.ResourceBinding)
+            .where(db.ResourceBinding.id == "res_203_bedside")
+            .values(entity_id="light.room_203_main", unique_id="shelly-vanished")
+        )
+    await full_pass(ctx)  # res_203_bedside is missing now and keeps its entity id
+    registry = ctx.ha.registry_version
+    rename = {"entity_id": "light.room_203_ceiling", "new_entity_id": "light.room_203_main"}
+    await sim.control.post("registry/rename", rename)
+    await registry_reloaded(ctx, registry)
+    await eventually(status_is(ctx, "res_203_light", "needs_review"), 2)
+    rows = await bindings(ctx.engine)
+    assert rows["res_203_light"].entity_id == "light.room_203_ceiling"
+    assert rows["res_203_bedside"].entity_id == "light.room_203_main"
+    assert rows["res_203_bedside"].status == "needs_review"
+    assert ("binding.needs_review", "res_203_light", {"reason": "missing"}) in [
+        (op, res, params) for op, res, _, params in audited(ctx)
+    ]
+    assert "binding.renamed" not in [event[0] for event in audited(ctx)]
+
+
+async def test_same_unique_id_in_another_domain_is_no_rename(
+    ctx: AppContext, sim: SimHandle
+) -> None:
+    """A light that comes back as a switch is another device for the policy."""
+    registry = ctx.ha.registry_version
+    await sim.control.post("entity/remove", {"entity_id": "light.room_203_ceiling"})
+    switch = {"entity_id": "switch.room_203_ceiling", "area_id": "area_203", "platform": "govee"}
+    await sim.control.post("entity", switch | {"state": "on"})  # unique_id govee-room_203_ceiling
+    await registry_reloaded(ctx, registry)
+    await eventually(status_is(ctx, "res_203_light", "needs_review"), 2)
+    assert (await bindings(ctx.engine))["res_203_light"].entity_id == "light.room_203_ceiling"
+    assert audited(ctx)[0][:2] == ("binding.needs_review", "res_203_light")
+    assert audited(ctx)[0][3] == {"reason": "missing"}
+    assert "binding.renamed" not in [event[0] for event in audited(ctx)]

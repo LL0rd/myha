@@ -513,6 +513,11 @@ def test_capabilities_json_keeps_the_written_decimal() -> None:
         {"actions": ["light.dance"]},
         {"target_c_min": 8},  # a float or int would lose the written form
         {"target_c_max": "warm"},
+        {"target_c_min": "NaN"},  # the index would only refuse it later
+        {"target_c_max": "-Infinity"},
+        {"hvac_modes": "heat"},  # a string is no list of modes
+        {"confirmed_modes": [1]},
+        {"hvac_modes": None},
         {"confirmed_modes": ["heat_cool"]},  # not a product mode
         {"confirmed_modes": ["off"], "hvac_modes": ["heat"]},  # not offered by the device
         {"extra": 1},

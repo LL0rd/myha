@@ -48,6 +48,7 @@ class PolicyLoader:
         self._by_id: dict[str, db.ResourceBinding] = {}
         self._known_version = -1  # policy version of the maps: an older read never wins
         self._by_entity: dict[str, db.ResourceBinding] = {}
+        self._gone: set[str] = set()  # bindings without unique_id whose state an event removed
         self._dirty = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         self.passes_started = self.passes_done = 0  # worker passes; tests wait on them
@@ -147,6 +148,10 @@ class PolicyLoader:
         if binding is None or binding.status != "confirmed" or not self._ha.connected:
             return  # while disconnected, the reconnect checks everything anyway
         state = change.new_state
+        if state is not None:
+            self._gone.discard(binding.id)
+        elif binding.unique_id is None:
+            self._gone.add(binding.id)
         if state is None or capabilities_changed(binding, state, self._ha):
             self.invalidate()  # the next build marks it before the database does
             self._dirty.set()
@@ -194,7 +199,8 @@ class PolicyLoader:
             except (ValueError, TypeError, KeyError) as exc:
                 logger.error("binding %s is broken and stays hidden: %s", binding.id, exc)
                 continue
-            if connected and ref.status == "confirmed" and drift_reason(binding, self._ha):
+            drifted = drift_reason(binding, self._ha, self._gone)
+            if connected and ref.status == "confirmed" and drifted:
                 ref = replace(ref, status="needs_review")
                 self._dirty.set()
             resources[ref.id] = ref
@@ -231,8 +237,10 @@ class PolicyLoader:
     async def _reconcile(self) -> None:
         if not self._ha.connected:
             return  # the reconnect sets the flag again
+        gone = frozenset(self._gone)
         async with write_session(self._engine) as session:
-            bindings, version = await reconcile(session, self._ha, self.audit)
+            bindings, version = await reconcile(session, self._ha, self.audit, gone)
+        self._gone -= gone
         self._remember(bindings, version)
         self.invalidate()  # also unchanged: an index may still mark drift that is gone again
 

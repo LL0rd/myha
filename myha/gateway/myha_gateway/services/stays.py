@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from myha_gateway.db import bump_policy_version
 from myha_gateway.db.models import Instance, Invite, RoleVersion, Stay, Unit
 from myha_gateway.db.models import Session as SessionRow
 from myha_gateway.errors import ApiError
@@ -37,12 +38,6 @@ def stay_status(stay: Stay, now: datetime) -> str:
     if now < stay.starts_at:
         return "planned"
     return "active" if now < stay.ends_at else "ended"
-
-
-async def bump_policy_version(session: AsyncSession) -> int:
-    """Raise ``instance.policy_version`` by one and return the new value."""
-    query = update(Instance).values(policy_version=Instance.policy_version + 1)
-    return (await session.execute(query.returning(Instance.policy_version))).scalar_one()
 
 
 def _invalid(message: str, field: str) -> ApiError:
