@@ -36,8 +36,6 @@ _MESSAGES: Mapping[PublicError | None, str] = {
     PublicError.UPSTREAM_UNAVAILABLE: "The device cannot be used right now.",
 }
 _CONTEXT = Context(prec=28)  # independent of the caller's decimal context
-# open and close drive a cover to one end, which its position range must allow (design §4.1)
-_COVER_ENDS = {Action.COVER_OPEN: Decimal(100), Action.COVER_CLOSE: Decimal(0)}
 
 
 @dataclass(frozen=True)
@@ -114,10 +112,8 @@ def decide(
     elif name is not None:
         cuts = index.grant_intervals(ctx, resource_id, act)
         code, allowing = _number_code(name, Decimal(value), cuts, fences)
-    elif act in _COVER_ENDS:
-        code, allowing = _cover_end_code(ctx, index, resource_id, act), tuple(grants)
-    else:
-        code, allowing = None, tuple(grants)
+    else:  # cover.open and cover.close must reach their end inside the position rules
+        code, allowing = index.end_code(ctx, resource_id, act), tuple(grants)
     if code is not None:
         return _denial(code, normalized)
 
@@ -242,25 +238,6 @@ def _number_code(
     if any(isinstance(bound, Bound) and not bound.contains(value) for bound in bounds):
         return DecisionCode.FENCE_VIOLATION, ()
     return None, allowing
-
-
-def _cover_end_code(
-    ctx: EffectiveContext, index: PolicyIndex, resource_id: str, action: Action
-) -> DecisionCode | None:
-    """The end ``cover.open`` or ``cover.close`` drives to inside the position range (as E7).
-
-    The set_position grants' intervals count unless set_position is denied, then its fences;
-    with neither a grant nor a fence for the position there is nothing to check.
-    """
-    end, position = _COVER_ENDS[action], Action.COVER_SET_POSITION
-    if not index.denied(ctx, resource_id, position):
-        cuts = index.grant_intervals(ctx, resource_id, position)
-        if cuts and not any(interval.contains(end) for cut in cuts.values() for interval in cut):
-            return DecisionCode.PARAM_OUT_OF_RANGE
-    bounds = [fence.parameters.position_pct for fence in index.fences(ctx, resource_id, position)]
-    if any(bound is not None and not bound.contains(end) for bound in bounds):
-        return DecisionCode.FENCE_VIOLATION
-    return None
 
 
 def _on_step(interval: Interval, value: Decimal) -> bool:

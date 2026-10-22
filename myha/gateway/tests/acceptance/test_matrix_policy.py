@@ -272,6 +272,54 @@ def test_a17b_open_and_close_stay_inside_the_position_range() -> None:
     no_position = room203_index(grants=[ends])
     assert move("cover.open", index=no_position, ctx=fenced) is Code.FENCE_VIOLATION
     assert move("cover.close", index=no_position, ctx=fenced) is Code.GRANTED
+    # a deny on set_position takes the action away, never the limit of the ends
+    denied = room203_index(
+        grants=[middle, ends],
+        denies=[{"resources": ["res_203_blind"], "actions": ["cover.set_position"]}],
+    )
+    assert move("cover.open", index=denied) is Code.PARAM_OUT_OF_RANGE
+    assert move("cover.close", index=denied) is Code.PARAM_OUT_OF_RANGE
+    # the ends count against the unsnapped range: 0-100 in steps of 3 still reaches 100
+    thirds = {
+        "resources": ["res_203_blind"],
+        "actions": ["cover.set_position"],
+        "parameters": {"position_pct": {"intervals": [{"min": "0", "max": "100", "step": "3"}]}},
+    }
+    coarse = room203_index(grants=[thirds, ends])
+    assert (move("cover.open", index=coarse), move("cover.close", index=coarse)) == (
+        Code.GRANTED,
+        Code.GRANTED,
+    )
+
+
+def position_fence(scope_type: str, scope_id: str, low: str, high: str) -> dict[str, Any]:
+    return {
+        "scope_type": scope_type,
+        "scope_id": scope_id,
+        "action": "cover.set_position",
+        "parameters": {"position_pct": {"min": low, "max": high}},
+    }
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a17b_every_position_fence_bounds_the_ends(reverse: bool) -> None:
+    """Each fence must hold the end on its own: one fence allowing it is not enough."""
+
+    def move(action: str, *fences: dict[str, Any]) -> Code:
+        ctx = guest_context(*(reversed(fences) if reverse else fences))
+        return check(action, resource="res_203_blind", ctx=ctx).code
+
+    below_half = position_fence("stay", "stay_203", "0", "50")
+    above_fifth = position_fence("unit", "unit_203", "20", "100")
+    assert move("cover.open", below_half, above_fifth) is Code.FENCE_VIOLATION
+    assert move("cover.close", below_half, above_fifth) is Code.FENCE_VIOLATION
+    below_four_fifths = position_fence("unit", "unit_203", "0", "80")
+    assert move("cover.open", below_half, below_four_fifths) is Code.FENCE_VIOLATION
+    assert move("cover.close", below_half, below_four_fifths) is Code.GRANTED
+    params = {"position_pct": 40}
+    ctx = guest_context(below_half, above_fifth)
+    position = check("cover.set_position", params, resource="res_203_blind", ctx=ctx)
+    assert position.code is Code.GRANTED
 
 
 AC_GRANTS = (
@@ -355,6 +403,29 @@ def test_a18_mode_check_ranges_are_not_snapped_to_the_grid() -> None:
         "climate.set_mode", params, resource="res_203_trv", ctx=ctx, index=index, view=view
     )
     assert (heat.code, heat.check_range) == (Code.GRANTED, (Decimal("19"), Decimal("21.3")))
+
+
+def test_a18_a_deny_on_set_temperature_does_not_lift_the_mode_check() -> None:
+    """A deny takes set_temperature away; the granted range still bounds the mode switch."""
+    mode = {"resources": ["res_203_trv"], "actions": ["climate.set_mode"]}
+    no_setpoint = {"resources": ["res_203_trv"], "actions": ["climate.set_temperature"]}
+    index = room203_index(
+        grants=[temperature_grant(("19", "24", "0.5")), mode], denies=[no_setpoint]
+    )
+
+    def heat(target: str) -> Code:
+        view = fixture_view("res_203_trv", target_c=Decimal(target))
+        params = {"mode": "heat"}
+        return check(
+            "climate.set_mode", params, resource="res_203_trv", index=index, view=view
+        ).code
+
+    assert heat("30") is Code.MODE_WOULD_BYPASS_FENCE
+    assert heat("21") is Code.GRANTED
+    setpoint = check(
+        "climate.set_temperature", {"target_c": "21"}, resource="res_203_trv", index=index
+    )
+    assert setpoint.code is Code.DENIED_BY_RULE
 
 
 def test_stay_window() -> None:
