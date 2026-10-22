@@ -59,6 +59,9 @@ jobs:
           context: myha
           platforms: ${{ matrix.platform }}
           push: true
+          # Build provenance and an SBOM as attestations next to the image.
+          provenance: true
+          sbom: true
           build-args: BUILD_FROM=${{ steps.meta.outputs.build_from }}
           # latest only for release tags: a branch dispatch publishes dev-<branch> and leaves latest alone.
           tags: |

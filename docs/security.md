@@ -24,7 +24,11 @@ against:
 - **Admin access through ingress only.** The admin listener has no published port and answers
   only the Supervisor's ingress proxy. Its peer address can be changed only through an
   environment variable for tests, never through an app option. Every admin API request needs
-  exactly one `X-Remote-User-Id` header and a Supervisor of at least version 2026.10.3.
+  exactly one `X-Remote-User-Id` header and a Supervisor of at least version 2026.10.3. That
+  version is the first with both ingress fixes myHA relies on: administrator-only panels are
+  enforced for ingress sessions (Supervisor #7308, since 2026.10.2), and the identity headers
+  are filtered case-insensitively, so a client cannot smuggle its own `x-remote-user-id`
+  (Supervisor #7377, since 2026.10.3).
 - **Fresh role checks.** myHA asks Home Assistant whether the user is an active owner or
   administrator. Changes and sensitive reads ask on every request; other reads reuse a
   confirmed role for at most 5 seconds. If Home Assistant cannot answer, access is denied.
@@ -85,5 +89,4 @@ amd64 Home Assistant OS virtual machine, as the median of three runs with parall
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub: on the repository's **Security** tab,
-select **Report a vulnerability**. Do not open public issues for security problems.
+See the [security policy](../SECURITY.md). Do not open public issues for security problems.
