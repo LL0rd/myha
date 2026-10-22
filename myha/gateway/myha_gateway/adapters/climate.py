@@ -27,11 +27,11 @@ _STEP_MIN, _STEP_MAX = Decimal("0.01"), Decimal("10")
 
 
 def _step(value: Any) -> Decimal:
-    """The device step: hundredths from 0.01 to 10, otherwise the default."""
+    """The device step: hundredths from 0.01 to 10, otherwise the default; two decimals."""
     step = number(value)
     if step is None or not _STEP_MIN <= step <= _STEP_MAX or step % _STEP_MIN != 0:
-        return _DEFAULT_STEP
-    return step
+        step = _DEFAULT_STEP
+    return step.quantize(_STEP_MIN)  # "0.500000000" would exceed the policy's six decimals
 
 
 def _blocked(

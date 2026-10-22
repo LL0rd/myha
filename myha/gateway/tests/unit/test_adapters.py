@@ -169,24 +169,27 @@ def test_climate_without_a_step_uses_half_a_degree() -> None:
 @pytest.mark.parametrize(
     ("step", "expected"),
     [
-        (0.1, "0.1"),  # via str, not the float
+        (0.1, "0.10"),  # via str, not the float
         (0.01, "0.01"),
         (0.25, "0.25"),
-        (10, "10"),
-        (0, "0.5"),
-        (-1, "0.5"),
-        (0.005, "0.5"),
-        (0.125, "0.5"),
-        (11, "0.5"),
-        ("1E-50", "0.5"),
-        ("1e1000000", "0.5"),
-        (float("nan"), "0.5"),
-        ([1], "0.5"),
+        (10, "10.00"),
+        (1, "1.00"),
+        ("0.500000000", "0.50"),  # the policy allows at most six decimals
+        ("1.0000000", "1.00"),
+        (0, "0.50"),
+        (-1, "0.50"),
+        (0.005, "0.50"),
+        (0.125, "0.50"),
+        (11, "0.50"),
+        ("1E-50", "0.50"),
+        ("1e1000000", "0.50"),
+        (float("nan"), "0.50"),
+        ([1], "0.50"),
     ],
 )
 def test_climate_step_is_hundredths_up_to_ten(step: object, expected: str) -> None:
     caps = CLIMATE.capabilities(edited(AC, target_temp_step=step), None, "°C")
-    assert caps.target_c_step == Decimal(expected)
+    assert str(caps.target_c_step) == expected  # always exactly two decimals
 
 
 @pytest.mark.parametrize(
