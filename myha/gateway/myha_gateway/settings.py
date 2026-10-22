@@ -28,7 +28,8 @@ class _AddonOptions(PydanticBaseSettingsSource):
 class Settings(BaseSettings):
     """Runtime configuration; precedence: init kwargs > environment > options.json > defaults."""
 
-    model_config = SettingsConfigDict(env_prefix="MYHA_", extra="ignore")
+    # Unknown fields fail (default extra="forbid"); errors never echo inputs like SUPERVISOR_TOKEN.
+    model_config = SettingsConfigDict(env_prefix="MYHA_", hide_input_in_errors=True)
 
     data_dir: Path = Path("/data")
     web_dist: Path = Path("/opt/myha/web")

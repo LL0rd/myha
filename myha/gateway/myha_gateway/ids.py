@@ -16,7 +16,10 @@ def new_secret() -> str:
 
 
 def hash_secret(secret: str) -> str:
-    """Hex SHA-256 of a secret, the form in which it is stored."""
+    """Hex SHA-256 for storing secrets from ``new_secret()`` only.
+
+    Plain SHA-256 suits 256-bit random values; passwords and PINs need Argon2 (task 1.4).
+    """
     return hashlib.sha256(secret.encode()).hexdigest()
 
 

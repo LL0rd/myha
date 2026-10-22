@@ -7,15 +7,20 @@ _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _RULES = (
     # Must run first: in odd formats like "authorization=[Bearer x]" the key rule alone leaks x.
     (re.compile(r"(bearer\s+)\S+", re.IGNORECASE), r"\1<redacted>"),
-    # key=value and key: value, also quoted keys (JSON, dict repr); the key stays readable.
+    # key=value, key: value, key = value, quoted keys, Bearer/Basic scheme; key and scheme stay.
+    # shortcut: only the first token of a value is redacted ("a=1; b=2" keeps b=2);
+    # widen the value pattern once cookie headers get logged
     (
         re.compile(
-            r"""((?:secret|token|password|authorization)["']?[=:]\s*["']?(?:bearer\s+)?)\S+""",
+            r"""((?:secret|token|password|authorization|ticket|cookie)["']?\s*[=:]\s*["']?"""
+            r"(?:(?:bearer|basic)\s+)?)\S+",
             re.IGNORECASE,
         ),
         r"\1<redacted>",
     ),
     # base64url runs at least as long as a 256-bit secret from ids.new_secret().
+    # shortcut: redacts any 43+ char base64url run (also long entity ids and SPKI pins);
+    # revisit if logs become unreadable
     (re.compile(r"[A-Za-z0-9_-]{43,}"), "<redacted>"),
 )
 

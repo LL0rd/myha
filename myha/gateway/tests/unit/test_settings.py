@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from myha_gateway.settings import Settings
 
@@ -85,3 +86,23 @@ def test_probe_mode_allows_public_enabled_without_origin(
     assert s.public_enabled and s.public_origin == "http://probe.invalid:9443"
     monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
     assert Settings().public_origin == "http://testserver"
+
+
+def test_options_json_cannot_change_trusted_ingress_peer(data_dir: Path) -> None:
+    (data_dir / "options.json").write_text('{"trusted_ingress_peer": "0.0.0.0"}')
+    assert Settings().trusted_ingress_peer == "172.30.32.2"  # E18
+
+
+def test_unknown_field_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="public_enable"):
+        Settings(public_enable=True)
+
+
+def test_validation_errors_hide_the_supervisor_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-secret-value")
+    monkeypatch.setenv("MYHA_PUBLIC_ENABLED", "1")  # model-level error would echo every input
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    # pydantic shortens long inputs, so the token is not reliably visible; check that none is.
+    message = str(excinfo.value)
+    assert "input_value" not in message and "sup-secret-value" not in message

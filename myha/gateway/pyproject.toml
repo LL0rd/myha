@@ -33,7 +33,7 @@ ignore = ["S101"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["myha_gateway/policy", "myha_gateway/auth", "myha_gateway/adapters"]
+files = ["myha_gateway"]
 
 [build-system]
 requires = ["hatchling"]
