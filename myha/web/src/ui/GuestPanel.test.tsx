@@ -178,7 +178,7 @@ it("explain shows the rules", () => {
 });
 
 it.each<[string, Interval[], string | null, 1 | -1, string | null]>([
-  ["origin offset", [{ min: "18.25", max: "22.25", step: "0.5", origin: "0.25" }], "20.25", 1, "20.75"],
+  ["origin offset", [{ min: "18.3", max: "22.3", step: "0.5", origin: "0.3" }], "20.3", 1, "20.8"],
   ["gap upwards", [{ min: "18.0", max: "20.0", step: "0.5", origin: "0" }, { min: "22.0", max: "24.0", step: "0.5", origin: "0" }], "20.0", 1, "22.0"],
   ["gap downwards", [{ min: "18.0", max: "20.0", step: "0.5", origin: "0" }, { min: "22.0", max: "24.0", step: "0.5", origin: "0" }], "22.0", -1, "20.0"],
   ["below min, up", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], "15.0", 1, "18.0"],
@@ -190,7 +190,7 @@ it.each<[string, Interval[], string | null, 1 | -1, string | null]>([
   ["0.1 steps", [{ min: "18.0", max: "19.0", step: "0.1", origin: "0" }], "18.7", 1, "18.8"],
   ["off-grid bounds, up", [{ min: "18.2", max: "21.9", step: "0.5", origin: "0" }], null, 1, "18.5"],
   ["off-grid bounds, down", [{ min: "18.2", max: "21.9", step: "0.5", origin: "0" }], null, -1, "21.5"],
-  ["two-digit bounds", [{ min: "18.25", max: "19.0", step: "1", origin: "0" }], null, 1, "19.00"],
+  ["two-digit bounds", [{ min: "18.25", max: "19.0", step: "1", origin: "0" }], null, 1, "19.0"],
   ["step 0", [{ min: "18.0", max: "24.0", step: "0", origin: "0" }], "20.0", 1, null],
 ])("stepTarget: %s", (_, intervals, current, dir, expected) => {
   expect(stepTarget(intervals, current, dir)).toBe(expected);

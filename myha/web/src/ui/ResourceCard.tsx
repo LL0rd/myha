@@ -21,7 +21,7 @@ const trimZero = (s: string) => s.replace(/\.0+$/, "");
 
 /** Next allowed value above (dir 1) or below (dir -1) `current` across all intervals, as a decimal string; null if none. */
 export function stepTarget(intervals: Interval[], current: string | null | undefined, dir: 1 | -1): string | null {
-  // Scaled integers, so 0.1 steps never drift; at least one decimal, as the API expects "22.0".
+  // Scaled integers at full precision, so 0.1 steps never drift.
   const digits = Math.max(1, ...intervals.map((i) => Math.max(decimals(i.min), decimals(i.max), decimals(i.step), decimals(i.origin))));
   const scale = 10 ** digits;
   const n = (s: string) => Math.round(Number(s) * scale);
@@ -39,7 +39,8 @@ export function stepTarget(intervals: Interval[], current: string | null | undef
         : cur === null || cur > hi ? hi : origin + (Math.ceil((cur - origin) / step) - 1) * step;
     if (v >= lo && v <= hi && (best === null || (dir > 0 ? v < best : v > best))) best = v;
   }
-  return best === null ? null : (best / scale).toFixed(digits);
+  // Exactly one decimal: the server takes target_c as "-?NN.N" (policy/model.py).
+  return best === null ? null : (best / scale).toFixed(1);
 }
 
 /**
