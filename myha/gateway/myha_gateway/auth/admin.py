@@ -127,6 +127,8 @@ class AdminGuard:
                 return info
         except SupervisorUnavailable as exc:  # its message never contains the token
             logger.warning("admin access blocked: %s", exc)
+            if exc.status in (401, 403):  # token missing or not accepted: configuration
+                return "supervisor_refused", "Supervisor refused the app's token"
             return "supervisor_unreachable", "Supervisor unreachable"
         return "supervisor_version", f"Supervisor {info.version} is older than {minimum}"
 

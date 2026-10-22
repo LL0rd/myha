@@ -311,6 +311,16 @@ async def test_supervisor_outage_costs_one_request_per_5_seconds(
     assert requests == ["/info", "/info"]
 
 
+@pytest.mark.parametrize("status", [401, 403])
+async def test_refused_supervisor_has_its_own_reason(
+    status: int, admin_client: httpx.AsyncClient, ctx: AppContext
+) -> None:
+    # 401/403: the token is missing or not accepted, a configuration error, not an outage.
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, text="Forbidden"))
+    ctx.supervisor = SupervisorClient("http://supervisor", None, transport=transport)
+    assert unavailable(await admin_client.get(SESSION), "supervisor_refused")
+
+
 async def test_names_are_decoded_as_utf8_but_the_user_id_is_not(
     admin_client: httpx.AsyncClient, sim: SimHandle
 ) -> None:
