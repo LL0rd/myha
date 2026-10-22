@@ -282,6 +282,28 @@ def test_a18_mode_cannot_bypass_fence() -> None:
     assert (inside.code, inside.check_range) == (Code.GRANTED, (Decimal("8"), Decimal("24")))
 
 
+def test_a18_mode_cannot_keep_a_target_between_two_grants() -> None:
+    """A10 meets E7: with 18-20 and 22-24 granted, 21 is not settable, so heat may not keep it."""
+    mode = {"resources": ["res_203_trv"], "actions": ["climate.set_mode"]}
+    index = room203_index(
+        grants=[temperature_grant(("18", "20", "1")), temperature_grant(("22", "24", "1")), mode]
+    )
+
+    def heat(target: str) -> Decision:
+        view = fixture_view("res_203_trv", target_c=Decimal(target))
+        params = {"mode": "heat"}
+        return check("climate.set_mode", params, resource="res_203_trv", index=index, view=view)
+
+    set_21 = check(
+        "climate.set_temperature", {"target_c": "21"}, resource="res_203_trv", index=index
+    )
+    assert set_21.code is Code.PARAM_OUT_OF_RANGE
+    assert heat("21").code is Code.MODE_WOULD_BYPASS_FENCE
+    inside = heat("19")
+    assert (inside.code, inside.check_range) == (Code.GRANTED, (Decimal("18"), Decimal("24")))
+    assert heat("19.5").code is Code.GRANTED  # inside a range: the step does not matter
+
+
 def test_stay_window() -> None:
     before = check("state.read", now=STAY_START - timedelta(microseconds=1))
     assert (before.code, before.public_code) == (Code.STAY_NOT_STARTED, "ACCESS_EXPIRED")

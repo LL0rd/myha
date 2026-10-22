@@ -14,7 +14,6 @@ from myha_gateway.adapters.base import (
     WRITE_ACTIONS,
     Action,
     DeviceCapabilities,
-    Expectation,
     StateView,
 )
 from myha_gateway.adapters.registry import adapter_for
@@ -120,10 +119,10 @@ def decide(
         return _denial(DecisionCode.RESOURCE_NEEDS_REVIEW, normalized)
     check_range = None
     if act is Action.CLIMATE_SET_MODE and value != "off":
-        check_range = index.check_range(ctx, resource_id)  # low > high: no target passes
-        if check_range is not None and (
-            state_view is None  # an unknown target counts as outside
-            or Expectation(target_c_range=check_range).violated_range(state_view)
+        check_range = index.check_range(ctx, resource_id)  # the hull, for the later Expectation
+        target = None if state_view is None else state_view.target_c
+        if check_range is not None and not _target_admitted(
+            ctx, index, resource_id, target, check_range
         ):
             return _denial(DecisionCode.MODE_WOULD_BYPASS_FENCE, normalized)
     if write and state_view is not None and state_view.adapter_locked:
@@ -216,6 +215,28 @@ def _number_code(
     if any(isinstance(bound, Bound) and not bound.contains(value) for bound in bounds):
         return DecisionCode.FENCE_VIOLATION, ()
     return None, allowing
+
+
+def _target_admitted(
+    ctx: EffectiveContext,
+    index: PolicyIndex,
+    resource_id: str,
+    target: Decimal | None,
+    check_range: tuple[Decimal, Decimal],
+) -> bool:
+    """E7 before cool or heat: the reported target lies in one effective set_temperature range.
+
+    A gap between separate ranges does not count and the step does not matter (design §4.1).
+    Without a temperature grant ``check_range`` (the fences cut to the device) decides; an
+    unknown target is outside.
+    """
+    if target is None:
+        return False
+    capability = index.effective_capability(ctx, resource_id, Action.CLIMATE_SET_TEMPERATURE)
+    if capability is not None:
+        return any(interval.contains(target) for interval in capability.intervals)
+    low, high = check_range
+    return low <= target <= high
 
 
 def _on_step(interval: Interval, value: Decimal) -> bool:
