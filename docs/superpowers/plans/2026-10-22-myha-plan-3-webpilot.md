@@ -500,7 +500,7 @@ Verhalten:
 ### Task 9a.8: Web – Admin-Shell, API-Client, Session-Bootstrap
 
 **Files:**
-- Modify: `web/src/admin/main.tsx`, `web/package.json` (`@radix-ui/react-dialog`, `@radix-ui/react-tabs`; Skript `gen:api:admin`), `web/tests/e2e/ingress-proxy.mjs` (Step 8)
+- Modify: `web/src/admin/main.tsx`, `web/package.json` (`@radix-ui/react-dialog`, `@radix-ui/react-tabs`; Skript `gen:api:admin`), `tests/e2e/ingress-proxy.mjs` (Repo-Root, Step 8)
 - Create: `web/src/admin/App.tsx`, `web/src/admin/session.tsx`, `web/src/admin/api/client.ts`, `web/src/admin/api/events.ts`, `web/src/admin/api/types.ts` (generiert), `web/src/admin/i18n/de.json`, `web/src/admin/i18n/en.json`, `web/src/admin/admin.module.css`
 - Delete: `web/src/ui/ThemeSwitch.tsx`, sobald nichts mehr importiert (der `ThemeProvider` aus Teilplan 2 ersetzt ihn)
 - Test: `web/src/admin/api/client.test.ts`, `web/src/admin/api/events.test.ts`, `web/src/admin/App.test.tsx`, `web/src/admin/i18n/keys.test.ts`
