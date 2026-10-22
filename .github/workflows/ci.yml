@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: myha/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: myha/gateway/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy
+      - run: uv run pytest -q --cov=myha_gateway --cov-report=term
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: myha/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: myha/web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: myha/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: myha/web/dist
+          retention-days: 7
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: myha
+          platforms: linux/amd64
+          push: false
+          load: true
+          build-args: BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23
+          tags: myha-ci:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        # Same check as scripts/build-image.sh: --entrypoint bypasses s6, no --rm keeps the logs of a crashed container.
+        run: |
+          cid=$(docker run -d --entrypoint /opt/myha/venv/bin/myha-gateway \
+            -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
+            --tmpfs /data -p 127.0.0.1:18443:8443 "myha-ci:$GITHUB_SHA" serve)
+          trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$cid"; docker rm -f "$cid" >/dev/null' EXIT
+          for _ in $(seq 30); do
+            if curl -fs http://127.0.0.1:18443/healthz >/dev/null; then
+              curl -fsS http://127.0.0.1:18443/healthz; echo
+              curl -fsSI http://127.0.0.1:18443/
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "gateway did not become healthy within 30 s" >&2
+          exit 1

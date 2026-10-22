@@ -1,0 +1,56 @@
+name: Image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version and base image
+        id: meta
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          build_from=$(sed -n "s/^  ${ARCH}: *//p" myha/build.yaml)
+          test -n "$build_from"
+          echo "build_from=$build_from" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: myha
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: BUILD_FROM=${{ steps.meta.outputs.build_from }}
+          # latest only for release tags: a dispatch from a branch publishes :<branch> and leaves latest alone.
+          tags: |
+            ghcr.io/ll0rd/myha-${{ matrix.arch }}:${{ steps.meta.outputs.version }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/ll0rd/myha-{0}:latest', matrix.arch) || '' }}
+          labels: |
+            org.opencontainers.image.title=myHA
+            org.opencontainers.image.source=https://github.com/LL0rd/myha
+            org.opencontainers.image.licenses=Apache-2.0
+            io.hass.version=${{ steps.meta.outputs.version }}
+            io.hass.type=addon
+            io.hass.arch=${{ matrix.arch }}
