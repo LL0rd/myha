@@ -54,12 +54,19 @@ class PolicyIndex:
         self.units: Mapping[str, frozenset[str]] = MappingProxyType(dict(units))
 
     def rules_for(self, ctx: EffectiveContext) -> list[tuple[RoleBinding, RoleRules]]:
-        """The rules of each binding; a role version the index does not know grants nothing."""
-        found = [
-            (binding, self._role_versions.get((binding.role_template_id, binding.role_version)))
-            for binding in ctx.role_bindings
-        ]
-        return [(binding, rules) for binding, rules in found if rules is not None]
+        """The rules of each binding.
+
+        A role version missing from the index is a loader bug: skipping it would drop its
+        denies, so it raises instead.
+        """
+        found = []
+        for binding in ctx.role_bindings:
+            rules = self._role_versions.get((binding.role_template_id, binding.role_version))
+            if rules is None:
+                name = f"{binding.role_template_id}@{binding.role_version}"
+                raise ValueError(f"unknown role version {name}")
+            found.append((binding, rules))
+        return found
 
     def resource(self, resource_id: str) -> ResourceRef | None:
         return self._resources.get(resource_id)

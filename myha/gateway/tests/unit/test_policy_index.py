@@ -212,7 +212,10 @@ def test_session_units_cap_every_binding_and_an_empty_list_sets_no_cap() -> None
     ]
     rows: dict[str, Any] = {"assignments": assignments, "memberships": [membership("grp_family")]}
     capped = for_session(session(unit_ids=["unit_203"]), principal(), **rows)
-    assert capped.role_bindings == (RoleBinding("family", 1, frozenset({"unit_203"})),)
+    assert capped.role_bindings == (
+        RoleBinding("family", 1, frozenset({"unit_203"})),
+        RoleBinding("living", 3, frozenset()),  # kept for its denies
+    )
     assert INDEX.in_scope(capped, "res_203_trv")
     assert not INDEX.in_scope(capped, "res_lr_ac")
     uncapped = for_session(session(), principal(), **rows)
@@ -226,8 +229,23 @@ def test_session_units_cap_every_binding_and_an_empty_list_sets_no_cap() -> None
         **rows,
     )
     assert preview == replace(capped, purpose="preview")
-    elsewhere = guest_session(unit_ids=["unit_lr"])
-    assert for_session(elsewhere, guest(), the_stay=stay()).role_bindings == ()
+    elsewhere = for_session(guest_session(unit_ids=["unit_lr"]), guest(), the_stay=stay())
+    assert elsewhere.role_bindings == (RoleBinding("room_guest", 1, frozenset()),)
+    assert not INDEX.in_scope(elsewhere, "res_203_trv")
+
+
+def test_a_session_cap_keeps_the_denies_of_the_bindings_it_empties() -> None:
+    """A cap only narrows: LIVING, bound to unit_lr, denies set_level on the room-203 light."""
+    grant = assignment("prn_res", "room_guest", ["unit_203", "unit_lr"])
+    deny = assignment("prn_res", "living", ["unit_lr"], version=3)
+    granted = for_session(session(unit_ids=["unit_203"]), principal(), assignments=[grant])
+    assert INDEX.effective_capability(granted, "res_203_light", Action.LIGHT_SET_LEVEL)
+    for unit_ids in ([], ["unit_203"]):
+        both = for_session(session(unit_ids=unit_ids), principal(), assignments=[grant, deny])
+        assert INDEX.effective_capability(both, "res_203_light", Action.LIGHT_SET_LEVEL) is None
+    no_units = assignment("prn_res", "living", [], version=3)
+    unbound = for_session(session(), principal(), assignments=[grant, no_units])
+    assert INDEX.effective_capability(unbound, "res_203_light", Action.LIGHT_SET_LEVEL) is None
 
 
 @pytest.mark.parametrize(
@@ -850,13 +868,17 @@ def test_a_blocked_resource_keeps_its_ref_for_the_decision() -> None:
     assert INDEX.resource("res_unknown") is None
 
 
-def test_rules_for_skips_bindings_without_a_known_role_version() -> None:
-    unknown = RoleBinding("room_guest", 2, frozenset({"unit_203"}))
-    assert INDEX.rules_for(ctx(STAY_BINDING, unknown, LIVING_BINDING)) == [
+def test_an_unknown_role_version_fails_loudly() -> None:
+    """An index that misses a bound role version is a loader bug, never a smaller role."""
+    assert INDEX.rules_for(ctx(STAY_BINDING, LIVING_BINDING)) == [
         (STAY_BINDING, ROOM_GUEST),
         (LIVING_BINDING, LIVING),
     ]
-    assert INDEX.effective_capability(ctx(unknown), "res_203_trv", Action.METADATA_READ) is None
+    unknown = RoleBinding("room_guest", 2, frozenset({"unit_203"}))
+    with pytest.raises(ValueError, match="^unknown role version room_guest@2$"):
+        INDEX.rules_for(ctx(STAY_BINDING, unknown))
+    with pytest.raises(ValueError, match="unknown role version"):
+        INDEX.effective_capability(ctx(unknown), "res_203_trv", Action.METADATA_READ)
 
 
 def test_session_fences_narrow_only_their_own_session() -> None:
