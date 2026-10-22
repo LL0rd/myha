@@ -52,7 +52,10 @@ RuleDecimal = Annotated[
 
 
 class _Frozen(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # Subclass instances are checked again: an Interval in a Bound field fails on its step.
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, revalidate_instances="subclass-instances"
+    )
 
 
 # Request parameters: one schema per action.
@@ -148,6 +151,16 @@ class Interval(Bound):
     def on_step(self, value: Decimal) -> bool:
         """Whether ``(value - origin) / step`` is a whole number; nothing is rounded."""
         return _EXACT.remainder(_EXACT.subtract(value, self.origin), self.step).is_zero()
+
+    def clip(self, bound: Bound) -> "Interval | None":
+        """This interval narrowed to ``bound``, step and origin kept; ``None`` if nothing is left.
+
+        Only ``bound.min`` and ``bound.max`` count, so an Interval may serve as the bound.
+        """
+        low, high = max(self.min, bound.min), min(self.max, bound.max)
+        if low > high:
+            return None
+        return Interval(min=low, max=high, step=self.step, origin=self.origin)
 
 
 class RangeRule(_Frozen):

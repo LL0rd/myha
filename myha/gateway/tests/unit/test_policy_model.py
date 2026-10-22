@@ -244,6 +244,43 @@ def test_on_step_ignores_the_ambient_decimal_context() -> None:
         assert rule.on_step(Decimal("21.5"))
 
 
+def test_clip_narrows_to_the_bound_and_keeps_step_and_origin() -> None:
+    rule = interval(origin="0.25")
+    assert rule.clip(Bound(min=Decimal("20"), max=Decimal("22"))) == interval(
+        min="20", max="22", origin="0.25"
+    )
+    assert rule.clip(Bound(min=Decimal("22"), max=Decimal("30"))) == interval(
+        min="22", origin="0.25"
+    )
+    assert rule.clip(Bound(min=Decimal("0"), max=Decimal("100"))) == rule
+    assert rule.clip(Bound(min=Decimal("24"), max=Decimal("30"))) == interval(
+        min="24", origin="0.25"
+    )
+
+
+def test_clip_is_none_when_nothing_is_left() -> None:
+    assert interval().clip(Bound(min=Decimal("24.5"), max=Decimal("30"))) is None
+    assert interval().clip(Bound(min=Decimal("0"), max=Decimal("18.5"))) is None
+
+
+def test_clip_reads_only_min_and_max_of_an_interval_bound() -> None:
+    other = interval(min="20", max="30", step="1", origin="0.3")
+    clipped = interval().clip(other)
+    assert clipped == interval(min="20")
+    assert type(clipped) is Interval
+
+
+def test_an_interval_in_a_bound_field_is_revalidated_and_refused() -> None:
+    """A fence has no step of its own; an Interval must not smuggle one in."""
+    with pytest.raises(ValidationError):
+        FenceRules(target_c=interval())
+    with pytest.raises(ValidationError):
+        FenceRules.model_validate({"target_c": interval()})
+    assert FenceRules(target_c=Bound(min=Decimal("19"), max=Decimal("22"))).target_c == Bound(
+        min=Decimal("19"), max=Decimal("22")
+    )
+
+
 def test_models_are_frozen() -> None:
     rule = interval()
     with pytest.raises(ValidationError):
@@ -267,6 +304,9 @@ def test_enum_rule_is_stored_sorted() -> None:
     backward = EnumRule.model_validate({"allowed": ["heat", "cool", "off"]})
     assert forward.model_dump(mode="json") == backward.model_dump(mode="json")
     assert forward.model_dump(mode="json") == {"allowed": ["cool", "heat", "off"]}
+    # model_construct keeps the given order, so the serialiser alone has to sort.
+    unsorted = EnumRule.model_construct(allowed=("off", "heat", "cool"))
+    assert unsorted.model_dump(mode="json") == {"allowed": ["cool", "heat", "off"]}
 
 
 # --- grants, denies, fences ---
