@@ -1,16 +1,19 @@
-"""``myha-gateway serve`` runs both listeners."""
+"""``myha-gateway serve`` runs both listeners; ``dev-seed room203`` seeds a dev database."""
 
 import argparse
 import asyncio
 import contextlib
 import logging
+import sys
 from collections.abc import Callable
 
 import uvicorn
 from fastapi import FastAPI
 
 from myha_gateway.app import create_admin_app, create_public_app
+from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.deps import AppContext
+from myha_gateway.devseed import seed_room203
 from myha_gateway.limits import HeaderDeadlineProtocol
 from myha_gateway.logsetup import setup_logging
 from myha_gateway.settings import Settings
@@ -126,14 +129,40 @@ async def _serve(
         await task
 
 
+async def _dev_seed(settings: Settings) -> list[str]:
+    """Migrate, then seed the room 203 world from the Home Assistant at ``ha_ws_url``."""
+    ctx = await AppContext.create(settings)
+    try:
+        if ctx.public_origin is None:
+            raise RuntimeError(f"no join URLs: {ctx.refresh_public()}")
+        settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        await run_migrations(ctx.engine)
+        async with write_session(ctx.engine) as session:
+            await ensure_instance(session)
+        await ctx.ha.start()
+        return await seed_room203(ctx.engine, ctx.ha, ctx.public_origin)
+    finally:
+        await ctx.ha.stop()
+        await ctx.close()
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point of the ``myha-gateway`` command."""
     parser = argparse.ArgumentParser(prog="myha-gateway")
-    parser.add_argument("command", choices=["serve"])
-    parser.parse_args(argv)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("serve")
+    commands.add_parser("dev-seed").add_argument("world", choices=["room203"])
+    args = parser.parse_args(argv)
     settings = Settings()
     setup_logging(settings.log_level)
     try:
+        if args.command == "dev-seed":
+            if not settings.public_enabled:  # join URLs need the dev/test public origin
+                print("dev-seed needs MYHA_PUBLIC_ENABLED=1 (dev/test only)", file=sys.stderr)
+                raise SystemExit(2)
+            for url in asyncio.run(_dev_seed(settings)):
+                print(url)  # the only output on stdout; the logs go to stderr
+            return
         asyncio.run(_serve(settings))  # SystemExit from the admin server keeps its exit code
     except KeyboardInterrupt:  # Ctrl+C after graceful shutdown, like uvicorn
         pass

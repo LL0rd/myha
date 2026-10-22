@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
-from myha_gateway.api.admin import session
+from myha_gateway.api.admin import invites, session, stays
 from myha_gateway.api.public import health
 from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
@@ -142,6 +142,8 @@ def create_admin_app(ctx: AppContext) -> FastAPI:
     # Caches of require_admin, which every admin API route depends on.
     app.state.admin_guard = AdminGuard(ctx)
     app.include_router(session.router)
+    app.include_router(stays.router)
+    app.include_router(invites.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.
     csp = content_security_policy(frame_ancestors="'self'", connect="'self' wss: ws:")

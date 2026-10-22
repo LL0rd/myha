@@ -15,6 +15,14 @@ from pydantic import SecretStr
 
 from myha_gateway.adapters.base import StateView
 from myha_gateway.adapters.registry import adapter_for, detect_kind
+from myha_gateway.devseed import (
+    LIVING_ROOM,
+    ROOM_203,
+    ROOM_GUEST_DENIES,
+    ROOM_GUEST_GRANTS,
+    UNITS,
+    seed_room203,  # noqa: F401 (for the tests)
+)
 from myha_gateway.ha.messages import HAState, parse_registry, parse_temperature_unit
 from myha_gateway.ha.supervisor import SupervisorClient
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
@@ -118,48 +126,7 @@ async def ws_connect(
 # --- the simulator's world as a policy index, without a running simulator ---
 
 FIXTURE_TIME = datetime(2026, 10, 22, 10, tzinfo=UTC)
-# Product resource id -> entity id of the simulator fixture, per unit.
-ROOM_203 = {
-    "res_203_light": "light.room_203_ceiling",
-    "res_203_bedside": "light.room_203_bedside",
-    "res_203_trv": "climate.room_203_trv",
-    "res_203_blind": "cover.room_203_blind",
-    "res_203_hum": "sensor.room_203_humidity",
-    "res_203_group": "light.group_all",  # a group entity: its binding is blocked (A15)
-}
-LIVING_ROOM = {
-    "res_lr_ceiling": "light.living_ceiling",
-    "res_lr_lamp": "switch.living_floor_lamp",
-    "res_lr_ac": "climate.living_ac",
-}
-UNITS = {"unit_203": ROOM_203, "unit_lr": LIVING_ROOM}
-
-# Role room_guest v1 of spec §7 on these resources, plus set_mode, set_position and set_level.
-ROOM_GUEST_GRANTS: tuple[dict[str, Any], ...] = (
-    {
-        "resources": ["res_203_light", "res_203_bedside", "res_203_trv", "res_203_blind"]
-        + ["res_203_hum"],
-        "actions": ["metadata.read", "state.read"],
-    },
-    {"resources": ["res_203_light"], "actions": ["light.on", "light.off", "light.set_level"]},
-    {
-        "resources": ["res_203_trv"],
-        "actions": ["climate.set_temperature"],
-        "parameters": {"target_c": {"intervals": [{"min": "19", "max": "24", "step": "0.5"}]}},
-    },
-    {
-        "resources": ["res_203_trv"],
-        "actions": ["climate.set_mode"],
-        "parameters": {"mode": {"allowed": ["off", "cool", "heat"]}},
-    },
-    {
-        "resources": ["res_203_blind"],
-        "actions": ["cover.open", "cover.close", "cover.stop", "cover.set_position"],
-    },
-)
-ROOM_GUEST_DENIES: tuple[dict[str, Any], ...] = (
-    {"resources": ["res_203_light", "res_203_trv", "res_203_blind"], "actions": ["history.read"]},
-)
+# Units, resources and role room_guest v1 come from the dev seed, which writes them.
 Status = Literal["confirmed", "needs_review", "blocked"]
 _REGISTRY = parse_registry(fixtures.ENTITIES, fixtures.DEVICES, fixtures.AREAS)
 _TEMPERATURE_UNIT = parse_temperature_unit(fixtures.CONFIG)
