@@ -84,6 +84,10 @@ async def test_list_sessions_of_a_stay_without_secrets(
     assert (item["audience"], item["purpose"], item["revoked_at"]) == ("browser", "access", None)
     assert item["principal"]["type"] == "guest"
     assert len((await admin.get(SESSIONS)).json()["sessions"]) == 3
+    # a guest's session without the stay column still belongs to the stay (as for revoking)
+    await change(world.ctx, db.Session, db.Session.id == native, stay_id=None)
+    listed = (await admin.get(SESSIONS, params={"stay_id": stay_id})).json()["sessions"]
+    assert sorted(item["id"] for item in listed) == sorted([browser, native])
     assert other_stay != stay_id
 
 

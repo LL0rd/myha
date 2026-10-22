@@ -25,7 +25,7 @@ class StateChanged:
 
 @dataclass(frozen=True)
 class PolicyChanged:
-    policy_version: int
+    policy_version: int | None = None  # None: connections read it from the database anyway
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from myha_gateway.auth.admin import AdminIdentity, require_admin, require_csrf
 from myha_gateway.db.models import Principal
@@ -24,7 +24,8 @@ async def list_sessions(request: Request, stay_id: str | None = None) -> dict[st
         .order_by(SessionRow.created_at, SessionRow.id)
     )
     if stay_id is not None:
-        query = query.where(SessionRow.stay_id == stay_id)
+        # as revoke_stay_sessions: the stay's sessions and those of its guests
+        query = query.where(or_(SessionRow.stay_id == stay_id, Principal.stay_id == stay_id))
     async with ctx.sessions() as session:
         rows = (await session.execute(query)).all()
     return {"sessions": [_session_json(row, principal) for row, principal in rows]}

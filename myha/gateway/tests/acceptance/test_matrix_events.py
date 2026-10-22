@@ -8,18 +8,22 @@ revocation once more) go through ``WS /api/v1/events`` of a real uvicorn public 
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import websockets
 from sqlalchemy import delete, update
+from websockets.exceptions import InvalidStatus
 from websockets.typing import Origin
 
 import myha_gateway.__main__ as gateway
+from myha_gateway.app import create_admin_app
 from myha_gateway.db import models as db
 from myha_gateway.db import write_session
 from myha_gateway.deps import AppContext
@@ -31,8 +35,9 @@ from myha_gateway.ha.client import utcnow
 from myha_gateway.limits import RequestDeadlineProtocol
 from myha_gateway.services.sessions import revoke_session, revoke_stay_sessions
 from myha_simulator import fixtures
+from myha_simulator.fixtures import USERS
 from tests import policy_world, public_helpers
-from tests.helpers import SimHandle
+from tests.helpers import TRUSTED, SimHandle
 from tests.policy_world import GUEST_SESSION, RESIDENT_SESSION, policy_version
 from tests.public_helpers import Guest, World
 
@@ -151,9 +156,10 @@ async def test_snapshot_generation_and_sequence(app: AppContext, sim: SimHandle)
         assert snapshot["policy_version"] == await policy_version(app.engine)
         assert snapshot["dashboard"]["status"] == "online"
         assert list(rooms(snapshot)) == ["unit_203"]
-        await sim.control.post("state/light.room_203_ceiling", {"state": "off"})
-        await sim.control.post("state/light.room_203_ceiling", {"state": "on"})
-        updates = [await client.next(), await client.next()]
+        updates = []
+        for power in ("off", "on"):  # each event is projected with the state at sending time
+            await sim.control.post("state/light.room_203_ceiling", {"state": power})
+            updates.append(await client.next())
     assert [(m["type"], m["sequence"], m["room_id"]) for m in updates] == [
         ("resource.updated", 1, "unit_203"),
         ("resource.updated", 2, "unit_203"),
@@ -259,12 +265,33 @@ async def test_auth_timeout_closes(app: AppContext, monkeypatch: pytest.MonkeyPa
         json.dumps({"type": "hello", "ticket": f"ticket-{GUEST_SESSION}"}),
         json.dumps({"type": "auth", "ticket": 7}),
         "not json",
-        json.dumps({"type": "auth", "ticket": "ticket-" + "x" * connection.MAX_FRAME}),
     ],
 )
 async def test_auth_needs_a_valid_ticket_in_the_first_frame(app: AppContext, first: str) -> None:
     async with connect(app, first=first) as client:
         assert (await client.next(), client.close_code) == (CLOSED, 4401)
+
+
+async def test_oversized_first_frame_closes_with_1009(app: AppContext) -> None:
+    first = json.dumps({"type": "auth", "ticket": "ticket-" + "x" * connection.MAX_FRAME})
+    async with connect(app, first=first) as client:
+        assert (await client.next(), client.close_code) == (CLOSED, 1009)
+
+
+async def test_a_moved_resource_never_shows_under_its_old_room(
+    app: AppContext, sim: SimHandle
+) -> None:
+    async with connect(app) as client:
+        assert "res_203_bedside" in rooms(await client.snapshot())["unit_203"]
+        async with write_session(app.engine) as session:  # moved, as an admin would: new policy
+            moved = update(db.ResourceBinding).where(db.ResourceBinding.id == "res_203_bedside")
+            await session.execute(moved.values(unit_id="unit_lr"))
+            await session.execute(update(db.Instance).values(policy_version=11))
+        await sim.control.post("state/light.room_203_bedside", {"state": "off"})  # no bus event
+        assert await client.next() == {"type": "policy.changed", "policy_version": 11}
+        snapshot = await client.snapshot()
+    assert "res_203_bedside" not in rooms(snapshot).get("unit_203", [])
+    assert "unit_lr" not in rooms(snapshot)  # the guest's scope stays room 203
 
 
 async def test_ha_reconnect_sends_a_fresh_snapshot(app: AppContext, sim: SimHandle) -> None:
@@ -419,13 +446,65 @@ async def test_a35_ticket_single_use(world: World, port: int) -> None:
         assert await closed(ws) == (4401, [])
 
 
-@pytest.mark.parametrize("origin", ["http://evil.test", None])
-async def test_a35_browser_ticket_needs_the_public_origin(
-    world: World, port: int, origin: str | None
+async def test_a35_browser_ticket_needs_the_public_origin(world: World, port: int) -> None:
+    guest = await guest_of(world, world.secrets[0])
+    with pytest.raises(InvalidStatus) as refused:  # a foreign page: refused at the handshake
+        async with socket(port, None, "http://evil.test"):
+            pass
+    assert refused.value.response.status_code == 403
+    async with socket(port, await ticket(world, guest.headers()), origin=None) as ws:
+        assert await closed(ws) == (4401, [])  # no Origin: fine for native, not for a browser
+
+
+async def test_logout_closes_the_socket(world: World, port: int) -> None:
+    guest = await guest_of(world, world.secrets[0])
+    async with socket(port, await ticket(world, guest.headers())) as ws:
+        await received(ws)
+        await received(ws)
+        async with world.client() as client:
+            r = await client.post("/api/v1/auth/logout", headers=guest.headers())
+        assert r.status_code == 204, r.text
+        assert await closed(ws) == (4401, [{"type": "session.revoked", "reason": "logout"}])
+
+
+async def test_a_stay_change_sends_a_new_snapshot_at_once(world: World, port: int) -> None:
+    guest = await guest_of(world, world.secrets[0])
+    app = create_admin_app(world.ctx)
+    transport = httpx.ASGITransport(app=app, client=(TRUSTED, 1))
+    headers = {"X-Remote-User-Id": USERS[0]["id"]}
+    async with (
+        socket(port, await ticket(world, guest.headers())) as ws,
+        httpx.AsyncClient(transport=transport, base_url="http://x", headers=headers) as admin,
+    ):
+        before = await received(ws)
+        await received(ws)
+        token = (await admin.get("/api/v1/admin/session")).json()["csrf_token"]
+        body = {
+            "unit_id": "unit_lr",
+            "role_template_id": "room_guest",
+            "starts_at": utcnow().isoformat(),
+            "ends_at": (utcnow() + timedelta(days=1)).isoformat(),
+            "device_slots": 1,
+        }
+        r = await admin.post("/api/v1/admin/stays", json=body, headers={"X-MyHA-CSRF": token})
+        assert r.status_code == 201, r.text
+        changed = await received(ws)  # well before the 30 s re-check
+        after = await received(ws)
+    assert changed == {"type": "policy.changed", "policy_version": before["policy_version"] + 1}
+    assert (after["type"], after["policy_version"]) == ("snapshot", changed["policy_version"])
+
+
+async def test_a_client_that_leaves_early_logs_no_error(
+    world: World, port: int, caplog: pytest.LogCaptureFixture
 ) -> None:
     guest = await guest_of(world, world.secrets[0])
-    async with socket(port, await ticket(world, guest.headers()), origin) as ws:
-        assert await closed(ws) == (4401, [])
+    async with socket(port, None):
+        pass  # gone before its first frame
+    async with socket(port, await ticket(world, guest.headers())):
+        pass  # gone while the snapshot is on its way
+    async with socket(port, await ticket(world, guest.headers())) as ws:
+        await received(ws)  # the server is still fine
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
 async def test_native_ticket_needs_no_origin(world: World, port: int) -> None:

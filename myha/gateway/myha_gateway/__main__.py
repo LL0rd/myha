@@ -49,7 +49,9 @@ def _server(
         h11_max_incomplete_event_size=16 * 1024,
         limit_concurrency=limit_concurrency,  # beyond: 503 instead of unbounded tasks
         timeout_keep_alive=5,
-        ws_max_size=65536,
+        ws_max_size=65536,  # inbound frames; the event socket expects only its auth frame
+        ws_ping_interval=20,  # protocol pings keep the event socket's NAT entries alive
+        ws_ping_timeout=15,
         log_config=None,
         access_log=True,
         # Public, then admin stop in turn: 2 x 3 s plus up to 2 s for closing the HA socket

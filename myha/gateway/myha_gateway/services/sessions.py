@@ -21,8 +21,18 @@ from myha_gateway.ha.client import utcnow
 from myha_gateway.services.audit import AuditEvent, audit
 
 
-async def revoke_session(app: AppContext, session_id: str, reason: str, *, actor: str) -> None:
-    """Revoke the session and its refresh family; revoking it again changes nothing."""
+async def revoke_session(
+    app: AppContext,
+    session_id: str,
+    reason: str,
+    *,
+    actor: str,
+    operation: str = "session.revoke",
+) -> None:
+    """Revoke the session and its refresh family; revoking it again changes nothing.
+
+    ``operation`` names the audit event, such as ``auth.logout`` for the guest's own logout.
+    """
     async with write_session(app.engine) as session:
         row = await session.get(SessionRow, session_id)
         if row is None:
@@ -31,7 +41,7 @@ async def revoke_session(app: AppContext, session_id: str, reason: str, *, actor
         if revoked:
             params = {"session_ids": revoked}
             event = AuditEvent(
-                operation="session.revoke",
+                operation=operation,
                 result="ok",
                 actor=actor,
                 effective_principal=row.principal_id,

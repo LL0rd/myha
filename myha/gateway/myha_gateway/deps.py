@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from myha_gateway.auth.ratelimit import SlidingWindowLimiter
 from myha_gateway.db import create_engine, session_factory
 from myha_gateway.db.models import Instance
-from myha_gateway.events.bus import EventBus
+from myha_gateway.events.bus import EventBus, PolicyChanged
 from myha_gateway.ha.client import HAClient
 from myha_gateway.ha.messages import ConnectionStatus, StateChanged
 from myha_gateway.ha.supervisor import SupervisorClient
@@ -142,6 +142,7 @@ class AppContext:
         policy = PolicyLoader(engine, ha, audit=_audit_policy)
         on_event.append(policy.on_event)
         on_status.append(policy.on_status)
+        policy.on_invalidate = lambda: bus.publish(PolicyChanged())  # after each policy commit
         on_event.append(bus.on_event)  # after the loader: connections use the index it updated
         on_status.append(bus.on_status)
         supervisor = SupervisorClient(settings.supervisor_url, token)

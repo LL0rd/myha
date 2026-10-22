@@ -32,6 +32,7 @@ from myha_gateway.errors import ApiError
 from myha_gateway.ha.client import utcnow
 from myha_gateway.ids import constant_time_equal, hash_secret, new_id, new_secret
 from myha_gateway.services.audit import AuditEvent, audit
+from myha_gateway.services.sessions import revoke_session
 
 logger = logging.getLogger(__name__)
 
@@ -336,19 +337,13 @@ def session_view(session: Session, now: datetime) -> dict[str, Any]:
 
 
 async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
-    """Revoke only the session; the refresh endpoint (Plan 3) checks its ``revoked_at``."""
-    session, now = current.session, utcnow()
-    async with write_session(ctx.engine) as db:
-        query = update(Session).where(Session.id == session.id, Session.revoked_at.is_(None))
-        await db.execute(query.values(revoked_at=now, revoke_reason=reason))
-        event = AuditEvent(
-            operation=f"auth.{reason}",
-            result="ok",
-            actor=current.principal.id,
-            effective_principal=current.principal.id,
-            session_id=session.id,
-        )
-        await audit(db, event)
+    """Revoke the session with its refresh family, audited as ``auth.<reason>``.
+
+    The revocation service also closes the session's open event socket.
+    """
+    principal = current.principal.id
+    operation = f"auth.{reason}"
+    await revoke_session(ctx, current.session.id, reason, actor=principal, operation=operation)
 
 
 async def renew(ctx: AppContext, current: SessionContext) -> Session:
@@ -389,3 +384,25 @@ async def issue_ws_ticket(ctx: AppContext, current: SessionContext) -> str:
             )
         )
     return ticket
+
+
+async def use_ws_ticket(ctx: AppContext, ticket: str, origin: str | None) -> str | None:
+    """The session id behind an unused ticket in time; the ticket is used up either way.
+
+    A browser session's socket must come from the public origin, as its mutations must; a
+    native one sends no ``Origin``. Whether the session is still live the connection checks.
+    """
+    now = utcnow()
+    async with write_session(ctx.engine) as db:
+        query = (
+            update(WsTicket)
+            .where(WsTicket.ticket_hash == hash_secret(ticket), WsTicket.used_at.is_(None))
+            .where(WsTicket.expires_at > now)
+            .values(used_at=now)
+            .returning(WsTicket.session_id)
+        )
+        session_id = (await db.execute(query)).scalar_one_or_none()
+        session = None if session_id is None else await db.get(Session, session_id)
+    if session is None or (session.audience == "browser" and origin != ctx.public_origin):
+        return None
+    return session.id

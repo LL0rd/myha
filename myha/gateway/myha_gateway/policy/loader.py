@@ -14,7 +14,7 @@ or the client, they only set a flag for the worker.
 import asyncio
 import contextlib
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from typing import Literal, cast
@@ -42,6 +42,9 @@ _Key = tuple[int, int, bool, int]
 class PolicyLoader:
     def __init__(self, engine: AsyncEngine, ha: HAClient, *, audit: Audit) -> None:
         self.audit = audit  # wired by the app context; tests may record instead
+        # Called by invalidate(), which every policy change calls after its commit; must not
+        # block (it runs in the HA client's tasks too). The app context publishes PolicyChanged.
+        self.on_invalidate: Callable[[], None] | None = None
         self._engine, self._ha = engine, ha
         self._sessions = session_factory(engine)
         self._cache: tuple[_Key, PolicyIndex] | None = None
@@ -150,6 +153,8 @@ class PolicyLoader:
     def invalidate(self) -> None:
         """Build anew on the next call, also if the cache key looks the same."""
         self._cache = None
+        if self.on_invalidate is not None:
+            self.on_invalidate()
 
     async def on_event(self, change: StateChanged) -> None:
         """A confirmed binding's state: compare its abilities, cheap and without the database."""
