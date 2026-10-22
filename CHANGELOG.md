@@ -5,7 +5,8 @@ All notable changes to myHA are documented in this file. The format is based on
 
 ## [Unreleased]
 
-The foundation: gateway, web scaffold, app packaging and the core of the policy engine.
+The foundation (gateway, web scaffold, app packaging and the core of the policy engine) and the
+vertical guest core (invitations, guest sessions, live dashboard, actions and admin preview).
 myHA is pre-alpha and not ready for real guests.
 
 ### Added
@@ -49,6 +50,49 @@ myHA is pre-alpha and not ready for real guests.
   that load or with reverse proxy addresses, and never during a restore. If it fails, it
   restarts after a delay that doubles from 5 to at most 60 seconds, while the admin panel stays
   up. A database that cannot be opened stops the app with a logged reason and exit code 3.
+- Stays and one-time invitations through the admin API: an invitation's join link and QR code,
+  rendered locally, appear only in the answer that issues it. Each invitation takes one device
+  slot of its stay. Admins can list and revoke guest sessions and revoke invitations.
+- Public guest authentication: invitation redemption with exactly one winner per invitation,
+  guest sessions in host-bound `__Host-` cookies, a CSRF token for changes, one-time WebSocket
+  tickets and `/api/v1/me` (acceptance cases A22-A24, A35 in part).
+- Rate limits for the public routes, and on the public listener a 10-second deadline for each
+  request and a 64 KiB body cap.
+- Time plausibility guard: a clock that runs behind its high-water mark or jumps locks the
+  access of guests with a stay window until the time is plausible again. A host clock that the
+  Supervisor reports as synchronized is authoritative.
+- Policy loader with a versioned index cache and registry drift detection: changed device
+  abilities, a changed area or a replaced device mark the binding for review (A14-A16).
+- Dashboard projection and endpoint: only allow-listed fields, only rooms with visible
+  resources, and only values the policy would allow.
+- Live events over WebSocket, projected per connection, with a new snapshot after every policy
+  change and a close within 5 seconds after revocation (A19, A20, A25, A34, A52).
+- Idempotent actions with confirmation by the observed device state, recovery as `unknown`
+  after a restart and an audit row for every command (A31, A32).
+- Admin preview and simulation for a principal, a stay, an invitation or a group; simulation
+  never calls a device (A28, A29, A50).
+- Admin audit listing with filters and keyset paging; denials fold per minute.
+- Guest web app (PWA) with join, dashboard and ended pages, German and English, and the themes
+  system, light, dark and contrast.
+- Playwright end-to-end suite for the guest journey from invitation to revocation, with a CI
+  job.
+- Developer tools: `myha-gateway dev-seed room203` seeds a development database, and the
+  simulator can add and remove entities and change the temperature unit at runtime.
+
+### Changed
+
+- `audit_event` has an `anon_key` column with a partial index, which folds anonymous denials.
+  Migration 0001 was edited in place, because there is no release yet.
+- Test coverage now measures code that runs in greenlet and thread switches.
+
+### Security
+
+- A guard refuses Home Assistant and Supervisor calls, read sessions and nested write sessions
+  inside a database write session.
+- The audit writer refuses parameter names that look like secrets, such as `code`, `otp` or
+  `pwd`.
+- The public listener aborts TLS clients that stay silent after the server has closed the
+  connection.
 
 ### Removed
 
