@@ -7,7 +7,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Every main commit gets its own result; superseded PR runs are cancelled.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -15,14 +16,18 @@ permissions:
 jobs:
   gateway:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: myha/gateway
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # setup-uv publishes no major tags since v8, only immutable release tags.
       - uses: astral-sh/setup-uv@v10.3.2
         with:
+          version: "0.10.x" # same minor as the uv image in the Dockerfile
           enable-cache: true
           cache-dependency-glob: myha/gateway/uv.lock
       - run: uv sync --locked
@@ -33,11 +38,14 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: myha/web
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
         with:
           package_json_file: myha/web/package.json
@@ -59,33 +67,44 @@ jobs:
 
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read base image
+        id: base
+        run: |
+          build_from=$(sed -n "s/^  amd64: *//p" myha/build.yaml)
+          test -n "$build_from"
+          echo "build_from=$build_from" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: myha
           platforms: linux/amd64
           push: false
           load: true
-          build-args: BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23
+          build-args: BUILD_FROM=${{ steps.base.outputs.build_from }}
           tags: myha-ci:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test
-        # Same check as scripts/build-image.sh: --entrypoint bypasses s6, no --rm keeps the logs of a crashed container.
+        # Like scripts/build-image.sh: --entrypoint bypasses s6, no --rm keeps the logs of a crashed container.
         run: |
           cid=$(docker run -d --entrypoint /opt/myha/venv/bin/myha-gateway \
             -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
             --tmpfs /data -p 127.0.0.1:18443:8443 "myha-ci:$GITHUB_SHA" serve)
           trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$cid"; docker rm -f "$cid" >/dev/null' EXIT
           for _ in $(seq 30); do
-            if curl -fs http://127.0.0.1:18443/healthz >/dev/null; then
-              curl -fsS http://127.0.0.1:18443/healthz; echo
-              curl -fsSI http://127.0.0.1:18443/
+            if curl -fs --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz >/dev/null; then
+              curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz; echo
+              curl -fsSI --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/
               exit 0
             fi
             sleep 1
           done
-          echo "gateway did not become healthy within 30 s" >&2
+          echo "gateway not healthy after 30 attempts" >&2
           exit 1
