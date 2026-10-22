@@ -47,6 +47,7 @@ export function Join({ fragment }: { fragment: JoinFragment | null }) {
       const session = await api.me().catch(() => null);
       if (session) {
         setCsrf(session.csrf_token);
+        keepPairing(fragment);
         return navigate("/", { replace: true });
       }
       setError(e.code === "RATE_LIMITED" ? t("error.RATE_LIMITED") : t("join.failed"));

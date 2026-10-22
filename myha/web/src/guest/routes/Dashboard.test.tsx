@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../api/dashboard.fixture.json";
 import { ApiError, type Transport } from "../../transport";
 import { createSession, SessionContext } from "../store/session";
@@ -147,32 +147,70 @@ it("an invalid frame or a sequence gap closes the socket for a fresh snapshot", 
   expect(sockets[1]!.close).toHaveBeenCalled();
 });
 
-it("a frame the page cannot read after every snapshot backs off 1, 2, 4 s, then reloads the page", async () => {
-  vi.spyOn(Math, "random").mockReturnValue(1); // no jitter: the delays are exact
-  const reload = vi.fn();
-  vi.stubGlobal("location", { ...window.location, reload });
-  renderDashboard();
+describe("unreadable frames", () => {
+  // Exact delays: the clock moves only when the test says so (vi.waitFor and shouldAdvanceTime would move it too).
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ now: new Date("2026-10-22T10:00:00Z"), shouldAdvanceTime: false });
+    vi.spyOn(Math, "random").mockReturnValue(1); // no jitter
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await act(() => vi.advanceTimersByTimeAsync(0)); // promises only, no time
+  };
   const snapshotThenJunk = (socket: FakeSocket) =>
     act(() => {
       socket.receive({ type: "snapshot", generation: 2, sequence: 0, policy_version: 7, dashboard: { status: "online", rooms: fixture.rooms } });
       socket.receive({ type: "resource.created", sequence: 1 }); // e.g. a newer gateway's event
       socket.dispatchEvent(new Event("close"));
     });
-  await vi.waitFor(() => expect(sockets).toHaveLength(1));
-  for (const [n, delay] of [1_000, 2_000, 4_000].entries()) {
-    snapshotThenJunk(sockets[n]!);
-    await act(() => vi.advanceTimersByTimeAsync(delay - 1));
-    expect(sockets).toHaveLength(n + 1);
-    await act(() => vi.advanceTimersByTimeAsync(1));
-    await vi.waitFor(() => expect(sockets).toHaveLength(n + 2));
-  }
-  expect(reload).not.toHaveBeenCalled();
-  snapshotThenJunk(sockets[3]!);
-  await act(() => vi.advanceTimersByTimeAsync(8_000));
-  await vi.waitFor(() => expect(sockets).toHaveLength(5));
-  snapshotThenJunk(sockets[4]!); // the fifth unreadable frame in a row: this page is older than the gateway
-  expect(reload).toHaveBeenCalledTimes(1);
-  vi.unstubAllGlobals();
+  const waitBackoff = async (ms: number) => {
+    await act(() => vi.advanceTimersByTimeAsync(ms));
+    await settle();
+  };
+
+  it("back off 1, 2, 4 s after every snapshot, then reload the page once", async () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    renderDashboard();
+    await settle();
+    expect(sockets).toHaveLength(1);
+    for (const [n, delay] of [1_000, 2_000, 4_000].entries()) {
+      snapshotThenJunk(sockets[n]!);
+      await waitBackoff(delay - 1);
+      expect(sockets).toHaveLength(n + 1);
+      await waitBackoff(1);
+      expect(sockets).toHaveLength(n + 2);
+    }
+    expect(reload).not.toHaveBeenCalled();
+    snapshotThenJunk(sockets[3]!);
+    await waitBackoff(8_000);
+    expect(sockets).toHaveLength(5);
+    snapshotThenJunk(sockets[4]!); // the fifth unreadable frame in a row: this page is older than the gateway
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("after the one reload of this bundle the page stays locked instead of looping", async () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    sessionStorage.setItem("myha.reloadedBundle", import.meta.url.replace("routes/Dashboard.test.tsx", "routes/Dashboard.tsx"));
+    renderDashboard();
+    await settle();
+    for (const [n, delay] of [1_000, 2_000, 4_000, 8_000].entries()) {
+      snapshotThenJunk(sockets[n]!);
+      await waitBackoff(delay);
+    }
+    snapshotThenJunk(sockets[4]!);
+    await waitBackoff(60_000);
+    expect(reload).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(5); // no further attempt
+    expect(screen.getByText("Reconnecting")).toBeTruthy();
+  });
 });
 
 it("a click answered late keeps its click time, a 5xx is unknown", async () => {

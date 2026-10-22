@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
 import { events, type PublicErrorCode } from "../../api/schema";
 import { useI18n, type Lang } from "../../i18n";
@@ -16,6 +16,20 @@ const BACKOFF_MS = [1_000, 10_000] as const; // first and longest reconnect dela
 const ACTION_RETRIES = 2; // after a timeout, with the same idempotency key
 const STABLE_MS = 30_000; // a connection this old resets the backoff
 const UNREADABLE_LIMIT = 5; // unreadable frames in a row: the page is older than the gateway, load the new one
+const RELOADED_KEY = "myha.reloadedBundle";
+
+/** Reloads once per bundle; a second time would loop if the new page cannot read the gateway either. */
+function reloadOnce(): boolean {
+  const bundle = import.meta.url; // the hashed module URL names this build
+  try {
+    if (sessionStorage.getItem(RELOADED_KEY) === bundle) return false;
+    sessionStorage.setItem(RELOADED_KEY, bundle);
+  } catch {
+    return false; // without storage there is no loop guard: stay put
+  }
+  location.reload(); // index.html is no-store
+  return true;
+}
 
 /** The session is gone for good: revoked, expired or never valid. */
 const sessionGone = (error: unknown) => error instanceof ApiError && (error.status === 401 || error.code === "ACCESS_EXPIRED");
@@ -54,6 +68,7 @@ export function Dashboard() {
     let begins: ReturnType<typeof setTimeout> | undefined;
     let delay: number = BACKOFF_MS[0];
     let unreadable = 0;
+    let stuck = false; // unreadable even after a reload: stay locked instead of looping
     const end = () => navigate("/ended", { replace: true });
 
     const reconnect = () => {
@@ -79,7 +94,7 @@ export function Dashboard() {
             // falls through to the failed schema check
           }
           const parsed = events.any.safeParse(data);
-          if (!parsed.success && ++unreadable >= UNREADABLE_LIMIT) return location.reload(); // index.html is no-store
+          if (!parsed.success && ++unreadable >= UNREADABLE_LIMIT && !reloadOnce()) stuck = true;
           if (!parsed.success || !store.apply(parsed.data)) return ws.close();
         });
         ws.addEventListener("close", () => {
@@ -90,7 +105,8 @@ export function Dashboard() {
             unreadable = 0;
           }
           // After session.revoked the page ends; otherwise a revoked session fails at the next ticket with 401.
-          if (!stopped && !store.get().ended) reconnect();
+          if (stuck) store.socketLost();
+          else if (!stopped && !store.get().ended) reconnect();
         });
       } catch (error) {
         if (sessionGone(error)) return end();
@@ -129,15 +145,15 @@ export function Dashboard() {
   }, [api, transport, setCsrf, store, navigate, run]);
 
   // Back from the background: the session may have ended, the socket may be dead or have missed events.
+  const hiddenAt = useRef<number | null>(null); // survives the re-subscription when `failed` changes
   useEffect(() => {
-    let hiddenAt: number | null = null;
     const visible = () => {
       if (document.visibilityState !== "visible") {
-        hiddenAt ??= Date.now();
+        hiddenAt.current ??= Date.now();
         return;
       }
-      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
-      hiddenAt = null;
+      const away = hiddenAt.current === null ? 0 : Date.now() - hiddenAt.current;
+      hiddenAt.current = null;
       // A long nap, or a start that failed: /me, dashboard and a new socket.
       if (away > STALE_CLEAR_MS || failed) return setRun((n) => n + 1);
       api.me().then(
