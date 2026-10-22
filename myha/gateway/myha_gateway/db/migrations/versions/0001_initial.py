@@ -2,15 +2,13 @@
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-10-22 16:56:59.080808
+Create Date: 2026-10-22 17:28:23.767147
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
-from myha_gateway.db.types import UtcDateTime
 
 revision: str = "0001"
 down_revision: str | Sequence[str] | None = None
@@ -22,7 +20,7 @@ def upgrade() -> None:
     op.create_table(
         "audit_event",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("ts", UtcDateTime(), nullable=False),
+        sa.Column("ts", sa.String(), nullable=False),
         sa.Column("actor", sa.String(), nullable=False),
         sa.Column("effective_principal", sa.String(), nullable=True),
         sa.Column("session_id", sa.String(), nullable=True),
@@ -32,7 +30,8 @@ def upgrade() -> None:
         sa.Column("resource_id", sa.String(), nullable=True),
         sa.Column("policy_version", sa.Integer(), nullable=True),
         sa.Column("normalized_params", sa.JSON(none_as_null=True), nullable=True),
-        sa.Column("aggregate_count", sa.Integer(), nullable=False),
+        sa.Column("ha_context_id", sa.String(), nullable=True),
+        sa.Column("aggregate_count", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_audit_event")),
         sqlite_autoincrement=True,
     )
@@ -46,7 +45,7 @@ def upgrade() -> None:
         sa.Column("resource_ids", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("action", sa.String(), nullable=False),
         sa.Column("parameters", sa.JSON(none_as_null=True), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_fence")),
     )
     op.create_table(
@@ -54,7 +53,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("description", sa.String(), nullable=True),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_group")),
     )
     op.create_table(
@@ -76,9 +75,9 @@ def upgrade() -> None:
         sa.Column("session_limits", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("audit_retention_days", sa.Integer(), nullable=False),
         sa.Column("time_trusted", sa.Boolean(), nullable=False),
-        sa.Column("last_seen_clock", UtcDateTime(), nullable=False),
+        sa.Column("last_seen_clock", sa.String(), nullable=False),
         sa.Column("server_secret", sa.String(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_instance")),
     )
     op.create_table(
@@ -86,9 +85,9 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("code", sa.String(), nullable=False),
         sa.Column("poll_token_hash", sa.String(), nullable=False),
-        sa.Column("expires_at", UtcDateTime(), nullable=False),
+        sa.Column("expires_at", sa.String(), nullable=False),
         sa.Column("approved_session_id", sa.String(), nullable=True),
-        sa.Column("created_at", UtcDateTime(), nullable=False),
+        sa.Column("created_at", sa.String(), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_pairing_request")),
         sa.UniqueConstraint("poll_token_hash", name=op.f("uq_pairing_request_poll_token_hash")),
     )
@@ -99,7 +98,7 @@ def upgrade() -> None:
         sa.Column("description", sa.String(), nullable=True),
         sa.Column("draft", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("draft_based_on", sa.Integer(), nullable=True),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_role_template")),
     )
     op.create_table(
@@ -107,7 +106,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("sort", sa.Integer(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_unit")),
     )
     op.create_table(
@@ -119,7 +118,7 @@ def upgrade() -> None:
         sa.Column("role_version", sa.Integer(), nullable=False),
         sa.Column("unit_ids", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(
             ["role_template_id"],
             ["role_template.id"],
@@ -133,7 +132,7 @@ def upgrade() -> None:
         "dashboard",
         sa.Column("unit_id", sa.String(), nullable=False),
         sa.Column("layout", sa.JSON(none_as_null=True), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(["unit_id"], ["unit.id"], name=op.f("fk_dashboard_unit_id_unit")),
         sa.PrimaryKeyConstraint("unit_id", name=op.f("pk_dashboard")),
     )
@@ -152,7 +151,7 @@ def upgrade() -> None:
         sa.Column("confirmed_capabilities", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("capability_fingerprint", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(
             ["unit_id"], ["unit.id"], name=op.f("fk_resource_binding_unit_id_unit")
         ),
@@ -168,7 +167,7 @@ def upgrade() -> None:
         sa.Column("version_number", sa.Integer(), nullable=False),
         sa.Column("grants", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("denies", sa.JSON(none_as_null=True), nullable=False),
-        sa.Column("published_at", UtcDateTime(), nullable=False),
+        sa.Column("published_at", sa.String(), nullable=False),
         sa.Column("based_on_version", sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(
             ["role_template_id"],
@@ -186,15 +185,15 @@ def upgrade() -> None:
         "stay",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("unit_id", sa.String(), nullable=False),
-        sa.Column("starts_at", UtcDateTime(), nullable=False),
-        sa.Column("ends_at", UtcDateTime(), nullable=False),
+        sa.Column("starts_at", sa.String(), nullable=False),
+        sa.Column("ends_at", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("external_ref", sa.String(), nullable=True),
         sa.Column("role_template_id", sa.String(), nullable=False),
         sa.Column("role_version", sa.Integer(), nullable=False),
         sa.Column("device_slots", sa.Integer(), nullable=False),
-        sa.Column("checked_out_at", UtcDateTime(), nullable=True),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("checked_out_at", sa.String(), nullable=True),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(
             ["role_template_id"],
             ["role_template.id"],
@@ -210,11 +209,11 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(), nullable=False),
         sa.Column("stay_id", sa.String(), nullable=True),
         sa.Column("device_slot", sa.Integer(), nullable=False),
-        sa.Column("redeem_until", UtcDateTime(), nullable=False),
-        sa.Column("consumed_at", UtcDateTime(), nullable=True),
+        sa.Column("redeem_until", sa.String(), nullable=False),
+        sa.Column("consumed_at", sa.String(), nullable=True),
         sa.Column("consumed_session_id", sa.String(), nullable=True),
-        sa.Column("revoked_at", UtcDateTime(), nullable=True),
-        sa.Column("created_at", UtcDateTime(), nullable=False),
+        sa.Column("revoked_at", sa.String(), nullable=True),
+        sa.Column("created_at", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(["stay_id"], ["stay.id"], name=op.f("fk_invite_stay_id_stay")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_invite")),
         sa.UniqueConstraint("secret_hash", name=op.f("uq_invite_secret_hash")),
@@ -231,17 +230,19 @@ def upgrade() -> None:
         sa.Column("theme", sa.String(), nullable=True),
         sa.Column("stay_id", sa.String(), nullable=True),
         sa.Column("invite_id", sa.String(), nullable=True),
-        sa.Column("created_at", UtcDateTime(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.String(), nullable=False),
+        sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.ForeignKeyConstraint(["stay_id"], ["stay.id"], name=op.f("fk_principal_stay_id_stay")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_principal")),
     )
+    op.create_index(op.f("ix_principal_stay_id"), "principal", ["stay_id"])
+
     op.create_table(
         "credential",
         sa.Column("principal_id", sa.String(), nullable=False),
         sa.Column("username_normalized", sa.String(), nullable=False),
         sa.Column("password_hash", sa.String(), nullable=False),
-        sa.Column("changed_at", UtcDateTime(), nullable=False),
+        sa.Column("changed_at", sa.String(), nullable=False),
         sa.Column("must_reset", sa.Boolean(), nullable=False),
         sa.ForeignKeyConstraint(
             ["principal_id"], ["principal.id"], name=op.f("fk_credential_principal_id_principal")
@@ -254,8 +255,8 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("principal_id", sa.String(), nullable=False),
         sa.Column("group_id", sa.String(), nullable=False),
-        sa.Column("valid_from", UtcDateTime(), nullable=False),
-        sa.Column("valid_to", UtcDateTime(), nullable=True),
+        sa.Column("valid_from", sa.String(), nullable=False),
+        sa.Column("valid_to", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
             ["group_id"], ["group.id"], name=op.f("fk_membership_group_id_group")
         ),
@@ -279,16 +280,16 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(), nullable=False),
         sa.Column("stay_id", sa.String(), nullable=True),
         sa.Column("unit_ids", sa.JSON(none_as_null=True), nullable=False),
-        sa.Column("not_before", UtcDateTime(), nullable=True),
-        sa.Column("not_after", UtcDateTime(), nullable=False),
-        sa.Column("last_seen_at", UtcDateTime(), nullable=False),
-        sa.Column("revoked_at", UtcDateTime(), nullable=True),
+        sa.Column("not_before", sa.String(), nullable=True),
+        sa.Column("not_after", sa.String(), nullable=False),
+        sa.Column("last_seen_at", sa.String(), nullable=False),
+        sa.Column("revoked_at", sa.String(), nullable=True),
         sa.Column("revoke_reason", sa.String(), nullable=True),
         sa.Column("csrf_secret", sa.String(), nullable=False),
         sa.Column("device_label", sa.String(), nullable=True),
         sa.Column("actor_admin_id", sa.String(), nullable=True),
         sa.Column("preview_target", sa.JSON(none_as_null=True), nullable=True),
-        sa.Column("created_at", UtcDateTime(), nullable=False),
+        sa.Column("created_at", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(
             ["principal_id"], ["principal.id"], name=op.f("fk_session_principal_id_principal")
         ),
@@ -296,6 +297,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_session")),
         sa.UniqueConstraint("token_hash", name=op.f("uq_session_token_hash")),
     )
+    op.create_index(op.f("ix_session_family_id"), "session", ["family_id"])
     op.create_index(op.f("ix_session_principal_id"), "session", ["principal_id"])
     op.create_index(op.f("ix_session_stay_id"), "session", ["stay_id"])
 
@@ -313,8 +315,8 @@ def upgrade() -> None:
         sa.Column("ha_context_id", sa.String(), nullable=True),
         sa.Column("expectation", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("reason", sa.String(), nullable=True),
-        sa.Column("created_at", UtcDateTime(), nullable=False),
-        sa.Column("updated_at", UtcDateTime(), nullable=False),
+        sa.Column("created_at", sa.String(), nullable=False),
+        sa.Column("updated_at", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(
             ["session_id"], ["session.id"], name=op.f("fk_command_session_id_session")
         ),
@@ -329,28 +331,32 @@ def upgrade() -> None:
         sa.Column("family_id", sa.String(), nullable=False),
         sa.Column("token_hash", sa.String(), nullable=False),
         sa.Column("session_id", sa.String(), nullable=False),
-        sa.Column("issued_at", UtcDateTime(), nullable=False),
-        sa.Column("rotated_at", UtcDateTime(), nullable=True),
-        sa.Column("used_at", UtcDateTime(), nullable=True),
+        sa.Column("issued_at", sa.String(), nullable=False),
+        sa.Column("rotated_at", sa.String(), nullable=True),
+        sa.Column("used_at", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
             ["session_id"], ["session.id"], name=op.f("fk_refresh_token_session_id_session")
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_refresh_token")),
         sa.UniqueConstraint("token_hash", name=op.f("uq_refresh_token_token_hash")),
     )
+    op.create_index(op.f("ix_refresh_token_family_id"), "refresh_token", ["family_id"])
+    op.create_index(op.f("ix_refresh_token_session_id"), "refresh_token", ["session_id"])
+
     op.create_table(
         "ws_ticket",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("ticket_hash", sa.String(), nullable=False),
         sa.Column("session_id", sa.String(), nullable=False),
-        sa.Column("expires_at", UtcDateTime(), nullable=False),
-        sa.Column("used_at", UtcDateTime(), nullable=True),
+        sa.Column("expires_at", sa.String(), nullable=False),
+        sa.Column("used_at", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
             ["session_id"], ["session.id"], name=op.f("fk_ws_ticket_session_id_session")
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_ws_ticket")),
         sa.UniqueConstraint("ticket_hash", name=op.f("uq_ws_ticket_ticket_hash")),
     )
+    op.create_index(op.f("ix_ws_ticket_session_id"), "ws_ticket", ["session_id"])
 
 
 def downgrade() -> None:

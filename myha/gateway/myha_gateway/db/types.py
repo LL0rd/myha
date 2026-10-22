@@ -12,7 +12,7 @@ class UtcDateTime(TypeDecorator[datetime]):
     """Aware datetime stored as UTC ISO-8601 text such as ``2026-10-22T09:30:00.000000Z``.
 
     Fixed microsecond precision keeps string order equal to time order, so SQL comparisons
-    on these columns stay correct. Naive datetimes are rejected instead of guessed.
+    on these columns stay correct. Naive datetimes are rejected, written or read.
     """
 
     impl = String
@@ -26,4 +26,9 @@ class UtcDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC).isoformat(timespec="microseconds").removesuffix("+00:00") + "Z"
 
     def process_result_value(self, value: Any, dialect: Dialect) -> datetime | None:
-        return None if value is None else datetime.fromisoformat(value)
+        if value is None:
+            return None
+        result = datetime.fromisoformat(value)
+        if result.utcoffset() is None:
+            raise ValueError(f"naive datetime {value!r} in the database")
+        return result.astimezone(UTC)

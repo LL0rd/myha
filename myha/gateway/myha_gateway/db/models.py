@@ -1,8 +1,9 @@
 """SQLAlchemy models for the gateway database (design §5).
 
 Ids are product strings such as ``unit_1a2b3c4d5e6f``; timestamps are aware UTC datetimes;
-structured fields are JSON. ``version`` columns on admin-editable tables carry optimistic
-locking: services compare and increment them, the ORM never does it implicitly.
+structured fields are JSON. In-place changes to a JSON value are not tracked: assign a new
+object. ``version`` columns on admin-editable tables carry optimistic locking: services
+compare and increment them, the ORM never does it implicitly.
 """
 
 from datetime import datetime
@@ -59,7 +60,7 @@ class Instance(Base):
     time_trusted: Mapped[bool]
     last_seen_clock: Mapped[datetime]  # high-water mark of the wall clock (E26)
     server_secret: Mapped[str]  # HMAC key; never exported
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Unit(Base):
@@ -68,7 +69,7 @@ class Unit(Base):
     id: Mapped[str] = mapped_column(primary_key=True)
     name: Mapped[str]
     sort: Mapped[int]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class ResourceBinding(Base):
@@ -89,7 +90,7 @@ class ResourceBinding(Base):
     confirmed_capabilities: Mapped[dict[str, Any]]
     capability_fingerprint: Mapped[str]
     status: Mapped[str]  # confirmed | needs_review | blocked
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Principal(Base):
@@ -101,10 +102,10 @@ class Principal(Base):
     display_name: Mapped[str]
     locale: Mapped[str | None]
     theme: Mapped[str | None]
-    stay_id: Mapped[str | None] = mapped_column(ForeignKey("stay.id"))  # guests only
+    stay_id: Mapped[str | None] = mapped_column(ForeignKey("stay.id"), index=True)  # guests only
     invite_id: Mapped[str | None]  # guests only
     created_at: Mapped[datetime]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Credential(Base):
@@ -123,7 +124,7 @@ class Group(Base):
     id: Mapped[str] = mapped_column(primary_key=True)
     name: Mapped[str]
     description: Mapped[str | None]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Membership(Base):
@@ -145,7 +146,7 @@ class RoleTemplate(Base):
     description: Mapped[str | None]
     draft: Mapped[dict[str, Any] | None]
     draft_based_on: Mapped[int | None]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class RoleVersion(Base):
@@ -174,7 +175,7 @@ class Assignment(Base):
     role_version: Mapped[int]
     unit_ids: Mapped[list[str]]
     status: Mapped[str]  # active | disabled_pending_review
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Fence(Base):
@@ -186,7 +187,7 @@ class Fence(Base):
     resource_ids: Mapped[list[str] | None]
     action: Mapped[str]
     parameters: Mapped[dict[str, Any]]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Stay(Base):
@@ -204,7 +205,7 @@ class Stay(Base):
     role_version: Mapped[int]
     device_slots: Mapped[int]
     checked_out_at: Mapped[datetime | None]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Invite(Base):
@@ -231,7 +232,7 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     token_hash: Mapped[str] = mapped_column(unique=True)
-    family_id: Mapped[str | None]  # native refresh family
+    family_id: Mapped[str | None] = mapped_column(index=True)  # native refresh family
     principal_id: Mapped[str | None] = mapped_column(ForeignKey("principal.id"), index=True)
     audience: Mapped[str]  # browser | native
     purpose: Mapped[str]  # access | preview | pairing | test
@@ -253,9 +254,9 @@ class RefreshToken(Base):
     __tablename__ = "refresh_token"
 
     id: Mapped[str] = mapped_column(primary_key=True)
-    family_id: Mapped[str]
+    family_id: Mapped[str] = mapped_column(index=True)
     token_hash: Mapped[str] = mapped_column(unique=True)
-    session_id: Mapped[str] = mapped_column(ForeignKey("session.id"))
+    session_id: Mapped[str] = mapped_column(ForeignKey("session.id"), index=True)
     issued_at: Mapped[datetime]
     rotated_at: Mapped[datetime | None]
     used_at: Mapped[datetime | None]  # reuse revokes the whole family
@@ -266,7 +267,7 @@ class WsTicket(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     ticket_hash: Mapped[str] = mapped_column(unique=True)
-    session_id: Mapped[str] = mapped_column(ForeignKey("session.id"))
+    session_id: Mapped[str] = mapped_column(ForeignKey("session.id"), index=True)
     expires_at: Mapped[datetime]
     used_at: Mapped[datetime | None]
 
@@ -289,7 +290,7 @@ class Dashboard(Base):
 
     unit_id: Mapped[str] = mapped_column(ForeignKey("unit.id"), primary_key=True)
     layout: Mapped[dict[str, Any]]
-    version: Mapped[int] = mapped_column(default=1)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
 class Command(Base):
@@ -329,4 +330,6 @@ class AuditEvent(Base):
     resource_id: Mapped[str | None]
     policy_version: Mapped[int | None]
     normalized_params: Mapped[dict[str, Any] | None]
-    aggregate_count: Mapped[int] = mapped_column(default=1)  # folded denials (design §5)
+    ha_context_id: Mapped[str | None]  # spec §15.2
+    # Denials folded into this row (design §5).
+    aggregate_count: Mapped[int] = mapped_column(default=1, server_default="1")

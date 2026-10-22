@@ -1,13 +1,17 @@
 """SQLite engine, pragmas, schema, the initial migration and the instance row."""
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command as alembic_command
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import Connection, event, select, text
 from sqlalchemy.exc import IntegrityError, StatementError
@@ -16,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from myha_gateway.db import (
     create_engine,
     ensure_instance,
+    migrate,
     run_migrations,
     session_factory,
     write_session,
@@ -31,6 +36,7 @@ from myha_gateway.db.models import (
     Session,
 )
 
+GATEWAY = Path(__file__).parents[2]
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 TABLES = {
     "instance",
@@ -100,16 +106,18 @@ def command(command_id: str, idempotency_key: str) -> Command:
 async def test_every_connection_sets_pragmas(engine: AsyncEngine) -> None:
     expected = {
         "journal_mode": "wal",
-        "foreign_keys": 1,
+        "foreign_keys": 1,  # also back on for the connection that ran the migrations
         "secure_delete": 1,
         "busy_timeout": 5000,
-        "synchronous": 1,  # NORMAL
+        "synchronous": 2,  # FULL
     }
-    async with engine.connect() as connection:
-        pragmas = {
-            name: (await connection.exec_driver_sql(f"PRAGMA {name}")).scalar() for name in expected
-        }
-    assert pragmas == expected
+    async with engine.connect() as first, engine.connect() as second:
+        for connection in (first, second):
+            pragmas = {
+                name: (await connection.exec_driver_sql(f"PRAGMA {name}")).scalar()
+                for name in expected
+            }
+            assert pragmas == expected
 
 
 async def test_migrations_create_all_tables_and_rerun_as_no_op(engine: AsyncEngine) -> None:
@@ -125,7 +133,8 @@ async def test_migrations_create_all_tables_and_rerun_as_no_op(engine: AsyncEngi
 
 async def test_migrated_schema_matches_models(engine: AsyncEngine) -> None:
     def diff(connection: Connection) -> list[Any]:
-        return compare_metadata(MigrationContext.configure(connection), Base.metadata)
+        context = MigrationContext.configure(connection, opts={"compare_server_default": True})
+        return compare_metadata(context, Base.metadata)
 
     async with engine.connect() as connection:
         assert await connection.run_sync(diff) == []
@@ -163,7 +172,7 @@ async def test_unique_constraints(engine: AsyncEngine) -> None:
             Credential(
                 principal_id="prn_1",
                 username_normalized="anna",
-                password_hash="argon2",
+                password_hash="secret-hash",
                 changed_at=NOW,
                 must_reset=False,
             )
@@ -173,7 +182,7 @@ async def test_unique_constraints(engine: AsyncEngine) -> None:
             Credential(
                 principal_id="prn_2",
                 username_normalized="anna",
-                password_hash="argon2",
+                password_hash="secret-hash",
                 changed_at=NOW,
                 must_reset=False,
             ),
@@ -183,14 +192,16 @@ async def test_unique_constraints(engine: AsyncEngine) -> None:
         (command("cmd_2", "key"), "command.session_id, command.idempotency_key"),
     ]
     for row, columns in duplicates:
-        with pytest.raises(IntegrityError, match=f"UNIQUE constraint failed: {columns}"):
+        with pytest.raises(IntegrityError, match=f"UNIQUE constraint failed: {columns}") as error:
             async with write_session(engine) as session:
                 session.add(row)
+        assert "secret-hash" not in str(error.value)  # bound parameters stay hidden
 
 
 async def test_ensure_instance_creates_the_row_once_with_defaults(engine: AsyncEngine) -> None:
     async with write_session(engine) as session:
         first = await ensure_instance(session)
+        assert first.version == 1  # flushed, so the defaults are filled
     async with write_session(engine) as session:
         second = await ensure_instance(session)
         assert await ensure_instance(session) is second
@@ -234,6 +245,12 @@ async def test_utc_datetime_round_trip_and_naive_rejection(engine: AsyncEngine) 
         async with write_session(engine) as session:
             session.add(invite("inv_2", "hash-2", redeem_until=datetime(2026, 10, 22, 12, 30)))
 
+    async with write_session(engine) as session:
+        await session.execute(text("UPDATE invite SET redeem_until = '2026-10-22T09:30:00'"))
+    with pytest.raises(ValueError, match="naive datetime '2026-10-22T09:30:00' in the database"):
+        async with session_factory(engine)() as session:
+            await session.scalar(select(Invite.redeem_until))
+
 
 async def test_write_sessions_begin_immediate_and_reads_stay_deferred(
     engine: AsyncEngine,
@@ -264,3 +281,44 @@ async def test_parallel_writers_queue_instead_of_failing(engine: AsyncEngine) ->
     await asyncio.gather(*(bump() for _ in range(15)))
     async with session_factory(engine)() as session:
         assert await session.scalar(select(Instance.policy_version)) == start + 15
+
+
+async def test_concurrent_first_starts_create_one_instance(engine: AsyncEngine) -> None:
+    async def start() -> str:
+        async with write_session(engine) as session:
+            return (await ensure_instance(session)).id
+
+    first, second = await asyncio.gather(start(), start())
+    assert first == second
+    async with engine.connect() as connection:
+        assert (await connection.exec_driver_sql("SELECT count(*) FROM instance")).scalar() == 1
+
+
+async def test_raw_inserts_get_server_defaults(engine: AsyncEngine) -> None:
+    async with write_session(engine) as session:
+        await session.execute(text("INSERT INTO unit (id, name, sort) VALUES ('unit_1', 'A', 0)"))
+        assert await session.scalar(text("SELECT version FROM unit")) == 1
+
+
+async def test_migrate_rolls_back_a_step_that_breaks_foreign_keys(engine: AsyncEngine) -> None:
+    def orphan(connection: Connection) -> None:  # accepted only because foreign keys are off
+        connection.exec_driver_sql(
+            "INSERT INTO membership (id, principal_id, group_id, valid_from) "
+            "VALUES ('mem_1', 'prn_x', 'grp_x', '2026-10-22T12:00:00.000000Z')"
+        )
+
+    with pytest.raises(RuntimeError, match="foreign key violations"):
+        await migrate(engine, orphan)
+    async with engine.connect() as connection:
+        assert (await connection.exec_driver_sql("SELECT count(*) FROM membership")).scalar() == 0
+        assert (await connection.exec_driver_sql("PRAGMA foreign_keys")).scalar() == 1
+
+
+def test_cli_migrates_with_the_app_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = tmp_path / "cli.sqlite"
+    monkeypatch.setenv("MYHA_DB_URL", f"sqlite+aiosqlite:///{database}")
+    config = Config(str(GATEWAY / "alembic.ini"))
+    alembic_command.upgrade(config, "head")
+    alembic_command.check(config)  # raises when models and migrations drift apart
+    with closing(sqlite3.connect(database)) as raw:
+        assert raw.execute("PRAGMA journal_mode").fetchone() == ("wal",)  # the app's pragmas

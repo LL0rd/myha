@@ -2,7 +2,10 @@
 
 import asyncio
 import logging
+import sqlite3
 import stat
+from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -34,10 +37,24 @@ async def test_startup_creates_the_database_and_loads_the_instance(tmp_path: Pat
     assert second.instance is not None and second.instance.id == first.instance.id
 
 
+def directory_instead_of_file(database: Path) -> None:
+    database.mkdir(parents=True)
+
+
+def unknown_revision(database: Path) -> None:
+    """What an add-on downgrade leaves behind: a schema newer than this build knows."""
+    database.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(database)) as raw:
+        raw.execute("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+        raw.execute("INSERT INTO alembic_version VALUES ('9999')")
+        raw.commit()
+
+
+@pytest.mark.parametrize("break_database", [directory_instead_of_file, unknown_revision])
 def test_unusable_database_stops_the_gateway(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    break_database: Callable[[Path], None], tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    (tmp_path / "state" / "myha.sqlite").mkdir(parents=True)  # a directory where the file belongs
+    break_database(tmp_path / "state" / "myha.sqlite")
     settings = Settings(data_dir=tmp_path, admin_bind="127.0.0.1", admin_port=0)
     with pytest.raises(SystemExit) as stopped:
         asyncio.run(gateway._serve(settings))

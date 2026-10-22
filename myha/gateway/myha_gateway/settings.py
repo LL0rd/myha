@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     def backup_dir(self) -> Path:
         return self.data_dir / "backup"
 
+    @field_validator("data_dir")
+    @classmethod
+    def absolute_data_dir(cls, value: Path) -> Path:
+        # The database and backup paths must not depend on the working directory.
+        return value.absolute()
+
     @field_validator("log_level", mode="before")
     @classmethod
     def lowercase_log_level(cls, value: Any) -> Any:
