@@ -9,7 +9,7 @@ from typing import Literal, get_args
 
 from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
-from myha_gateway.policy.model import PARAM_SCHEMA, Bound, Fence, Grant, Interval, Mode, RoleRules
+from myha_gateway.policy.model import Bound, Fence, Grant, Interval, Mode, RoleRules, parameter_name
 
 _MODES: frozenset[str] = frozenset(get_args(Mode))
 # What the request schemas accept per number (model.py): min, max and a step from 0.
@@ -149,7 +149,7 @@ class PolicyIndex:
             return None
         matched = tuple(grants)
         fences = self.fences(ctx, resource_id, action)
-        name = next(iter(PARAM_SCHEMA[action].model_fields), None)
+        name = parameter_name(action)
         if name is None:
             return EffectiveCapability(matched=matched)
         if name == "mode":
@@ -187,7 +187,7 @@ class PolicyIndex:
         settable, as for every grant while a device limit lies beyond the rule format. Denies
         are not applied. Raises ``ValueError`` for an action without a number.
         """
-        name = next(iter(PARAM_SCHEMA[action].model_fields), None)
+        name = parameter_name(action)
         if name is None or name == "mode":
             raise ValueError(f"{action} takes no number")
         resource = self.resource(resource_id)
