@@ -126,10 +126,10 @@ def _each[T](items: Any, parse: Callable[[Any], T], what: str) -> list[T]:
         except MALFORMED as exc:
             errors.append(exc)
     if errors:
-        summary = f"{len(errors)} of {len(items)} malformed {what}s, first: {errors[0]!r}"
+        summary = f"{len(errors)} of {len(items)} {what}s malformed, first: {errors[0]!r}"
         if not parsed:
             raise ValueError(summary)
-        logger.warning("skipping %s", summary)
+        logger.warning("%s", summary)
     return parsed
 
 

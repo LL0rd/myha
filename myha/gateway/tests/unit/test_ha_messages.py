@@ -32,12 +32,12 @@ def test_malformed_states_are_skipped_with_one_warning(caplog: pytest.LogCapture
     states = parse_states([STATE, *broken])
     assert list(states) == ["light.a"] and states["light.a"].context_id == "c1"
     [warning] = caplog.messages
-    assert warning.startswith("skipping 3 of 4 malformed states, first: ValueError(")
+    assert warning.startswith("3 of 4 states malformed, first: ValueError(")
     assert parse_states([]) == {}
 
 
 def test_states_without_a_valid_one_or_not_a_list_raise() -> None:
-    with pytest.raises(ValueError, match="2 of 2 malformed states"):
+    with pytest.raises(ValueError, match="2 of 2 states malformed"):
         parse_states([{"entity_id": "light.b"}, None])
     with pytest.raises(TypeError):
         parse_states({"light.a": STATE})

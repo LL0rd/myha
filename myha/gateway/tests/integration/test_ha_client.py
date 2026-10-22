@@ -274,6 +274,10 @@ async def test_unanswered_ping_counts_as_a_dead_connection(
     monkeypatch.setattr(ha_client, "PING_INTERVAL", 0.05)
     monkeypatch.setattr(ha_client, "PING_TIMEOUT", 0.1)
     async with fake_core(answer_pings=False) as core, started(core.url) as (client, seen):
+        async with asyncio.timeout(1):
+            while client.connected:  # noqa: ASYNC110 (catch the very moment the socket goes)
+                await asyncio.sleep(0)
+        assert client.generation == 1 and len(seen.statuses) == 1  # before status and reconnect
         await until(lambda: client.generation == 2)
     assert seen.statuses[:3] == [
         ConnectionStatus(True, 1, None),
@@ -281,6 +285,27 @@ async def test_unanswered_ping_counts_as_a_dead_connection(
         ConnectionStatus(True, 2, None),
     ]
     assert core.calls["ping"] >= 1
+
+
+async def test_stop_interrupts_a_handler_that_takes_long(sim: SimHandle) -> None:
+    handling = asyncio.Event()
+
+    async def slow(change: StateChanged) -> None:
+        handling.set()
+        await asyncio.sleep(3600)
+
+    async def ignore(status: ConnectionStatus) -> None:
+        pass
+
+    client = HAClient(sim.ws_url, SIM_TOKEN, on_event=slow, on_status=ignore)
+    before = asyncio.all_tasks()
+    await client.start()
+    await sim.control.post("state/light.hallway", {"state": "off"})
+    async with asyncio.timeout(3):
+        await handling.wait()
+    async with asyncio.timeout(1):  # the handler's cancellation is passed on, not swallowed
+        await client.stop()
+    assert not [t for t in asyncio.all_tasks() - before if t.get_name().startswith("ha-client")]
 
 
 async def test_auth_list_returns_the_users(sim: SimHandle) -> None:
@@ -394,8 +419,8 @@ async def test_snapshot_without_a_valid_state_is_no_connection(
     async with fake_core(states=[BROKEN] * 200) as core, started(core.url) as (client, seen):
         assert not client.connected and client.all_states() == {} and client.adapter_locked
     reason = seen.statuses[0].reason or ""
-    assert "get_states failed: malformed" in reason and "200 of 200 malformed states" in reason
-    assert "skipping" not in caplog.text  # one status line instead of 200 warnings
+    assert "get_states failed: malformed" in reason and "200 of 200 states malformed" in reason
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)  # no warning per state
 
 
 async def test_malformed_states_are_skipped_with_one_warning(
@@ -404,7 +429,7 @@ async def test_malformed_states_are_skipped_with_one_warning(
     async with fake_core(states=[STATE, BROKEN, BROKEN]) as core, started(core.url) as (client, _):
         assert client.connected and list(client.all_states()) == ["light.a"]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1 and warnings[0].startswith("skipping 2 of 3 malformed states")
+    assert len(warnings) == 1 and warnings[0].startswith("2 of 3 states malformed, first: ")
 
 
 async def test_event_skew_compares_time_fired_with_the_clock(sim: SimHandle) -> None:

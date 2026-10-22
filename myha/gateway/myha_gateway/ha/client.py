@@ -140,7 +140,8 @@ class HAClient:
 
     @property
     def connected(self) -> bool:
-        return self._connected
+        """False as soon as the socket is gone, before the close handshake and the status."""
+        return self._connected and self._ws is not None
 
     @property
     def registry_version(self) -> int:
