@@ -38,10 +38,10 @@ TICKET_SECONDS = 30
 
 @dataclass(frozen=True)
 class SessionContext:
-    """The checked session of a request; ``principal`` and ``stay`` only where it has them."""
+    """The checked session of a request; ``stay`` only for guests."""
 
     session: Session
-    principal: Principal | None
+    principal: Principal  # sessions without one (pairing, test: Plan 3) are refused for now
     stay: Stay | None
 
 
@@ -239,8 +239,8 @@ def _unauthenticated() -> ApiError:
 async def check_session(request: Request, purpose: str) -> SessionContext:
     """The request's session if it is active for ``purpose``; 401 otherwise.
 
-    Unknown, revoked, of a disabled principal, of the wrong purpose or presented the wrong
-    way: ``UNAUTHENTICATED``. Past ``not_after`` or of a stay no longer confirmed or over:
+    Unknown, revoked, without an active principal, of the wrong purpose or presented the
+    wrong way: ``UNAUTHENTICATED``. Past ``not_after`` or of a stay no longer confirmed or over:
     ``ACCESS_EXPIRED``. A session before ``not_before`` passes; it is ``waiting``.
     """
     ctx = app_context(request)
@@ -263,7 +263,8 @@ async def check_session(request: Request, purpose: str) -> SessionContext:
         (session.audience == "browser") != as_cookie
         or session.purpose != purpose
         or session.revoked_at is not None
-        or (principal is not None and principal.status != "active")
+        or principal is None
+        or principal.status != "active"
     ):
         raise _unauthenticated()
     now = utcnow()
@@ -310,9 +311,9 @@ async def require_csrf_public(
 
 
 def session_view(session: Session, now: datetime) -> dict[str, Any]:
-    """What a client sees of its session window."""
-    waiting = session.not_before is not None and now < session.not_before
-    return {"not_before": session.not_before, "not_after": session.not_after, "waiting": waiting}
+    """What a client sees of its session window; a session without a start began when made."""
+    not_before = session.not_before or session.created_at
+    return {"not_before": not_before, "not_after": session.not_after, "waiting": now < not_before}
 
 
 async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
@@ -324,8 +325,8 @@ async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
         event = AuditEvent(
             operation=f"auth.{reason}",
             result="ok",
-            actor=session.principal_id or "anonymous",
-            effective_principal=session.principal_id,
+            actor=current.principal.id,
+            effective_principal=current.principal.id,
             session_id=session.id,
         )
         await audit(db, event)

@@ -31,9 +31,7 @@ async def me(
             unit = await db.get(Unit, stay.unit_id)
         unit_name = unit.name if unit is not None else None
     return {
-        "principal": None
-        if principal is None
-        else {
+        "principal": {
             "id": principal.id,
             "type": principal.type,
             "display_name": principal.display_name,

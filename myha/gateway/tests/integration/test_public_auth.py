@@ -1,5 +1,6 @@
 """Public guest auth: redeem, cookie, native tokens, /me, logout, WS tickets, renew, limits."""
 
+import re
 from datetime import datetime, timedelta
 
 import httpx
@@ -233,6 +234,28 @@ async def test_me(world: World) -> None:
     assert body["stay"]["unit_name"] == "Room 203"
     assert datetime.fromisoformat(body["stay"]["ends_at"]) == stay.ends_at
     assert body["instance"] == {"name": "myHA", "operator_contact": None}
+    # The web client's strict schema: exactly these keys, timestamps with an offset.
+    assert set(body) == {"principal", "session", "csrf_token", "stay", "instance"}
+    assert set(body["session"]) == {"not_before", "not_after", "waiting"}
+    assert set(body["stay"]) == {"unit_name", "ends_at"}
+    session, ends_at = body["session"], body["stay"]["ends_at"]
+    for value in (session["not_before"], session["not_after"], ends_at):
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT[\d:.]+(\+00:00|Z)", value), value
+    assert set(guest.body) == {"session", "csrf_token"}
+
+
+async def test_me_of_a_session_without_stay_or_start(world: World) -> None:
+    async with world.client() as client:
+        guest = await browser_guest(world, client, world.secrets[0])
+        await change(
+            world.ctx, db.Session, db.Session.id.is_not(None), stay_id=None, not_before=None
+        )
+        r = await client.get("/api/v1/me", headers={"Cookie": guest.cookie})
+    assert r.status_code == 200, r.text
+    (session,) = await rows(world.ctx, db.Session)
+    assert r.json()["stay"] is None
+    assert datetime.fromisoformat(r.json()["session"]["not_before"]) == session.created_at
+    assert r.json()["session"]["waiting"] is False
 
 
 async def test_logout(world: World) -> None:
@@ -293,6 +316,9 @@ async def test_session_refusals(world: World) -> None:
         await change(ctx, db.Principal, db.Principal.id.is_not(None), status="active")
         await change(ctx, db.Stay, db.Stay.status == "confirmed", status="checked_out")
         assert await me() == (401, "ACCESS_EXPIRED")
+        await change(ctx, db.Stay, db.Stay.status == "checked_out", status="confirmed")
+        await change(ctx, db.Session, db.Session.id.is_not(None), principal_id=None)
+        assert await me() == (401, "UNAUTHENTICATED")
 
 
 @pytest.mark.parametrize(
