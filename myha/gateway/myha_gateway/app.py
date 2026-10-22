@@ -1,5 +1,6 @@
 """The two ASGI apps: admin (Supervisor ingress only) and public (guests)."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,9 +9,12 @@ from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from myha_gateway.api.admin import probe
 from myha_gateway.api.public import health
+from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
+
+logger = logging.getLogger(__name__)
 
 
 class PeerGuardMiddleware:
@@ -46,8 +50,18 @@ def _app(
 
 @asynccontextmanager
 async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Once per process, since the admin app always runs: S0 probe evidence, the HA client."""
+    """Once per process, since the admin app always runs: database, S0 probe, the HA client."""
     ctx: AppContext = app.state.ctx
+    try:
+        ctx.settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        await run_migrations(ctx.engine)
+        async with write_session(ctx.engine) as session:
+            ctx.instance = await ensure_instance(session)
+    except Exception:
+        # Nothing works without the schema; uvicorn then exits with code 3 and s6 halts the app.
+        logger.exception("startup aborted: database %s is not usable", ctx.settings.db_path)
+        await ctx.close()
+        raise RuntimeError("database not usable") from None  # uvicorn logs this short copy
     if ctx.settings.probe_mode:
         await probe.log_startup(ctx)
     await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
@@ -55,6 +69,7 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await ctx.ha.stop()
+        await ctx.close()
 
 
 def create_public_app(ctx: AppContext) -> FastAPI:

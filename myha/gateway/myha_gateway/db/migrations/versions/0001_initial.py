@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("ts", UtcDateTime(), nullable=False),
         sa.Column("actor", sa.String(), nullable=False),
-        sa.Column("effective_principal", sa.String(), nullable=False),
+        sa.Column("effective_principal", sa.String(), nullable=True),
         sa.Column("session_id", sa.String(), nullable=True),
         sa.Column("operation", sa.String(), nullable=False),
         sa.Column("result", sa.String(), nullable=False),

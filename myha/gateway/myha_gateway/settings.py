@@ -56,6 +56,12 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def db_path(self) -> Path:
+        # .sqlite like the backup files (design 4.6): .gitignore and .dockerignore exclude it.
+        return self.state_dir / "myha.sqlite"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def backup_dir(self) -> Path:
         return self.data_dir / "backup"
 

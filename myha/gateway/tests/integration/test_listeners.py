@@ -132,7 +132,7 @@ async def test_probe_mode_startup_survives_marker_and_argon2_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     (tmp_path / "options.json").write_text('{"probe_mode": true}', encoding="utf-8")
-    (tmp_path / "state").write_text("a file where the directory belongs", encoding="utf-8")
+    (tmp_path / "state" / "probe-live.marker").mkdir(parents=True)  # where the file belongs
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
 
     def broken_argon2() -> list[Argon2Timing]:
@@ -144,7 +144,7 @@ async def test_probe_mode_startup_survives_marker_and_argon2_failures(
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         pass  # reached: the app starts despite both failures
-    assert "probe: marker not written" in caplog.text and "FileExistsError" in caplog.text
+    assert "probe: marker not written" in caplog.text and "IsADirectoryError" in caplog.text
     assert "probe: argon2id timing failed" in caplog.text and "MemoryError" in caplog.text
 
 
@@ -154,7 +154,7 @@ async def test_admin_startup_without_probe_mode_leaves_no_marker(
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         pass
-    assert not (tmp_path / "state").exists()
+    assert not (tmp_path / "state" / "probe-live.marker").exists()
 
 
 async def test_healthz_echoes_forwarding_headers_without_trusting_them(ctx: AppContext) -> None:
