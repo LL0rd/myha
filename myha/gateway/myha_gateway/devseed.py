@@ -74,7 +74,7 @@ def _binding(resource_id: str, unit_id: str, ha: HAClient) -> ResourceBinding:
     entity_id = UNITS[unit_id][resource_id]
     kind, state = detect_kind(entity_id), ha.state(entity_id)
     if kind is None or state is None:
-        raise RuntimeError(f"{entity_id} not in Home Assistant: is it the simulator?")
+        raise RuntimeError(f"{entity_id} missing in Home Assistant: is it the simulator?")
     registry = ha.registry()
     entry = registry.entities.get(entity_id)
     capabilities = adapter_for(kind).capabilities(state, entry, ha.temperature_unit)
@@ -103,11 +103,14 @@ async def seed_room203(engine: AsyncEngine, ha: HAClient, origin: str) -> list[s
     The stay runs from today 00:00 to tomorrow 23:59 UTC. A second run changes nothing and
     returns no URL: the secrets of the first run exist nowhere any more.
     """
+    async with engine.connect() as connection:
+        if (await connection.execute(select(Unit.id).where(Unit.id == "unit_203"))).first():
+            return []
+    if not ha.connected:
+        raise RuntimeError("Home Assistant unreachable: no states to bind")
     now = utcnow()
     bindings = [_binding(res, unit, ha) for unit, members in _SEEDED.items() for res in members]
-    async with write_session(engine) as session:
-        if await session.get(Unit, "unit_203") is not None:
-            return []
+    async with write_session(engine) as session:  # a concurrent seed fails on the unit's key
         instance = (await session.execute(select(Instance))).scalar_one()
         session.add_all(
             Unit(id=unit, name=name, sort=n) for n, (unit, name) in enumerate(_UNIT_NAMES.items())

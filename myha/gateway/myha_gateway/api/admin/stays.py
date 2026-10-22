@@ -1,10 +1,10 @@
 """Admin API: create and list stays (design §6)."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from myha_gateway.auth.admin import AdminIdentity, require_admin, require_csrf
@@ -26,6 +26,14 @@ class StayIn(BaseModel):
     starts_at: AwareDatetime
     ends_at: AwareDatetime
     device_slots: int = Field(ge=1, le=MAX_DEVICE_SLOTS)
+
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def utc(cls, value: datetime) -> datetime:
+        try:
+            return value.astimezone(UTC)
+        except OverflowError as exc:  # e.g. year 1 with a positive offset
+            raise ValueError("not representable in UTC") from exc
 
 
 def stay_json(stay: Stay, invites: list[Invite]) -> dict[str, Any]:
@@ -63,8 +71,8 @@ async def create(
             unit_id=body.unit_id,
             role_template_id=body.role_template_id,
             role_version=body.role_version,
-            starts_at=body.starts_at.astimezone(UTC),
-            ends_at=body.ends_at.astimezone(UTC),
+            starts_at=body.starts_at,
+            ends_at=body.ends_at,
             device_slots=body.device_slots,
             actor=f"admin:{admin.user_id}",
         )

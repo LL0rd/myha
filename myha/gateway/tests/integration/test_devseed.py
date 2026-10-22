@@ -90,10 +90,14 @@ async def test_seed_room203_is_idempotent(ctx: AppContext) -> None:
     assert any("history.read" in deny["actions"] for deny in role.denies)
     today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     assert (stay.unit_id, stay.status) == ("unit_203", "confirmed")
-    assert (stay.starts_at, stay.ends_at) == (
-        today,
-        today + timedelta(days=1, hours=23, minutes=59),
-    )
+    assert stay.starts_at in (today, today - timedelta(days=1))  # seeded before midnight
+    assert stay.ends_at == stay.starts_at + timedelta(days=1, hours=23, minutes=59)
+
+
+async def test_seed_needs_home_assistant(ctx: AppContext) -> None:
+    await ctx.ha.stop()
+    with pytest.raises(RuntimeError, match="unreachable"):
+        await seed_room203(ctx.engine, ctx.ha, ORIGIN)
 
 
 async def run_cli(env: dict[str, str]) -> tuple[int, str, str]:

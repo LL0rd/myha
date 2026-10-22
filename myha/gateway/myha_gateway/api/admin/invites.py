@@ -4,6 +4,7 @@ from typing import Annotated, Any
 
 import segno
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
@@ -55,17 +56,22 @@ async def issue(
             actor=f"admin:{admin.user_id}",
         )
     ctx.policy.invalidate()
+
+    def qr_codes() -> list[str]:  # CPU-bound: off the event loop
+        return [segno.make(item.join_url, error="m").svg_inline(scale=4) for item in issued]
+
+    svgs = await run_in_threadpool(qr_codes)
     return {
         "invites": [
             {
                 "invite_id": item.invite.id,
                 "device_slot": item.invite.device_slot,
                 "join_url": item.join_url,
-                "qr_svg": segno.make(item.join_url, error="m").svg_inline(scale=4),
+                "qr_svg": svg,
                 "redeem_until": item.invite.redeem_until,
                 "usable_until": stay.ends_at,
             }
-            for item in issued
+            for item, svg in zip(issued, svgs, strict=True)
         ]
     }
 

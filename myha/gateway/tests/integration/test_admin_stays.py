@@ -1,5 +1,6 @@
 """Admin API for stays and one-time invitations, behind the ingress, against the simulator."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -115,6 +116,8 @@ async def test_stay_and_invites_secret_only_in_the_answer(
         assert timedelta(minutes=14) < redeem_until - now() <= timedelta(minutes=15)
         secrets.append(secret)
     assert await policy_version(ctx) == before + 2
+    confirmed = next(row for row in await rows(ctx, db.Stay) if row.id == stay["id"])
+    assert (confirmed.status, confirmed.version) == ("confirmed", 2)
 
     stored = {invite.id: invite for invite in await rows(ctx, db.Invite)}
     for invite, secret in zip(issued, secrets, strict=True):
@@ -206,6 +209,7 @@ async def test_revoking_a_redeemed_invite_conflicts(
         ({"role_template_id": "unknown"}, 400),
         ({"role_version": 2}, 400),  # never published
         ({"starts_at": "2026-11-01T14:00:00"}, 400),  # no timezone
+        ({"starts_at": "0001-01-01T00:00:00+01:00"}, 400),  # before year 1 in UTC
         ({"device_slots": 0}, 400),
     ],
 )
@@ -217,6 +221,91 @@ async def test_create_validation(
     assert len(await rows(ctx, db.Stay)) == stays
 
 
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [({"role_template_id": "unknown"}, "role_template_id"), ({"role_version": 2}, "role_version")],
+)
+async def test_unknown_role_names_its_field(
+    client: httpx.AsyncClient, changes: dict[str, Any], field: str
+) -> None:
+    assert (await create(client, **changes)).json()["error"]["details"] == {"field": field}
+
+
+async def test_default_role_version_is_the_newest(
+    ctx: AppContext, client: httpx.AsyncClient
+) -> None:
+    async with write_session(ctx.engine) as session:
+        session.add(
+            db.RoleVersion(
+                id="room_guest@2",
+                role_template_id="room_guest",
+                version_number=2,
+                grants=[],
+                denies=[],
+                published_at=now(),
+                based_on_version=1,
+            )
+        )
+    assert (await create(client)).json()["role_version"] == 2
+    assert (await create(client, role_version=1)).json()["role_version"] == 1
+
+
+async def set_invite(ctx: AppContext, invite_id: str, **values: Any) -> None:
+    async with write_session(ctx.engine) as session:
+        await session.execute(update(db.Invite).where(db.Invite.id == invite_id).values(**values))
+
+
+async def test_slot_held_only_by_redeemable_or_live_invites(
+    ctx: AppContext, client: httpx.AsyncClient
+) -> None:
+    stay = (await create(client)).json()
+    url = f"{STAYS}/{stay['id']}/invites"
+    first, second = (await client.post(url, json={"count": 2})).json()["invites"]
+    assert code(await client.post(url, json={"count": 1})) == (409, "CONFLICT")
+
+    await set_invite(ctx, first["invite_id"], redeem_until=now() - timedelta(seconds=1))
+    r = await client.post(url, json={"count": 1})  # expired, never redeemed: slot 1 is free
+    assert [i["device_slot"] for i in r.json()["invites"]] == [1]
+
+    async with write_session(ctx.engine) as session:
+        session.add(
+            db.Session(
+                id="ses_guest",
+                token_hash="hash-ses_guest",
+                audience="browser",
+                purpose="access",
+                stay_id=stay["id"],
+                not_after=now() + timedelta(days=1),
+                last_seen_at=now(),
+                csrf_secret="csrf",
+                created_at=now(),
+            )
+        )
+    past = now() - timedelta(seconds=1)  # the window has passed since the redemption
+    values = {"consumed_at": past, "consumed_session_id": "ses_guest", "redeem_until": past}
+    await set_invite(ctx, second["invite_id"], **values)
+    assert code(await client.post(url, json={"count": 1})) == (409, "CONFLICT")  # live session
+
+    async with write_session(ctx.engine) as session:
+        query = update(db.Session).where(db.Session.id == "ses_guest")
+        await session.execute(query.values(revoked_at=now()))
+    r = await client.post(url, json={"count": 1})
+    assert [i["device_slot"] for i in r.json()["invites"]] == [2]
+
+
+async def test_concurrent_issues_share_the_slots(client: httpx.AsyncClient) -> None:
+    async def both(count: int) -> list[httpx.Response]:
+        stay = (await create(client)).json()
+        url = f"{STAYS}/{stay['id']}/invites"
+        return list(
+            await asyncio.gather(*(client.post(url, json={"count": count}) for _ in range(2)))
+        )
+
+    slots = {r.json()["invites"][0]["device_slot"] for r in await both(1)}
+    assert slots == {1, 2}
+    assert sorted(r.status_code for r in await both(2)) == [201, 409]
+
+
 async def test_unknown_or_closed_stay(ctx: AppContext, client: httpx.AsyncClient) -> None:
     r = await client.post(f"{STAYS}/stay_unknown/invites", json={"count": 1})
     assert code(r) == (404, "NOT_FOUND")
@@ -226,7 +315,13 @@ async def test_unknown_or_closed_stay(ctx: AppContext, client: httpx.AsyncClient
         assert row is not None
         row.status = "cancelled"
     r = await client.post(f"{STAYS}/{stay['id']}/invites", json={"count": 1})
-    assert code(r) == (409, "CONFLICT")
+    assert code(r) == (409, "CONFLICT") and r.json()["error"]["details"]["reason"] == "cancelled"
+
+    ends = now() + timedelta(seconds=1)
+    draft = (await create(client, ends_at=ends.isoformat())).json()
+    await asyncio.sleep(1.1)
+    r = await client.post(f"{STAYS}/{draft['id']}/invites", json={"count": 1})
+    assert r.json()["error"]["details"]["reason"] == "ended"  # a draft past its end
 
     ctx.public_origin = None  # public listener off: a join URL would lead nowhere
     stay = (await create(client)).json()

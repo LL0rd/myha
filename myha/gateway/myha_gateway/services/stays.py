@@ -5,14 +5,15 @@ caller commits. Each mutation raises ``instance.policy_version``.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from myha_gateway.db.models import Instance, Invite, RoleVersion, Stay, Unit
+from myha_gateway.db.models import Session as SessionRow
 from myha_gateway.errors import ApiError
 from myha_gateway.ids import hash_secret, new_id, new_secret
 from myha_gateway.services.audit import AuditEvent, audit
@@ -26,7 +27,7 @@ class IssuedInvite:
     """An invitation as issued: ``join_url`` carries the secret and is shown exactly once."""
 
     invite: Invite
-    join_url: str
+    join_url: str = field(repr=False)
 
 
 def stay_status(stay: Stay, now: datetime) -> str:
@@ -64,13 +65,17 @@ async def create_stay(
         raise _invalid("starts_at must lie before ends_at", "ends_at")
     if await session.get(Unit, unit_id) is None:
         raise _invalid("Unknown unit", "unit_id")
-    query = select(func.max(RoleVersion.version_number)).where(
-        RoleVersion.role_template_id == role_template_id
-    )
-    if role_version is not None:
-        query = query.where(RoleVersion.version_number == role_version)
-    published = (await session.execute(query)).scalar_one()
-    if published is None:
+    newest = (
+        await session.execute(
+            select(func.max(RoleVersion.version_number)).where(
+                RoleVersion.role_template_id == role_template_id
+            )
+        )
+    ).scalar_one()
+    if newest is None:
+        raise _invalid("Role has no published version", "role_template_id")
+    published = newest if role_version is None else role_version
+    if await session.get(RoleVersion, f"{role_template_id}@{published}") is None:
         raise _invalid("No such published role version", "role_version")
     stay = Stay(
         id=new_id("stay"),
@@ -105,25 +110,29 @@ async def issue_invites(
     """``count`` invitations on the lowest free device slots; confirms a ``draft`` stay.
 
     ``redeem_minutes`` up to ``MAX_REDEEM_MINUTES``, which the API checks.
-    A slot is free unless an unrevoked invitation holds it; a redeemed one keeps its device.
+    An unrevoked invitation holds its slot while it is still redeemable, or once redeemed while
+    the session it created is not revoked; an expired, never redeemed one frees it (A51).
     """
     if origin is None:
         raise ApiError(409, "CONFLICT", "Public origin not configured", {"reason": "no_origin"})
     if stay.status not in ("draft", "confirmed") or now >= stay.ends_at:
-        raise ApiError(409, "CONFLICT", "Stay is closed", {"reason": stay_status(stay, now)})
-    taken = set(
-        (
-            await session.execute(
-                select(Invite.device_slot).where(
-                    Invite.stay_id == stay.id, Invite.revoked_at.is_(None)
-                )
-            )
-        ).scalars()
+        closed = stay.status if stay.status in ("checked_out", "cancelled") else "ended"
+        raise ApiError(409, "CONFLICT", "Stay is closed", {"reason": closed})
+    holding = or_(
+        and_(Invite.consumed_at.is_(None), Invite.redeem_until > now),
+        and_(SessionRow.id.is_not(None), SessionRow.revoked_at.is_(None)),
     )
+    query = (
+        select(Invite.device_slot)
+        .outerjoin(SessionRow, SessionRow.id == Invite.consumed_session_id)
+        .where(Invite.stay_id == stay.id, Invite.revoked_at.is_(None), holding)
+    )
+    taken = set((await session.execute(query)).scalars())
     free = [slot for slot in range(1, stay.device_slots + 1) if slot not in taken]
     if len(free) < count:
         raise ApiError(409, "CONFLICT", "No free device slot", {"free_slots": len(free)})
-    stay.status = "confirmed"
+    if stay.status == "draft":
+        stay.status, stay.version = "confirmed", stay.version + 1
     redeem_until = min(now + timedelta(minutes=redeem_minutes), stay.ends_at)
     pin = next((p["spki_sha256"] for p in instance.trust_pins if p.get("role") == "primary"), "")
     issued = []
