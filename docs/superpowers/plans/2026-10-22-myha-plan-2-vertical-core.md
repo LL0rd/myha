@@ -42,6 +42,8 @@ scripts/check-no-external.mjs
 
 ### Task 5a.1: Rate-Limit, Cookies, minimaler Audit-Writer
 
+> Hinweise aus WP16: Body-Limit am Public-Listener (z. B. 64 KiB) mit `413` im Fehlerformat, denn uvicorn hat keins und Redeem/Actions lesen JSON; `_HTTP_CODES` kennt 403/409/429 (seit WP16-Fix-up) – `CONFLICT` für Idempotenzkonflikte und `RATE_LIMITED` für den Limiter nutzen; Anfragen vor `decide()` validieren (ProductId-Muster, Aktionslänge, `params` als dict).
+
 **Files:**
 - Create: `myha_gateway/auth/ratelimit.py`, `auth/cookies.py`, `services/audit.py`
 - Test: `tests/unit/test_ratelimit.py`, `tests/unit/test_cookies.py`, `tests/unit/test_audit.py`
@@ -93,6 +95,8 @@ scripts/check-no-external.mjs
 ---
 
 ## WP6 – Projektion, Live-Events, Befehle, Audit
+
+> Hinweise aus WP16 (Gesamtreview Plan 1, verbindlich): Der Loader liest `policy_version` und `time_trusted` im selben Select wie den Cache-Schlüssel (nie aus `ctx.instance`, das ist der Start-Snapshot); der `PolicyIndex` trägt seine `policy_version`, und `decide()` wirft bei Abweichung (fail closed) – nach einem Publish zuerst den Index neu bauen; `decide()` verlangt `execute` als Pflicht-Keyword; `DeviceCapabilities` bekommt `to_json`/`from_json` (Decimal als String, `confirmed_modes ⊆ hvac_modes ∩ {off, cool, heat}`, Round-Trip-Test), und `ResourceRef.kind` muss `capabilities.kind` gleichen; `adapter_locked` für Projektion und `decide` als `ha.adapter_locked or not ha.connected` bilden; ein Laufzeit-Wächter (contextvar) lehnt `HAClient._command` und Lesesessions ab, solange eine Schreibsession offen ist; `decide()` direkt vor `call_service` mit frischer `StateView` erneut aufrufen; Ausnahmen aus `decide` → 500 `UPSTREAM_UNAVAILABLE` + Audit `decide_error`; Cover-Erwartungen brauchen länger als 10 s (echte Rollos) – Timeout je Kind.
 
 ### Task 6.1: PolicyIndex-Loader, Cache und Drift-Erkennung
 
