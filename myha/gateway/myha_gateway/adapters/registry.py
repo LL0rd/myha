@@ -16,10 +16,19 @@ _ADAPTERS: dict[Kind, Adapter] = {
 }
 
 
+_DOMAINS: dict[str, Kind] = {
+    "light": "light",
+    "switch": "switch",
+    "climate": "climate",
+    "cover": "cover",
+    "sensor": "sensor",
+    "binary_sensor": "sensor",  # on/off readings with a device class, read only
+}
+
+
 def detect_kind(entity_id: str) -> Kind | None:
     """The kind of an entity from its domain; ``None`` if no adapter handles the domain."""
-    domain = entity_id.split(".", 1)[0]
-    return next((kind for kind in _ADAPTERS if kind == domain), None)
+    return _DOMAINS.get(entity_id.split(".", 1)[0])
 
 
 def adapter_for(kind: Kind) -> Adapter:

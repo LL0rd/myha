@@ -55,7 +55,8 @@ class DeviceCapabilities:
     hvac_modes: frozenset[str] = frozenset()  # raw from the device
     # Admin-confirmed subset of {off, cool, heat}; the binding fills it, capabilities() never does.
     confirmed_modes: frozenset[str] = frozenset()
-    # "group_entity" | "template_entity" | "dual_setpoint" | "unit_not_celsius" | "no_setpoint"
+    # group_entity | template_entity | wrapper_entity (platform) or, for climate devices,
+    # unit_not_celsius | invalid_range | dual_setpoint | no_setpoint
     blocked_reason: str | None = None
     fingerprint: str = ""  # changes whenever the abilities change (drift, A14-A16)
 
@@ -75,6 +76,7 @@ class StateView:
     cover_state: str | None = None
     value: str | None = None
     unit: str | None = None
+    device_class: str | None = None
     observed_at: datetime | None = None
 
 
@@ -161,18 +163,36 @@ class Adapter(Protocol):
         ...
 
 
-_BLOCKED_PLATFORMS = {"group": "group_entity", "template": "template_entity"}
+_BLOCKED_PLATFORMS = {
+    "group": "group_entity",
+    "template": "template_entity",
+    "switch_as_x": "wrapper_entity",
+}
+# Far beyond any device value; keeps normalize() and the policy's step arithmetic in range.
+_MAGNITUDE = Decimal("1e6")
 
 
 def platform_block(entity: RegistryEntity | None) -> str | None:
-    """Group and template entities switch other entities, so they cannot be bound."""
+    """Groups, templates and switch_as_x wrappers act through other entities: never bound."""
     return None if entity is None else _BLOCKED_PLATFORMS.get(entity.platform)
 
 
-def availability(state: HAState) -> Literal["online", "offline", "unknown"]:
+def _availability(state: HAState) -> Literal["online", "offline", "unknown"]:
     if state.state == "unavailable":
         return "offline"
     return "unknown" if state.state == "unknown" else "online"
+
+
+def observed(state: HAState | None, adapter_locked: bool) -> StateView:
+    """The fields every kind shares; adapters add their own with ``dataclasses.replace``."""
+    if state is None:  # the entity is missing in Home Assistant
+        return StateView("unknown", adapter_locked)
+    return StateView(
+        _availability(state),
+        adapter_locked,
+        device_class=text(state.attributes.get("device_class")),
+        observed_at=state.last_updated,
+    )
 
 
 def reading(state: HAState) -> str | None:
@@ -181,12 +201,12 @@ def reading(state: HAState) -> str | None:
 
 
 def number(value: Any) -> Decimal | None:
-    """A finite number from an attribute; via ``str``, so 21.1 stays 21.1 and not its float."""
+    """A finite number of magnitude below a million; via ``str``, so 21.1 stays 21.1."""
     try:
         parsed = Decimal(str(value))
-    except InvalidOperation:
+    except (InvalidOperation, ValueError):  # ValueError: an int too long for str()
         return None
-    return parsed if parsed.is_finite() else None
+    return parsed if parsed.is_finite() and -_MAGNITUDE < parsed < _MAGNITUDE else None
 
 
 def percent(value: Any, full_scale: int = 100) -> int | None:
@@ -197,6 +217,11 @@ def percent(value: Any, full_scale: int = 100) -> int | None:
     return round(parsed * 100 / full_scale)
 
 
+def text(value: Any) -> str | None:
+    """A string attribute such as ``device_class``; anything else is unknown."""
+    return value if isinstance(value, str) else None
+
+
 def strings(value: Any) -> frozenset[str]:
     """The strings of a list attribute such as ``hvac_modes``; anything else is empty."""
     if not isinstance(value, list):
@@ -205,15 +230,21 @@ def strings(value: Any) -> frozenset[str]:
 
 
 def features(attributes: Mapping[str, Any]) -> int:
-    """The ``supported_features`` bitmask; missing or malformed means none."""
+    """The ``supported_features`` bitmask; anything but an int of 0 to 32 bits means none."""
     value = attributes.get("supported_features")
-    return value if type(value) is int else 0
+    # Home Assistant's feature flags fit in 32 bits; a larger int is malformed.
+    return value if type(value) is int and 0 <= value < 2**32 else 0
 
 
 def with_fingerprint(
     capabilities: DeviceCapabilities, attributes: Mapping[str, Any]
 ) -> DeviceCapabilities:
-    """``capabilities`` with the hash of everything whose change needs a new admin review."""
+    """``capabilities`` as stored: without actions while blocked, and with the fingerprint.
+
+    The fingerprint hashes everything whose change needs a new admin review.
+    """
+    if capabilities.blocked_reason is not None:
+        capabilities = replace(capabilities, actions=frozenset())
     limits = (capabilities.target_c_min, capabilities.target_c_max, capabilities.target_c_step)
     payload = {
         "kind": capabilities.kind,

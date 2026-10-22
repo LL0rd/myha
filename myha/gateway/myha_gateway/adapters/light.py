@@ -1,6 +1,7 @@
 """Lights: on, off and brightness in percent."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from myha_gateway.adapters.base import (
@@ -9,7 +10,8 @@ from myha_gateway.adapters.base import (
     Expectation,
     HACall,
     StateView,
-    availability,
+    number,
+    observed,
     percent,
     platform_block,
     reading,
@@ -22,31 +24,34 @@ from myha_gateway.ha.messages import HAState, RegistryEntity
 _DIMMABLE = frozenset({"brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"})
 
 
+def _level(state: HAState) -> int | None:
+    """Brightness 0..255 in whole percent; a lit lamp shows at least 1 %, never 0 %."""
+    brightness = number(state.attributes.get("brightness"))
+    level = percent(brightness, 255)
+    if level == 0 and brightness is not None and brightness >= 1 and state.state == "on":
+        return 1
+    return level
+
+
 class LightAdapter:
     kind = "light"
 
     def capabilities(
         self, state: HAState, entity: RegistryEntity | None, temperature_unit: str | None
     ) -> DeviceCapabilities:
-        blocked = platform_block(entity)
         actions = {Action.LIGHT_ON, Action.LIGHT_OFF}
         if strings(state.attributes.get("supported_color_modes")) & _DIMMABLE:
             actions.add(Action.LIGHT_SET_LEVEL)
-        possible = frozenset() if blocked else frozenset(actions)
-        return with_fingerprint(
-            DeviceCapabilities("light", possible, blocked_reason=blocked), state.attributes
+        capabilities = DeviceCapabilities(
+            "light", frozenset(actions), blocked_reason=platform_block(entity)
         )
+        return with_fingerprint(capabilities, state.attributes)
 
     def state_view(self, state: HAState | None, adapter_locked: bool) -> StateView:
+        view = observed(state, adapter_locked)
         if state is None:
-            return StateView("unknown", adapter_locked)
-        return StateView(
-            availability(state),
-            adapter_locked,
-            power=reading(state),
-            level_pct=percent(state.attributes.get("brightness"), 255),
-            observed_at=state.last_updated,
-        )
+            return view
+        return replace(view, power=reading(state), level_pct=_level(state))
 
     def translate(self, action: Action, params: Mapping[str, Any], entity_id: str) -> HACall:
         match action:

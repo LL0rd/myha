@@ -56,7 +56,7 @@ ON_OFF = {Action.LIGHT_ON, Action.LIGHT_OFF}
 def test_kind_follows_the_domain() -> None:
     assert [detect_kind(f"{kind}.x") for kind in KINDS] == list(KINDS)
     assert detect_kind("person.owner") is None
-    assert detect_kind("binary_sensor.door") is None
+    assert detect_kind("binary_sensor.door") == "sensor"
     assert [adapter_for(kind).kind for kind in KINDS] == list(KINDS)
 
 
@@ -79,9 +79,10 @@ def test_light_dims_with_every_color_mode_but_onoff(
 
 
 @pytest.mark.parametrize(
-    ("platform", "reason"), [("group", "group_entity"), ("template", "template_entity")]
+    ("platform", "reason"),
+    [("group", "group_entity"), ("template", "template_entity"), ("switch_as_x", "wrapper_entity")],
 )
-def test_group_and_template_entities_are_blocked(platform: str, reason: str) -> None:
+def test_group_template_and_wrapper_entities_are_blocked(platform: str, reason: str) -> None:
     for adapter, state in ((LIGHT, CEILING), (SWITCH, LAMP), (CLIMATE, AC), (COVER, BLIND)):
         caps = adapter.capabilities(state, entry(state, platform), "°C")
         assert (caps.blocked_reason, caps.actions) == (reason, frozenset())
@@ -115,10 +116,26 @@ def test_light_expectations_and_state_view() -> None:
 
 @pytest.mark.parametrize(
     ("brightness", "level"),
-    [(178, 70), (255, 100), (0, 0), (127.5, 50), (300, None), ("x", None), (float("nan"), None)],
+    [
+        (178, 70),
+        (255, 100),
+        (254, 100),
+        (2, 1),
+        (1, 1),  # rounds to 0, but the lamp is lit
+        (0, 0),
+        (127.5, 50),
+        (300, None),
+        ("x", None),
+        (float("nan"), None),
+    ],
 )
 def test_light_level_is_brightness_in_whole_percent(brightness: object, level: int | None) -> None:
     assert LIGHT.state_view(edited(CEILING, brightness=brightness), False).level_pct == level
+
+
+def test_only_a_lit_lamp_rounds_up_to_one_percent() -> None:
+    dark = edited(replace(CEILING, state="off"), brightness=1)
+    assert LIGHT.state_view(dark, False).level_pct == 0
 
 
 def test_switch() -> None:
@@ -144,13 +161,32 @@ def test_climate_capabilities_of_the_living_room_ac() -> None:
     assert caps.confirmed_modes == frozenset()
 
 
-def test_climate_step_defaults_to_half_a_degree() -> None:
-    def step(state: HAState) -> Decimal | None:
-        return CLIMATE.capabilities(state, None, "°C").target_c_step
+def test_climate_without_a_step_uses_half_a_degree() -> None:
+    caps = CLIMATE.capabilities(edited(AC, "target_temp_step"), None, "°C")
+    assert caps.target_c_step == Decimal("0.5")
 
-    assert step(edited(AC, "target_temp_step")) == Decimal("0.5")
-    assert step(edited(AC, target_temp_step=0)) == Decimal("0.5")
-    assert step(edited(AC, target_temp_step=0.1)) == Decimal("0.1")  # via str, not the float
+
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [
+        (0.1, "0.1"),  # via str, not the float
+        (0.01, "0.01"),
+        (0.25, "0.25"),
+        (10, "10"),
+        (0, "0.5"),
+        (-1, "0.5"),
+        (0.005, "0.5"),
+        (0.125, "0.5"),
+        (11, "0.5"),
+        ("1E-50", "0.5"),
+        ("1e1000000", "0.5"),
+        (float("nan"), "0.5"),
+        ([1], "0.5"),
+    ],
+)
+def test_climate_step_is_hundredths_up_to_ten(step: object, expected: str) -> None:
+    caps = CLIMATE.capabilities(edited(AC, target_temp_step=step), None, "°C")
+    assert caps.target_c_step == Decimal(expected)
 
 
 @pytest.mark.parametrize(
@@ -166,6 +202,23 @@ def test_climate_step_defaults_to_half_a_degree() -> None:
 def test_climate_blocked_reasons(state: HAState, unit: str | None, reason: str) -> None:
     caps = CLIMATE.capabilities(state, None, unit)
     assert (caps.blocked_reason, caps.actions) == (reason, frozenset())
+
+
+def test_climate_with_an_inverted_range_is_blocked() -> None:
+    caps = CLIMATE.capabilities(edited(AC, min_temp=25, max_temp=18), None, "°C")
+    assert (caps.blocked_reason, caps.actions) == ("invalid_range", frozenset())
+    # min and max are capability attributes: Home Assistant keeps them while unavailable
+    offline = edited(replace(AC, state="unavailable"), "temperature", min_temp=25, max_temp=18)
+    assert CLIMATE.capabilities(offline, None, "°C").blocked_reason == "invalid_range"
+    same = CLIMATE.capabilities(edited(AC, min_temp=20, max_temp=20), None, "°C")
+    assert same.blocked_reason is None
+
+
+@pytest.mark.parametrize("value", ["1e1000000", "-1e1000000", "1e6", "-1e6", 10**30])
+@pytest.mark.parametrize("name", ["min_temp", "max_temp"])
+def test_climate_limits_beyond_a_million_are_unknown(name: str, value: object) -> None:
+    caps = CLIMATE.capabilities(edited(AC, **{name: value}), None, "°C")
+    assert getattr(caps, f"target_c_{name[:3]}") is None and len(caps.fingerprint) == 64
 
 
 def test_climate_with_empty_range_setpoints_is_single_setpoint() -> None:
@@ -213,7 +266,10 @@ def test_climate_state_view() -> None:
     assert CLIMATE.state_view(edited(AC, temperature=21.1), False).target_c == Decimal("21.1")
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), "unknown", None, True, [22]])
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), "unknown", None, True, [22], "1e1000000", "-1e1000000", "1e6"],
+)
 def test_climate_temperatures_are_finite_numbers_or_none(value: object) -> None:
     view = CLIMATE.state_view(edited(AC, temperature=value, current_temperature=value), False)
     assert (view.target_c, view.current_c) == (None, None)
@@ -225,6 +281,11 @@ def test_climate_temperatures_are_finite_numbers_or_none(value: object) -> None:
         (15, {Action.COVER_OPEN, Action.COVER_CLOSE, Action.COVER_STOP, Action.COVER_SET_POSITION}),
         (11, {Action.COVER_OPEN, Action.COVER_CLOSE, Action.COVER_STOP}),
         (None, set()),
+        (-1, set()),
+        ("15", set()),
+        (15.0, set()),
+        (True, set()),
+        (2**32 + 15, set()),
     ],
 )
 def test_cover_actions_follow_supported_features(
@@ -269,9 +330,27 @@ def test_cover_translation_expectations_and_state_view() -> None:
 def test_sensor_is_read_only() -> None:
     caps = SENSOR.capabilities(HUMIDITY, entry(HUMIDITY, "zha"), "°C")
     assert (caps.kind, caps.actions, caps.blocked_reason) == ("sensor", frozenset(), None)
-    view = StateView("online", False, value="46", unit="%", observed_at=UPDATED)
+    view = StateView(
+        "online", False, value="46", unit="%", device_class="humidity", observed_at=UPDATED
+    )
     assert SENSOR.state_view(HUMIDITY, False) == view
     assert SENSOR.required_actions(Action.STATE_READ, {}) == {Action.STATE_READ}
+
+
+def test_binary_sensor_reads_like_a_sensor() -> None:
+    door = ha_state("binary_sensor.door", "on", device_class="door")
+    adapter = adapter_for("sensor")
+    expected = StateView("online", False, value="on", device_class="door", observed_at=UPDATED)
+    assert adapter.state_view(door, False) == expected
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_every_kind_reads_the_device_class(kind: str) -> None:
+    adapter = adapter_for(kind)
+    state = ha_state(f"{kind}.x", "on", device_class="outlet")
+    assert adapter.state_view(state, False).device_class == "outlet"
+    assert adapter.state_view(edited(state, device_class=3), False).device_class is None
+    assert adapter.state_view(edited(state, "device_class"), False).device_class is None
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -315,6 +394,69 @@ def test_fingerprint_follows_abilities_not_state() -> None:
     assert ac == fingerprint(edited(AC, temperature=19, max_temp=30.0))  # same value as 30
     assert ac != fingerprint(edited(AC, max_temp=31))
     assert ac != fingerprint(edited(AC, hvac_modes=["cool", "off"]))
+
+
+def test_fingerprint_of_the_fixture_ac_is_pinned() -> None:
+    # A changed payload would send every stored binding to needs_review after an update.
+    golden = "ff6e7bf1631222032b6dd02ad97995cc96ad6b148eec6656556c87bfa64241b9"
+    assert CLIMATE.capabilities(AC, entry(AC, "midea"), "°C").fingerprint == golden
+
+
+HOSTILE = [
+    None,
+    True,
+    -1,
+    "",
+    "unknown",
+    "1e1000000",
+    "-1e1000000",
+    "1e-1000000",
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    [],
+    [1, None],
+    {"a": 1},
+    pytest.param(10**5000, id="int-beyond-str-limit"),
+]
+ATTRIBUTES = (
+    "min_temp",
+    "max_temp",
+    "target_temp_step",
+    "hvac_modes",
+    "temperature",
+    "current_temperature",
+    "target_temp_high",
+    "target_temp_low",
+    "brightness",
+    "supported_color_modes",
+    "supported_features",
+    "current_position",
+    "unit_of_measurement",
+    "device_class",
+)
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+@pytest.mark.parametrize("kind", KINDS)
+def test_hostile_attributes_never_raise(kind: str, value: object) -> None:
+    adapter = adapter_for(kind)
+    state = ha_state(f"{kind}.x", "on", **dict.fromkeys(ATTRIBUTES, value))
+    caps = adapter.capabilities(state, None, "°C")
+    view = adapter.state_view(state, False)
+    numbers = (caps.target_c_min, caps.target_c_max, view.target_c, view.current_c)
+    assert all(n is None or (n.is_finite() and abs(n) < 10**6) for n in numbers)
+    assert caps.target_c_step is None or Decimal("0.01") <= caps.target_c_step <= 10
+    assert all(p is None or 0 <= p <= 100 for p in (view.level_pct, view.position_pct))
+    assert all(s is None or isinstance(s, str) for s in (view.unit, view.device_class))
+    assert len(caps.fingerprint) == 64
+
+
+@pytest.mark.parametrize("value", HOSTILE)
+@pytest.mark.parametrize("name", ["min_temp", "max_temp", "target_temp_step", "hvac_modes"])
+def test_one_hostile_climate_attribute_never_raises(name: str, value: object) -> None:
+    caps = CLIMATE.capabilities(edited(AC, **{name: value}), None, "°C")
+    assert len(caps.fingerprint) == 64
 
 
 def test_expectation_check_range() -> None:  # E7

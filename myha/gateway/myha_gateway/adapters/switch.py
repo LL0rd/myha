@@ -1,6 +1,7 @@
 """Switches: on and off."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from myha_gateway.adapters.base import (
@@ -9,7 +10,7 @@ from myha_gateway.adapters.base import (
     Expectation,
     HACall,
     StateView,
-    availability,
+    observed,
     platform_block,
     reading,
     with_fingerprint,
@@ -31,21 +32,16 @@ class SwitchAdapter:
     def capabilities(
         self, state: HAState, entity: RegistryEntity | None, temperature_unit: str | None
     ) -> DeviceCapabilities:
-        blocked = platform_block(entity)
-        possible = frozenset() if blocked else frozenset(_POWER)
-        return with_fingerprint(
-            DeviceCapabilities("switch", possible, blocked_reason=blocked), state.attributes
+        capabilities = DeviceCapabilities(
+            "switch", frozenset(_POWER), blocked_reason=platform_block(entity)
         )
+        return with_fingerprint(capabilities, state.attributes)
 
     def state_view(self, state: HAState | None, adapter_locked: bool) -> StateView:
+        view = observed(state, adapter_locked)
         if state is None:
-            return StateView("unknown", adapter_locked)
-        return StateView(
-            availability(state),
-            adapter_locked,
-            power=reading(state),
-            observed_at=state.last_updated,
-        )
+            return view
+        return replace(view, power=reading(state))
 
     def translate(self, action: Action, params: Mapping[str, Any], entity_id: str) -> HACall:
         return HACall("switch", f"turn_{_power(action)}", entity_id, {})

@@ -1,6 +1,7 @@
 """Covers: open, close, stop and position in percent."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from myha_gateway.adapters.base import (
@@ -9,8 +10,8 @@ from myha_gateway.adapters.base import (
     Expectation,
     HACall,
     StateView,
-    availability,
     features,
+    observed,
     percent,
     platform_block,
     reading,
@@ -39,25 +40,19 @@ class CoverAdapter:
     def capabilities(
         self, state: HAState, entity: RegistryEntity | None, temperature_unit: str | None
     ) -> DeviceCapabilities:
-        blocked = platform_block(entity)
         mask = features(state.attributes)
         possible = frozenset(action for action, bit in _FEATURE.items() if mask & bit)
-        return with_fingerprint(
-            DeviceCapabilities(
-                "cover", frozenset() if blocked else possible, blocked_reason=blocked
-            ),
-            state.attributes,
-        )
+        capabilities = DeviceCapabilities("cover", possible, blocked_reason=platform_block(entity))
+        return with_fingerprint(capabilities, state.attributes)
 
     def state_view(self, state: HAState | None, adapter_locked: bool) -> StateView:
+        view = observed(state, adapter_locked)
         if state is None:
-            return StateView("unknown", adapter_locked)
-        return StateView(
-            availability(state),
-            adapter_locked,
+            return view
+        return replace(
+            view,
             position_pct=percent(state.attributes.get("current_position")),
             cover_state=reading(state),
-            observed_at=state.last_updated,
         )
 
     def translate(self, action: Action, params: Mapping[str, Any], entity_id: str) -> HACall:
