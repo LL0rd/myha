@@ -14,6 +14,8 @@ type Me = Awaited<ReturnType<ReturnType<typeof useSession>["api"]["me"]>>;
 
 const BACKOFF_MS = [1_000, 10_000] as const; // first and longest reconnect delay
 const ACTION_RETRIES = 2; // after a timeout, with the same idempotency key
+const STABLE_MS = 30_000; // a connection this old resets the backoff
+const UNREADABLE_LIMIT = 5; // unreadable frames in a row: the page is older than the gateway, load the new one
 
 /** The session is gone for good: revoked, expired or never valid. */
 const sessionGone = (error: unknown) => error instanceof ApiError && (error.status === 401 || error.code === "ACCESS_EXPIRED");
@@ -51,6 +53,7 @@ export function Dashboard() {
     let retry: ReturnType<typeof setTimeout> | undefined;
     let begins: ReturnType<typeof setTimeout> | undefined;
     let delay: number = BACKOFF_MS[0];
+    let unreadable = 0;
     const end = () => navigate("/ended", { replace: true });
 
     const reconnect = () => {
@@ -64,6 +67,7 @@ export function Dashboard() {
         const { ticket } = await api.wsTicket(); // a fresh ticket for every attempt: tickets are single-use
         if (stopped) return;
         const ws = transport.openSocket("/api/v1/events", ticket);
+        const openedAt = Date.now();
         socket = ws;
         // Nothing is ever dropped silently: a frame that does not fit, or a gap in the deltas, closes the socket,
         // and the close path resyncs from a fresh snapshot.
@@ -75,11 +79,16 @@ export function Dashboard() {
             // falls through to the failed schema check
           }
           const parsed = events.any.safeParse(data);
+          if (!parsed.success && ++unreadable >= UNREADABLE_LIMIT) return location.reload(); // index.html is no-store
           if (!parsed.success || !store.apply(parsed.data)) return ws.close();
-          if (parsed.data.type === "snapshot") delay = BACKOFF_MS[0];
         });
         ws.addEventListener("close", () => {
           socket = null;
+          // Only a connection that held resets the backoff: a snapshot alone does not prove the stream is readable.
+          if (Date.now() - openedAt >= STABLE_MS) {
+            delay = BACKOFF_MS[0];
+            unreadable = 0;
+          }
           // After session.revoked the page ends; otherwise a revoked session fails at the next ticket with 401.
           if (!stopped && !store.get().ended) reconnect();
         });
@@ -153,9 +162,18 @@ export function Dashboard() {
 
   const onAction = (resourceId: string, action: Action, params: ActionParams) => {
     const key = idempotencyKey();
+    // Created at the click, like the server's own record of it: a late confirmation then still wins.
+    const clickedAt = new Date().toISOString();
     const local = (status: "accepted" | "failed" | "unknown", id = key, publicCode: PublicErrorCode | null = null) => {
-      const at = new Date().toISOString();
-      store.addCommand({ id, resource_id: resourceId, action, status, created_at: at, updated_at: at, public_code: publicCode });
+      store.addCommand({
+        id,
+        resource_id: resourceId,
+        action,
+        status,
+        created_at: clickedAt,
+        updated_at: new Date().toISOString(),
+        public_code: publicCode,
+      });
     };
     // A timeout leaves open whether the gateway got the click: the same key makes the retry safe.
     const send = (retries: number): Promise<void> =>
@@ -164,8 +182,8 @@ export function Dashboard() {
         (error: unknown) => {
           if (error instanceof DOMException && error.name === "TimeoutError" && retries > 0) return send(retries - 1);
           if (sessionGone(error)) navigate("/ended", { replace: true });
-          // Refused by the gateway: nothing happened. A timeout or a network failure: it may have.
-          else if (error instanceof ApiError) local("failed", key, error.code);
+          // Refused (4xx): nothing happened. A timeout, the network, a 5xx or an unreadable answer: it may have.
+          else if (error instanceof ApiError && error.status >= 400 && error.status < 500) local("failed", key, error.code);
           else local("unknown");
         },
       );

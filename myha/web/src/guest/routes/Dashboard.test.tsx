@@ -147,6 +147,55 @@ it("an invalid frame or a sequence gap closes the socket for a fresh snapshot", 
   expect(sockets[1]!.close).toHaveBeenCalled();
 });
 
+it("a frame the page cannot read after every snapshot backs off 1, 2, 4 s, then reloads the page", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(1); // no jitter: the delays are exact
+  const reload = vi.fn();
+  vi.stubGlobal("location", { ...window.location, reload });
+  renderDashboard();
+  const snapshotThenJunk = (socket: FakeSocket) =>
+    act(() => {
+      socket.receive({ type: "snapshot", generation: 2, sequence: 0, policy_version: 7, dashboard: { status: "online", rooms: fixture.rooms } });
+      socket.receive({ type: "resource.created", sequence: 1 }); // e.g. a newer gateway's event
+      socket.dispatchEvent(new Event("close"));
+    });
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  for (const [n, delay] of [1_000, 2_000, 4_000].entries()) {
+    snapshotThenJunk(sockets[n]!);
+    await act(() => vi.advanceTimersByTimeAsync(delay - 1));
+    expect(sockets).toHaveLength(n + 1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    await vi.waitFor(() => expect(sockets).toHaveLength(n + 2));
+  }
+  expect(reload).not.toHaveBeenCalled();
+  snapshotThenJunk(sockets[3]!);
+  await act(() => vi.advanceTimersByTimeAsync(8_000));
+  await vi.waitFor(() => expect(sockets).toHaveLength(5));
+  snapshotThenJunk(sockets[4]!); // the fifth unreadable frame in a row: this page is older than the gateway
+  expect(reload).toHaveBeenCalledTimes(1);
+  vi.unstubAllGlobals();
+});
+
+it("a click answered late keeps its click time, a 5xx is unknown", async () => {
+  let fail: (error: unknown) => void = () => {};
+  answers["/api/v1/actions"] = () => new Promise((_, reject) => (fail = reject));
+  renderDashboard();
+  const light = within(await screen.findByRole("group", { name: "Ceiling" }));
+  const clicked = new Date().toISOString();
+  fireEvent.click(light.getByRole("button", { name: "Turn off" }));
+  await act(() => vi.advanceTimersByTimeAsync(20_000));
+  act(() => fail(new ApiError(503, "UPSTREAM_UNAVAILABLE", "Unavailable")));
+  expect(await light.findByText("Result unclear · device not reachable")).toBeTruthy();
+  // The server's own record of the click, created at click time, wins over the local note.
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  act(() =>
+    sockets[0]!.receive({
+      type: "command.updated",
+      command: { id: "cmd_srv", resource_id: "res_203_light", action: "light.off", status: "confirmed", created_at: clicked, updated_at: new Date().toISOString() },
+    }),
+  );
+  expect(await light.findByText("Confirmed")).toBeTruthy();
+});
+
 it("after more than 30 s in the background the page resyncs completely", async () => {
   renderDashboard();
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
