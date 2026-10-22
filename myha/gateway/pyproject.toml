@@ -5,7 +5,7 @@ description = "myHA gateway: policy-enforcing access layer for Home Assistant"
 requires-python = ">=3.13,<3.14"
 license = "Apache-2.0"
 dependencies = [
-  "fastapi>=0.118", "uvicorn[standard]>=0.37", "pydantic>=2.11", "pydantic-settings>=2.10",
+  "fastapi>=0.159", "uvicorn[standard]>=0.37", "pydantic>=2.11", "pydantic-settings>=2.10",
   "sqlalchemy[asyncio]>=2.0.43", "aiosqlite>=0.21", "alembic>=1.16", "httpx>=0.28",
   "websockets>=15", "argon2-cffi>=25", "segno>=1.6", "pyyaml>=6",
 ]

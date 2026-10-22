@@ -25,25 +25,37 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppContext:
     return ctx
 
 
+def probe_app(ctx: AppContext) -> FastAPI:
+    """The admin app in probe mode, the only mode that serves the S0 probe."""
+    ctx.settings.probe_mode = True
+    return create_admin_app(ctx)
+
+
 async def test_public_health_reports_client_ip(ctx: AppContext) -> None:
     r = await call(create_public_app(ctx), "GET", "/healthz", peer="203.0.113.9")
     assert r.status_code == 200 and r.json()["client_ip"] == "203.0.113.9"
 
 
 async def test_public_listener_has_no_admin_routes(ctx: AppContext) -> None:  # ahead of A01
+    ctx.settings.probe_mode = True
     app = create_public_app(ctx)
     r = await call(app, "GET", "/api/v1/admin/probe", headers={"X-Remote-User-Id": "owner1"})
     assert r.status_code == 404
 
 
+async def test_admin_probe_only_in_probe_mode(ctx: AppContext) -> None:
+    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
+
+
 async def test_admin_probe_requires_trusted_peer(ctx: AppContext) -> None:
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", peer="10.0.0.5")
+    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", peer="10.0.0.5")
     assert r.status_code == 403 and r.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 async def test_admin_probe_echoes_identity_headers_from_trusted_peer(ctx: AppContext) -> None:
     headers = {"X-Remote-User-Id": "u1", "X-Ingress-Path": "/api/hassio_ingress/abc"}
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
+    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
     assert r.status_code == 200 and r.json()["peer"] == "172.30.32.2"
     assert r.json()["headers"]["x-remote-user-id"] == "u1"
 
@@ -57,7 +69,7 @@ async def test_admin_probe_shows_only_identity_and_forwarding_headers(ctx: AppCo
         "Cookie": "session=abc",
         "X-Ingress-Path-Foo": "/not/echoed",
     }
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
+    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
     assert r.json()["headers"] == {
         "x-remote-user-name": "dimitri",
         "x-forwarded-for": "192.168.1.20",
@@ -70,7 +82,7 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
 ) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-secret")
     (ctx.settings.data_dir / "options.json").write_text("{}", encoding="utf-8")
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
+    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe")
     body = r.json()
     assert body["supervisor_info"] == {
         "version": "2026.10.3",
@@ -90,7 +102,7 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
 
 async def test_admin_probe_shows_supervisor_errors_instead_of_failing(ctx: AppContext) -> None:
     ctx.supervisor = fake_supervisor(reachable=False)
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
+    r = await call(probe_app(ctx), "GET", "/api/v1/admin/probe")
     assert r.status_code == 200 and "sup-secret" not in r.text
     error = "SupervisorUnavailable: GET /info: ConnectError: Name or service not known"
     assert r.json()["supervisor_info"] == {"error": error}
@@ -186,7 +198,7 @@ async def test_wrong_method_keeps_error_shape(ctx: AppContext) -> None:
 
 @pytest.mark.parametrize(
     ("factory", "path"),
-    [(create_public_app, "/healthz/"), (create_admin_app, "/api/v1/admin/probe/")],
+    [(create_public_app, "/healthz/"), (probe_app, "/api/v1/admin/probe/")],
 )
 async def test_trailing_slash_is_not_found_instead_of_redirect(
     ctx: AppContext, factory: Callable[[AppContext], FastAPI], path: str

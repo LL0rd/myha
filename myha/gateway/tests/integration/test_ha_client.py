@@ -21,7 +21,7 @@ from myha_gateway.deps import AppContext
 from myha_gateway.ha import client as ha_client
 from myha_gateway.ha.client import HAClient, HAProtocolError, HAServiceError, HAUnavailable
 from myha_gateway.ha.messages import ConnectionStatus, StateChanged
-from tests.helpers import SIM_TOKEN, SimHandle, call, fake_supervisor
+from tests.helpers import SIM_TOKEN, SimHandle, fake_supervisor
 
 STATE = {
     "entity_id": "light.a",
@@ -486,9 +486,7 @@ async def test_admin_lifespan_runs_the_ha_client(
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         await until(lambda: ctx.ha.connected)
-        owner = {"X-Remote-User-Id": "owner1"}  # an admin, for when the probe asks Core
-        probe = (await call(app, "GET", "/api/v1/admin/probe", headers=owner)).json()
-    assert (probe["ha_connected"], probe["ha_generation"]) == (True, 1)
+        assert ctx.ha.generation == 1
     assert not ctx.ha.connected  # stopped with the admin app
 
 

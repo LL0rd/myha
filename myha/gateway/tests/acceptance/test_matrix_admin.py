@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from myha_gateway.api.admin import session
 from myha_gateway.app import create_admin_app, create_public_app
@@ -53,6 +53,7 @@ def owner_changed(**changes: Any) -> list[dict[str, Any]]:
 
 
 async def test_a01_public_listener_ignores_identity_headers(ctx: AppContext) -> None:
+    ctx.settings.probe_mode = True  # the mode in which the admin app has the S0 probe
     public = create_public_app(ctx)
     identity = {
         "X-Remote-User-Id": OWNER,
@@ -64,10 +65,16 @@ async def test_a01_public_listener_ignores_identity_headers(ctx: AppContext) -> 
         assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
 
 
-async def test_a02_wrong_peer_rejected(admin_app: FastAPI, admin_client: httpx.AsyncClient) -> None:
+async def test_a02_wrong_peer_rejected(
+    admin_app: FastAPI, admin_client: httpx.AsyncClient, ctx: AppContext
+) -> None:
     identity = {"X-Remote-User-Id": OWNER, "X-MyHA-CSRF": await csrf(admin_client)}
-    for method, path in [("GET", SESSION), ("POST", CHECK), ("GET", PROBE), ("GET", "/")]:
+    for method, path in [("GET", SESSION), ("POST", CHECK), ("GET", "/")]:
         assert denied(await call(admin_app, method, path, peer="10.0.0.5", headers=identity))
+
+    ctx.settings.probe_mode = True  # the S0 probe route exists in probe mode only
+    probe_on = create_admin_app(ctx)
+    assert denied(await call(probe_on, "GET", PROBE, peer="10.0.0.5", headers=identity))
 
     # require_admin checks the peer itself, not only the middleware around the admin app.
     bare = FastAPI()
@@ -90,11 +97,15 @@ async def test_a03_missing_duplicate_headers_and_old_supervisor(
         twice = [("X-Remote-User-Id", OWNER), ("X-Remote-User-Id", second)]
         assert denied(await admin_client.get(SESSION, headers=twice))
 
+    assert ctx.instance is not None
+    token = csrf_token(ctx.instance.server_secret, OWNER, "", clocks.now.date())
     await sim.control.post("supervisor/version", {"version": "2026.10.2"})
+    mutation = await admin_client.post(CHECK, headers={"X-MyHA-CSRF": token})
+    assert unavailable(mutation, "supervisor_version")
     assert unavailable(await admin_client.get(SESSION), "supervisor_version")
 
     ctx.supervisor = SupervisorClient("http://127.0.0.1:1", None)  # connection refused
-    clocks.advance(60)  # the answer of the old Supervisor has expired
+    clocks.advance(5)  # a failed check is reused for 5 s
     assert unavailable(await admin_client.get(SESSION), "supervisor_unreachable")
 
 
@@ -142,13 +153,11 @@ async def test_a05_auth_list_failure_no_fallback(
     admin_client: httpx.AsyncClient,
     ctx: AppContext,
     sim: SimHandle,
-    clocks: Clocks,
 ) -> None:
     token = await csrf(admin_client)  # a success the guard could fall back to
     await fail(sim, ctx)
     assert denied(await admin_client.post(CHECK, headers={"X-MyHA-CSRF": token}))
-    clocks.advance(5)
-    assert denied(await admin_client.get(SESSION))
+    assert denied(await admin_client.get(SESSION))  # within the 5 s reuse of that success
 
 
 @pytest.mark.parametrize(
@@ -180,6 +189,46 @@ async def test_supervisor_answer_is_reused_for_60_seconds(
     assert (await admin_client.get(SESSION)).status_code == 200  # no second GET /info
     clocks.advance(1)
     assert unavailable(await admin_client.get(SESSION), "supervisor_version")
+
+    await sim.control.post("supervisor/version", {"version": SUPERVISOR_VERSION})
+    clocks.advance(4)
+    assert unavailable(await admin_client.get(SESSION), "supervisor_version")  # reused 5 s
+    clocks.advance(1)
+    assert (await admin_client.get(SESSION)).status_code == 200
+
+
+async def test_supervisor_outage_costs_one_request_per_5_seconds(
+    admin_client: httpx.AsyncClient, ctx: AppContext, clocks: Clocks
+) -> None:
+    requests: list[str] = []
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    ctx.supervisor = SupervisorClient("http://supervisor", None, transport=transport)
+    assert unavailable(await admin_client.get(SESSION), "supervisor_unreachable")
+    clocks.advance(4)
+    assert unavailable(await admin_client.get(SESSION), "supervisor_unreachable")
+    assert requests == ["/info"]
+    clocks.advance(1)
+    assert unavailable(await admin_client.get(SESSION), "supervisor_unreachable")
+    assert requests == ["/info", "/info"]
+
+
+async def test_names_are_decoded_as_utf8_but_the_user_id_is_not(
+    admin_client: httpx.AsyncClient, sim: SimHandle
+) -> None:
+    # ASGI servers decode header bytes as latin-1; the Supervisor sends UTF-8.
+    await sim.control.post("auth/users", owner_changed(id="owner\u00e9"))
+    user_id = "owner\u00e9".encode("latin-1")  # never re-decoded: it must match Core exactly
+    named = {"X-Remote-User-Id": user_id, "X-Remote-User-Name": "jürgen".encode()}
+    r = await admin_client.get(SESSION, headers=named)
+    assert r.json()["user"] == {"id": "owner\u00e9", "name": "jürgen"}
+    displayed = {**named, "X-Remote-User-Display-Name": "Jürgen Müller".encode()}
+    r = await admin_client.get(SESSION, headers=displayed)
+    assert r.json()["user"] == {"id": "owner\u00e9", "name": "Jürgen Müller"}
 
 
 async def test_session_reports_identity_csrf_token_and_versions(
@@ -238,11 +287,21 @@ async def test_cross_origin_preflight_gets_no_cors_answer(admin_client: httpx.As
     assert r.status_code == 405 and "access-control-allow-origin" not in r.headers
 
 
+def _calls(dependant: Any) -> set[Any]:
+    return {c for d in dependant.dependencies for c in (d.call, *_calls(d))}
+
+
 async def test_every_admin_api_route_requires_the_guard(ctx: AppContext) -> None:
     guards = {require_admin(fresh=False), require_admin(fresh=True), require_csrf}
-    for route in create_admin_app(ctx).routes:
-        if isinstance(route, APIRoute) and route.path != PROBE:  # S0 tool, peer guard only
-            calls = {dependency.call for dependency in route.dependant.dependencies}
-            assert calls & guards, route.path
-            if route.methods & {"POST", "PUT", "PATCH", "DELETE"}:
-                assert require_csrf in calls, route.path
+    ctx.settings.probe_mode = True  # every route the admin app can have
+    checked = set()
+    for context in iter_route_contexts(create_admin_app(ctx).routes):
+        assert isinstance(context.original_route, APIRoute), context.path  # WS, Mount: own check
+        if context.path == PROBE:  # S0 tool, probe mode only, peer guard only (task 1.6)
+            continue
+        calls = _calls(context.dependant)  # the route plus router-level dependencies
+        assert calls & guards, context.path
+        if context.methods & {"POST", "PUT", "PATCH", "DELETE"}:
+            assert require_csrf in calls, context.path
+        checked.add(context.path)
+    assert {SESSION, CHECK} <= checked  # never passes on an empty loop again

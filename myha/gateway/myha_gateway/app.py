@@ -104,8 +104,10 @@ def create_public_app(ctx: AppContext) -> FastAPI:
 def create_admin_app(ctx: AppContext) -> FastAPI:
     """Admin app behind the Supervisor ingress proxy, reachable only from its peer address."""
     app = _app(ctx, validation_details=True, lifespan=_admin_lifespan)
-    app.state.admin_guard = AdminGuard(ctx)  # require_admin on each route; caches live here
-    app.include_router(probe.router)
+    # Caches of require_admin, which every admin API route depends on except the S0 probe.
+    app.state.admin_guard = AdminGuard(ctx)
+    if ctx.settings.probe_mode:  # S0 only, behind the peer guard alone; deleted with task 1.6
+        app.include_router(probe.router)
     app.include_router(session.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.

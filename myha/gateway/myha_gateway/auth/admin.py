@@ -1,9 +1,10 @@
 """Admin identity behind the Supervisor ingress (design E4, E5, E24).
 
-``PeerGuardMiddleware`` turns away every other peer first. Each admin route then depends on
+``PeerGuardMiddleware`` turns away every other peer first. Each admin API route then depends on
 ``require_admin``: the peer again, exactly one ``X-Remote-User-Id``, a Supervisor of at least
 the minimum version, and the user's role as Core reports it. Mutations and sensitive reads
-depend on ``require_csrf`` instead, which asks Core afresh and checks the CSRF proof.
+depend on ``require_csrf`` instead, which asks Core afresh and checks the CSRF proof. Only the
+S0 probe has neither: probe mode only, behind the peer guard, deleted with task 1.6.
 """
 
 import functools
@@ -28,7 +29,8 @@ from myha_gateway.ids import constant_time_equal
 
 logger = logging.getLogger(__name__)
 
-SUPERVISOR_TTL = 60.0  # seconds a GET /info answer is reused
+SUPERVISOR_TTL = 60.0  # seconds a Supervisor of the minimum version is reused
+SUPERVISOR_RETRY = 5.0  # seconds a too old or unreachable Supervisor is reused
 ROLE_TTL = 5.0  # seconds a role Core confirmed is reused by checks that need not be fresh
 
 
@@ -65,6 +67,11 @@ def csrf_ok(headers: Headers, secret: str, user_id: str, today: date) -> bool:
     return any(constant_time_equal(sent, csrf_token(secret, user_id, path, day)) for day in days)
 
 
+def _utf8(value: str | None) -> str | None:
+    """A header the Supervisor sends as UTF-8 and the ASGI server decodes as latin-1."""
+    return None if value is None else value.encode("latin-1").decode("utf-8", "replace")
+
+
 class AdminGuard:
     """The checks and their caches; one per admin app, kept in ``app.state.admin_guard``."""
 
@@ -78,7 +85,8 @@ class AdminGuard:
         self.ctx = ctx
         self.clock = clock  # UTC: the day of a CSRF token
         self._monotonic = monotonic
-        self._supervisor: tuple[float, SupervisorInfo] | None = None
+        # Expiry and outcome of the last check: the Supervisor, or reason and message of the 503.
+        self._supervisor: tuple[float, SupervisorInfo | tuple[str, str]] | None = None
         self._roles: dict[str, float] = {}  # user id -> when Core last confirmed the role
 
     @property
@@ -89,22 +97,33 @@ class AdminGuard:
         return self.ctx.instance
 
     async def supervisor_info(self) -> SupervisorInfo:
-        """``GET /info``, reused for 60 s; 503 unless the Supervisor meets the minimum (E4)."""
+        """``GET /info``; 503 unless the Supervisor meets the minimum version (E4).
+
+        A current Supervisor is reused for 60 s, a failed check for 5 s: during an outage that
+        is one request and one warning per 5 s instead of one per admin request.
+        """
         now = self._monotonic()
+        if self._supervisor is None or now >= self._supervisor[0]:
+            outcome = await self._check_supervisor()
+            ttl = SUPERVISOR_TTL if isinstance(outcome, SupervisorInfo) else SUPERVISOR_RETRY
+            self._supervisor = (now + ttl, outcome)
+        outcome = self._supervisor[1]
+        if isinstance(outcome, SupervisorInfo):
+            return outcome
+        reason, message = outcome
+        raise ApiError(503, "UPSTREAM_UNAVAILABLE", message, {"reason": reason})
+
+    async def _check_supervisor(self) -> SupervisorInfo | tuple[str, str]:
+        """The Supervisor if it meets the minimum version, else reason and message of the 503."""
         minimum = self.ctx.settings.min_supervisor_version
         try:
-            if self._supervisor is None or now - self._supervisor[0] >= SUPERVISOR_TTL:
-                self._supervisor = (now, await self.ctx.supervisor.info())
-            info = self._supervisor[1]
-            current = info.is_at_least(minimum)
+            info = await self.ctx.supervisor.info()
+            if info.is_at_least(minimum):
+                return info
         except SupervisorUnavailable as exc:  # its message never contains the token
             logger.warning("admin access blocked: %s", exc)
-            details = {"reason": "supervisor_unreachable"}
-            raise ApiError(503, "UPSTREAM_UNAVAILABLE", "Supervisor unreachable", details) from None
-        if not current:
-            message = f"Supervisor {info.version} is older than {minimum}"
-            raise ApiError(503, "UPSTREAM_UNAVAILABLE", message, {"reason": "supervisor_version"})
-        return info
+            return "supervisor_unreachable", "Supervisor unreachable"
+        return "supervisor_version", f"Supervisor {info.version} is older than {minimum}"
 
     async def identity(self, request: Request, *, fresh: bool) -> AdminIdentity:
         """The admin behind ``request``; ``fresh`` asks Core even within the reuse window."""
@@ -117,9 +136,9 @@ class AdminGuard:
         await self.supervisor_info()
         headers = request.headers
         identity = AdminIdentity(
-            user_ids[0],
-            headers.get("x-remote-user-name"),
-            headers.get("x-remote-user-display-name"),
+            user_ids[0],  # as received: it must match Core's id exactly, never re-decoded
+            _utf8(headers.get("x-remote-user-name")),  # display only, like the next one
+            _utf8(headers.get("x-remote-user-display-name")),
             headers.get("x-remote-user-groups"),
         )
         now = self._monotonic()
