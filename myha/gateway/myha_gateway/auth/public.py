@@ -7,8 +7,9 @@ token, so a stolen cookie value cannot skip the CSRF check by posing as a native
 
 import functools
 import ipaddress
+import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
@@ -32,6 +33,8 @@ from myha_gateway.ha.client import utcnow
 from myha_gateway.ids import constant_time_equal, hash_secret, new_id, new_secret
 from myha_gateway.services.audit import AuditEvent, audit
 
+logger = logging.getLogger(__name__)
+
 LAST_SEEN_EVERY = timedelta(seconds=60)
 TICKET_SECONDS = 30
 
@@ -48,8 +51,8 @@ class SessionContext:
 @dataclass(frozen=True)
 class Redeemed:
     session: Session
-    token: str  # the cookie value, or the native access token
-    refresh_token: str | None  # native only
+    token: str = field(repr=False)  # the cookie value, or the native access token
+    refresh_token: str | None = field(repr=False)  # native only
 
 
 class _Refused(Exception):
@@ -116,11 +119,14 @@ async def redeem(
     secret: str,
     device_label: str | None,
     client: Literal["browser", "native"],
-    client_ip: str,
+    peer_key: str,
+    replaces: str | None = None,
 ) -> Redeemed:
     """Consume the invitation and create guest and session in one transaction (A22).
 
-    Every refusal runs the same hash and UPDATE and ends in ``redeem_refused()``.
+    Every refusal runs the same hash and UPDATE and ends in ``redeem_refused()``; its audit
+    row is keyed by ``peer_key``, the client's rate-limit key.
+    ``replaces`` is the token of the browser session this one supersedes; it is revoked.
     """
     instance = instance_of(ctx)
     now, session_id = utcnow(), new_id("ses")
@@ -200,6 +206,13 @@ async def redeem(
                     )
                 )
             await db.flush()
+            if replaces is not None:
+                query = update(Session).where(
+                    Session.token_hash == hash_secret(replaces),
+                    Session.audience == "browser",
+                    Session.revoked_at.is_(None),
+                )
+                await db.execute(query.values(revoked_at=now, revoke_reason="replaced"))
             params = {"stay_id": stay.id, "invite_id": row.id, "audience": client}
             event = AuditEvent(
                 operation="auth.redeem",
@@ -211,12 +224,15 @@ async def redeem(
             )
             await audit(db, event)
     except _Refused as refused:
-        key = f"auth.redeem|{refused.reason}|{now:%Y-%m-%dT%H:%M}|{client_ip}"
+        key = f"auth.redeem|{refused.reason}|{now:%Y-%m-%dT%H:%M}|{peer_key}"
         event = AuditEvent(
             operation="auth.redeem", result="denied", reason_code=refused.reason, anon_key=key
         )
-        async with write_session(ctx.engine) as db:
-            await audit(db, event)
+        try:
+            async with write_session(ctx.engine) as db:
+                await audit(db, event)
+        except Exception:  # e.g. busy timeout: the answer stays the uniform 401
+            logger.warning("redeem denial not audited", exc_info=True)
         raise redeem_refused() from None
     return Redeemed(session, token, refresh)
 
@@ -317,7 +333,7 @@ def session_view(session: Session, now: datetime) -> dict[str, Any]:
 
 
 async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
-    """Revoke the session now; refresh tokens are not touched yet (rotation comes in Plan 3)."""
+    """Revoke only the session; the refresh endpoint (Plan 3) checks its ``revoked_at``."""
     session, now = current.session, utcnow()
     async with write_session(ctx.engine) as db:
         query = update(Session).where(Session.id == session.id, Session.revoked_at.is_(None))
@@ -333,7 +349,10 @@ async def revoke(ctx: AppContext, current: SessionContext, reason: str) -> None:
 
 
 async def renew(ctx: AppContext, current: SessionContext) -> Session:
-    """Move a browser session's end to what stay and limits allow now; never further."""
+    """Move a browser session's end to what stay and limits allow now; never further.
+
+    The route then re-issues the cookie with the new Max-Age.
+    """
     session, now = current.session, utcnow()
     if session.audience != "browser":
         raise ApiError(400, "INVALID_PARAMETERS", "Native sessions renew through refresh")
@@ -341,6 +360,14 @@ async def renew(ctx: AppContext, current: SessionContext) -> Session:
     async with write_session(ctx.engine) as db:
         query = update(Session).where(Session.id == session.id).values(not_after=not_after)
         await db.execute(query)
+        event = AuditEvent(
+            operation="auth.renew",
+            result="ok",
+            actor=current.principal.id,
+            effective_principal=current.principal.id,
+            session_id=session.id,
+        )
+        await audit(db, event)
     session.not_after = not_after
     return session
 

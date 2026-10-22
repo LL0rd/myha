@@ -7,6 +7,7 @@ import httpx
 import pytest
 from starlette.requests import Request
 
+from myha_gateway.auth import public
 from myha_gateway.auth.public import client_key
 from myha_gateway.db import models as db
 from myha_gateway.ids import hash_secret, new_secret
@@ -106,7 +107,7 @@ async def test_cookie_attributes(world: World) -> None:
 
 async def test_native_redeem_returns_tokens_no_cookie(world: World) -> None:
     async with world.client() as client:
-        r = await redeem(client, world.secrets[0], "native")
+        r = await redeem(client, world.secrets[0], "native", device_label=None)
         assert r.status_code == 200, r.text
         assert "set-cookie" not in r.headers
         body = r.json()
@@ -125,7 +126,10 @@ async def test_native_redeem_returns_tokens_no_cookie(world: World) -> None:
         token = guest.cookie.split("=", 1)[1]
         stolen = {"Authorization": f"Bearer {token}"}
         assert error(await client.get("/api/v1/me", headers=stolen)) == (401, "UNAUTHENTICATED")
+        out = await client.post("/api/v1/auth/logout", headers=bearer)
+        assert out.status_code == 204 and "set-cookie" not in out.headers
     session = next(s for s in await rows(world.ctx, db.Session) if s.audience == "native")
+    assert session.revoke_reason == "logout"
     assert session.token_hash == hash_secret(body["access_token"])
     assert near(session.not_after, now() + timedelta(minutes=15))
     (refresh,) = await rows(world.ctx, db.RefreshToken)
@@ -159,6 +163,8 @@ async def test_renew_never_extends_beyond_stay(world: World) -> None:
         assert near(datetime.fromisoformat(r.json()["session"]["not_after"]), cap)
     session = next(s for s in await rows(ctx, db.Session) if s.stay_id == long_id)
     assert near(session.not_after, cap)
+    renewals = [e for e in await rows(ctx, db.AuditEvent) if e.operation == "auth.renew"]
+    assert len(renewals) == 3 and all(e.session_id for e in renewals)
 
 
 async def test_public_config_and_rate_limit(world: World) -> None:
@@ -269,6 +275,73 @@ async def test_logout(world: World) -> None:
     assert session.revoked_at is not None and session.revoke_reason == "logout"
     events = [e.operation for e in await rows(world.ctx, db.AuditEvent)]
     assert "auth.logout" in events
+
+
+async def test_logout_clears_the_cookie_of_a_dead_session_but_not_on_csrf_failure(
+    world: World,
+) -> None:
+    async with world.client() as client:
+        guest = await browser_guest(world, client, world.secrets[0])
+        bad_csrf = guest.headers(**{"X-MyHA-CSRF": "x" * 43})
+        r = await client.post("/api/v1/auth/logout", headers=bad_csrf)
+        assert error(r) == (403, "UNAUTHENTICATED") and "set-cookie" not in r.headers
+        assert (
+            await client.post("/api/v1/auth/logout", headers=guest.headers())
+        ).status_code == 204
+        again = await client.post("/api/v1/auth/logout", headers=guest.headers())
+        assert error(again) == (401, "UNAUTHENTICATED")
+        assert "max-age=0" in again.headers["set-cookie"].lower()
+        nothing = await client.post("/api/v1/auth/logout", headers={"Origin": ORIGIN})
+        assert error(nothing) == (401, "UNAUTHENTICATED") and "set-cookie" in nothing.headers
+
+
+async def test_redeem_replaces_the_browser_session_it_carries(world: World) -> None:
+    async with world.client() as client:
+        first = await browser_guest(world, client, world.secrets[0])
+        r = await client.post(
+            "/api/v1/auth/redeem",
+            json={"invite_secret": world.secrets[1], "client": "browser"},
+            headers={"Cookie": first.cookie},
+        )
+        assert r.status_code == 200, r.text
+        second = r.headers["set-cookie"].split(";", 1)[0]
+        assert error(await client.get("/api/v1/me", headers={"Cookie": first.cookie})) == (
+            401,
+            "UNAUTHENTICATED",
+        )
+        assert (await client.get("/api/v1/me", headers={"Cookie": second})).status_code == 200
+    reasons = sorted(str(s.revoke_reason) for s in await rows(world.ctx, db.Session))
+    assert reasons == ["None", "replaced"]
+
+
+async def test_lone_surrogate_label_is_a_400(world: World) -> None:
+    body = '{"invite_secret": "%s", "client": "browser", "device_label": "\\ud800"}'
+    async with world.client() as client:
+        r = await client.post(
+            "/api/v1/auth/redeem",
+            content=body % world.secrets[0],
+            headers={"Content-Type": "application/json"},
+        )
+    assert error(r) == (400, "INVALID_PARAMETERS")
+    assert all(i.consumed_at is None for i in await rows(world.ctx, db.Invite))
+
+
+async def test_denial_audit_never_breaks_the_uniform_401(
+    world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with world.client("2001:db8:1:2::9") as client:
+        normal = await redeem(client, new_secret())
+        (row,) = [e for e in await rows(world.ctx, db.AuditEvent) if e.result == "denied"]
+        assert row.anon_key is not None and row.anon_key.endswith("|2001:db8:1:2::/64")
+
+        async def broken(session: object, event: object) -> None:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(public, "audit", broken)
+        secret = new_secret()
+        r = await redeem(client, secret)
+    assert (r.status_code, r.content) == (normal.status_code, normal.content)
+    assert "redeem denial not audited" in caplog.text and secret not in caplog.text
 
 
 async def test_ws_ticket(world: World) -> None:

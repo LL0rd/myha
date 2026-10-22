@@ -80,8 +80,9 @@ async def test_a35_csrf_origin_revoked(world: World) -> None:
             assert r.status_code == 403, origin
         no_origin = {"Cookie": guest.cookie, "X-MyHA-CSRF": guest.csrf}
         assert (await client.post("/api/v1/ws-ticket", headers=no_origin)).status_code == 403
-        cross = guest.headers(**{"Sec-Fetch-Site": "cross-site"})
-        assert (await client.post("/api/v1/ws-ticket", headers=cross)).status_code == 403
+        for site in ("cross-site", "same-site", "none"):
+            fetched = guest.headers(**{"Sec-Fetch-Site": site})
+            assert (await client.post("/api/v1/ws-ticket", headers=fetched)).status_code == 403
         assert (await client.post("/api/v1/ws-ticket", headers=guest.headers())).status_code == 200
 
         # Revoked: logout, then the same cookie is refused.

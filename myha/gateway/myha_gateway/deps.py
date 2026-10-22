@@ -90,6 +90,8 @@ def _origin_problem(origin: str, *, allow_http: bool) -> str | None:
 
 def _limiters() -> dict[str, SlidingWindowLimiter]:
     """Per client IP: ``config`` 60/min for ``public/config``, ``redeem`` 10/min (spec §12.1)."""
+    # shortcut: a flood of addresses past max_keys evicts keys and so resets their windows;
+    # harmless while redeem guards 256-bit secrets, revisit for guessable ones (login, Plan 3)
     return {"config": SlidingWindowLimiter(60, 60), "redeem": SlidingWindowLimiter(10, 60)}
 
 

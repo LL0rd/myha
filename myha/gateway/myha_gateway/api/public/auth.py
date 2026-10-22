@@ -11,6 +11,8 @@ from myha_gateway.auth.cookies import clear_session_cookie, set_session_cookie
 from myha_gateway.auth.public import (
     SessionContext,
     app_context,
+    check_session,
+    client_key,
     cookie_name,
     rate_limit,
     redeem,
@@ -19,6 +21,7 @@ from myha_gateway.auth.public import (
     revoke,
     session_view,
 )
+from myha_gateway.errors import ApiError, error_response
 from myha_gateway.ha.client import utcnow
 
 router = APIRouter()
@@ -34,10 +37,12 @@ class RedeemIn(BaseModel):
     @field_validator("device_label")
     @classmethod
     def clean_label(cls, value: str | None) -> str | None:
-        """Without control and format characters (no bidi tricks in the admin UI), 60 at most."""
+        """Without control, format or surrogate characters (no bidi tricks), 60 at most."""
         if value is None:
             return None
-        label = "".join(c for c in value if unicodedata.category(c) not in ("Cc", "Cf")).strip()
+        value.encode("utf-8")  # a lone surrogate raises here (400), not in the insert (500)
+        drop = ("Cc", "Cf", "Cs")
+        label = "".join(c for c in value if unicodedata.category(c) not in drop).strip()
         if len(label) > 60:
             raise ValueError("device_label is longer than 60 characters")
         return label or None
@@ -52,7 +57,8 @@ async def redeem_invite(request: Request, response: Response, body: RedeemIn) ->
         secret=body.invite_secret,
         device_label=body.device_label,
         client=body.client,
-        client_ip=request.client.host if request.client else "",
+        peer_key=client_key(request),
+        replaces=request.cookies.get(cookie_name(ctx)) if body.client == "browser" else None,
     )
     session = redeemed.session
     if redeemed.refresh_token is not None:
@@ -81,12 +87,21 @@ async def renew_session(
 
 
 @router.post("/api/v1/auth/logout", status_code=204)
-async def logout(
-    request: Request,
-    response: Response,
-    current: Annotated[SessionContext, Depends(require_csrf_public)],
-) -> None:
+async def logout(request: Request) -> Response:
+    """Revoke the session. A 401 still clears the cookie of an expired or revoked session; a
+    failed CSRF check (403) does not, so a foreign site cannot log the guest out.
+    """
     ctx = app_context(request)
-    await revoke(ctx, current, "logout")
-    if current.session.audience == "browser":
-        clear_session_cookie(response, cookie_name(ctx))
+    try:
+        current = await require_csrf_public(request, await check_session(request, "access"))
+    except ApiError as exc:
+        if exc.status != 401:
+            raise
+        answer: Response = error_response(exc.status, exc.code, exc.message, exc.details)
+    else:
+        await revoke(ctx, current, "logout")
+        answer = Response(status_code=204)
+        if current.session.audience != "browser":
+            return answer
+    clear_session_cookie(answer, cookie_name(ctx))
+    return answer
