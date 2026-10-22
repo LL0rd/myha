@@ -6,7 +6,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from myha_gateway.api.admin import probe
 from myha_gateway.api.public import health
 from myha_gateway.deps import AppContext
-from myha_gateway.errors import add_error_handlers, error_response
+from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
 
 
@@ -22,7 +22,8 @@ class PeerGuardMiddleware:
         trusted = client is not None and client[0] == self.trusted_peer
         if scope["type"] == "http" and not trusted:
             message = "Only reachable through Home Assistant ingress"
-            await error_response(403, "UNAUTHENTICATED", message)(scope, receive, send)
+            response = error_response(403, "UNAUTHENTICATED", message, headers=SAFETY_HEADERS)
+            await response(scope, receive, send)
         elif scope["type"] == "websocket" and not trusted:
             # Closing before accept makes the server reject the handshake with HTTP 403.
             await send({"type": "websocket.close", "code": 1008})

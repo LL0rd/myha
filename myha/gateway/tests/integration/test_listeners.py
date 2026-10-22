@@ -1,7 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.types import Message
@@ -9,8 +8,7 @@ from starlette.types import Message
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import ApiError
-
-TRUSTED = "172.30.32.2"
+from tests.helpers import call
 
 
 @pytest.fixture
@@ -19,22 +17,6 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppContext:
     monkeypatch.setenv("MYHA_PUBLIC_ENABLED", "1")
     monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
     return await AppContext.create()
-
-
-async def call(
-    app: FastAPI,
-    method: str,
-    path: str,
-    *,
-    peer: str = TRUSTED,
-    headers: dict[str, str] | None = None,
-    raise_app_exceptions: bool = True,
-) -> httpx.Response:
-    transport = httpx.ASGITransport(
-        app=app, raise_app_exceptions=raise_app_exceptions, client=(peer, 1)
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        return await client.request(method, path, headers=headers)
 
 
 async def test_public_health_reports_client_ip(ctx: AppContext) -> None:
@@ -128,6 +110,9 @@ async def test_unhandled_error_is_json_500_without_internals(
     assert r.status_code == 500
     assert r.json() == {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Internal error"}}
     assert "sup-secret" not in r.text
+    # Sent by Starlette's outermost middleware, past the header middleware.
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
 
 
 async def test_server_side_http_error_maps_to_upstream_unavailable(ctx: AppContext) -> None:
@@ -193,12 +178,6 @@ async def test_public_ready_follows_public_enabled(
     assert ctx.public_ready
     monkeypatch.delenv("MYHA_PUBLIC_ENABLED")
     assert not (await AppContext.create()).public_ready
-
-
-@pytest.mark.parametrize("path", ["/", "/assets/a.js", "/api/v1/admin/nope"])
-async def test_peer_guard_blocks_every_path(ctx: AppContext, path: str) -> None:
-    r = await call(create_admin_app(ctx), "GET", path, peer="127.0.0.1")
-    assert r.status_code == 403 and r.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 async def test_peer_guard_denies_websocket_handshake(ctx: AppContext) -> None:

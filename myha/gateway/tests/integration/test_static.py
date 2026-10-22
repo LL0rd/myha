@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from starlette.types import Receive, Scope, Send
 
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
-from tests.integration.test_listeners import TRUSTED, call
+from tests.helpers import TRUSTED, call
 
 Factory = Callable[[AppContext], FastAPI]
 IMMUTABLE = "public, max-age=31536000, immutable"
@@ -23,6 +24,7 @@ NOT_FOUND = {"error": {"code": "NOT_FOUND", "message": "Not Found"}}
 FILES = [
     "guest/index.html",
     "guest/assets/g.js",
+    "guest/assets/f.woff2",
     "guest/manifest.webmanifest",
     "guest/sw.js",
     "admin/admin.html",
@@ -86,6 +88,7 @@ async def test_content_types_and_head(dist: Path) -> None:
     app = await make(create_public_app)
     assert (await call(app, "GET", "/")).headers["content-type"].startswith("text/html")
     assert (await call(app, "GET", "/sw.js")).headers["content-type"].startswith("text/javascript")
+    assert (await call(app, "GET", "/assets/f.woff2")).headers["content-type"] == "font/woff2"
     head = await call(app, "HEAD", "/assets/g.js")
     assert head.status_code == 200 and head.content == b""
     assert head.headers["cache-control"] == IMMUTABLE
@@ -119,7 +122,7 @@ async def test_content_types_and_head(dist: Path) -> None:
 async def test_everything_else_is_json_not_found(dist: Path, factory: Factory, path: str) -> None:
     r = await call(await make(factory), "GET", path)
     assert r.status_code == 404 and r.json() == NOT_FOUND
-    assert "cache-control" not in r.headers
+    assert r.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(
@@ -133,6 +136,47 @@ async def test_everything_else_is_json_not_found(dist: Path, factory: Factory, p
 async def test_literal_dot_segments_cannot_leave_the_bundle(dist: Path, path: str) -> None:
     r = await get_verbatim(await make(create_public_app), path)
     assert r.status_code == 404 and r.json() == NOT_FOUND
+
+
+async def test_dot_segments_never_pick_the_cache_policy(dist: Path) -> None:
+    # Would be sw.js as immutable; a cache that normalises the URL would store it as /sw.js.
+    r = await call(await make(create_public_app), "GET", "/assets/%2e%2e/sw.js")
+    assert r.status_code == 404 and r.json() == NOT_FOUND
+
+
+async def test_symlinks_cannot_leave_the_bundle(dist: Path) -> None:
+    (dist / "guest/assets/escape.js").symlink_to(dist / "admin/assets/a.js")
+    (dist / "guest/assets/inside.js").symlink_to(dist / "guest/sw.js")
+    app = await make(create_public_app)
+    escape = await call(app, "GET", "/assets/escape.js")
+    assert escape.status_code == 404 and escape.json() == NOT_FOUND
+    inside = await call(app, "GET", "/assets/inside.js")
+    assert inside.status_code == 200 and inside.text == "guest/sw.js"
+    assert inside.headers["cache-control"] == "no-cache"  # the file sent is not a hashed asset
+
+
+@pytest.mark.parametrize("path", ["/.env", "/.hidden/x.js", "/assets/.map"])
+async def test_dotfiles_are_json_not_found(dist: Path, path: str) -> None:
+    file = dist / "guest" / path.lstrip("/")
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text("secret")
+    r = await call(await make(create_public_app), "GET", path)
+    assert r.status_code == 404 and r.json() == NOT_FOUND
+
+
+async def test_deep_paths_are_cheap(dist: Path) -> None:
+    app = await make(create_public_app)
+    start = time.perf_counter()
+    r = await call(app, "GET", "/x" + "/a" * 30000 + ".js")
+    assert r.status_code == 404 and r.json() == NOT_FOUND
+    assert time.perf_counter() - start < 1
+
+
+@pytest.mark.parametrize("byte_range", ["bytes=abc", "bytes=0-1"])
+async def test_range_requests_get_the_whole_file(dist: Path, byte_range: str) -> None:
+    app = await make(create_public_app)
+    r = await call(app, "GET", "/assets/g.js", headers={"Range": byte_range})
+    assert r.status_code == 200 and r.text == "guest/assets/g.js"
 
 
 @pytest.mark.parametrize("path", ["/api/v1/nope", "/join"])
@@ -193,6 +237,11 @@ async def test_every_response_carries_csp_and_hardening_headers(
     assert r.headers["referrer-policy"] == "no-referrer"
 
 
+async def test_json_responses_are_never_cached(dist: Path) -> None:
+    r = await call(await make(create_public_app), "GET", "/healthz")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+
+
 async def test_public_csp_drops_plain_ws_for_https_origin(
     dist: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -205,7 +254,10 @@ async def test_public_csp_drops_plain_ws_for_https_origin(
     assert admin_csp == CSP.format(ws=" ws:", frame="'self'")
 
 
-@pytest.mark.parametrize("path", ["/", "/admin.html", "/assets/a.js"])
+@pytest.mark.parametrize("path", ["/", "/admin.html", "/assets/a.js", "/api/v1/admin/nope"])
 async def test_admin_bundle_needs_trusted_peer(dist: Path, path: str) -> None:
     r = await call(await make(create_admin_app), "GET", path, peer="10.0.0.5")
     assert r.status_code == 403 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+    # The peer guard answers before the header middleware, so it sets these itself.
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["referrer-policy"] == "no-referrer"
