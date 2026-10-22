@@ -1,0 +1,47 @@
+"""Sensors: a value and its unit, read only."""
+
+from collections.abc import Mapping
+from typing import Any
+
+from myha_gateway.adapters.base import (
+    Action,
+    DeviceCapabilities,
+    Expectation,
+    HACall,
+    StateView,
+    availability,
+    reading,
+    with_fingerprint,
+)
+from myha_gateway.ha.messages import HAState, RegistryEntity
+
+
+class SensorAdapter:
+    kind = "sensor"
+
+    def capabilities(
+        self, state: HAState, entity: RegistryEntity | None, temperature_unit: str | None
+    ) -> DeviceCapabilities:
+        # Not blocked for group or template platforms: reading a computed value switches nothing.
+        return with_fingerprint(DeviceCapabilities("sensor", frozenset()), state.attributes)
+
+    def state_view(self, state: HAState | None, adapter_locked: bool) -> StateView:
+        if state is None:
+            return StateView("unknown", adapter_locked)
+        unit = state.attributes.get("unit_of_measurement")
+        return StateView(
+            availability(state),
+            adapter_locked,
+            value=reading(state),
+            unit=unit if isinstance(unit, str) else None,
+            observed_at=state.last_updated,
+        )
+
+    def translate(self, action: Action, params: Mapping[str, Any], entity_id: str) -> HACall:
+        raise ValueError(f"not a sensor action: {action}")
+
+    def expectation(self, action: Action, params: Mapping[str, Any]) -> Expectation:
+        raise ValueError(f"not a sensor action: {action}")
+
+    def required_actions(self, action: Action, params: Mapping[str, Any]) -> frozenset[Action]:
+        return frozenset({action})
