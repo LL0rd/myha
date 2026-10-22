@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, Self, get_args
 
 from myha_gateway.ha.messages import HAState, RegistryEntity
 
@@ -59,6 +59,65 @@ class DeviceCapabilities:
     # unit_not_celsius | invalid_range | dual_setpoint | no_setpoint
     blocked_reason: str | None = None
     fingerprint: str = ""  # changes whenever the abilities change (drift, A14-A16)
+
+    def to_json(self) -> dict[str, Any]:
+        """The form ``resource_binding.confirmed_capabilities`` stores: decimals as strings."""
+        limits = {
+            name: None if (value := getattr(self, name)) is None else str(value) for name in _LIMITS
+        }
+        return {
+            "kind": self.kind,
+            "actions": sorted(self.actions),
+            **limits,
+            "hvac_modes": sorted(self.hvac_modes),
+            "confirmed_modes": sorted(self.confirmed_modes),
+            "blocked_reason": self.blocked_reason,
+            "fingerprint": self.fingerprint,
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> Self:
+        """The inverse of ``to_json``; ``ValueError`` for anything it never writes."""
+        if set(data) != _JSON_KEYS:
+            raise ValueError("capabilities have other fields than to_json writes")
+        if data["kind"] not in get_args(Kind):
+            raise ValueError(f"unknown kind {data['kind']!r}")
+        actions = frozenset(Action(action) for action in data["actions"])
+        hvac_modes, confirmed = frozenset(data["hvac_modes"]), frozenset(data["confirmed_modes"])
+        if not actions <= WRITE_ACTIONS:
+            raise ValueError("capabilities name a read action")
+        if not confirmed <= hvac_modes & _PRODUCT_MODES:
+            raise ValueError("confirmed modes must be product modes the device offers")
+        return cls(
+            data["kind"],
+            actions,
+            target_c_min=_stored_decimal(data["target_c_min"]),
+            target_c_max=_stored_decimal(data["target_c_max"]),
+            target_c_step=_stored_decimal(data["target_c_step"]),
+            hvac_modes=hvac_modes,
+            confirmed_modes=confirmed,
+            blocked_reason=data["blocked_reason"],
+            fingerprint=data["fingerprint"],
+        )
+
+
+_LIMITS = ("target_c_min", "target_c_max", "target_c_step")
+_JSON_KEYS = frozenset(
+    {"kind", "actions", *_LIMITS, "hvac_modes", "confirmed_modes", "blocked_reason", "fingerprint"}
+)
+_PRODUCT_MODES = frozenset({"off", "cool", "heat"})
+
+
+def _stored_decimal(value: Any) -> Decimal | None:
+    """A limit as ``to_json`` writes it: ``None`` or a decimal string, never a float."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("a stored limit must be a decimal string")
+    try:
+        return Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"not a decimal: {value!r}") from exc
 
 
 @dataclass(frozen=True)

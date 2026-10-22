@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from myha_gateway.adapters.base import Action, Expectation, HACall, StateView
+from myha_gateway.adapters.base import Action, DeviceCapabilities, Expectation, HACall, StateView
 from myha_gateway.adapters.registry import adapter_for, detect_kind
 from myha_gateway.ha.messages import HAState, RegistryEntity
 
@@ -487,3 +487,38 @@ def test_expectation_tolerances() -> None:
     target = Expectation(target_c=Decimal("21.5"))
     assert target.matches(StateView("online", False, target_c=Decimal("21.50")))
     assert Expectation().matches(StateView("offline", False))
+
+
+@pytest.mark.parametrize("state", [CEILING, LAMP, AC], ids=lambda state: state.entity_id)
+def test_capabilities_json_round_trip(state: HAState) -> None:
+    kind = detect_kind(state.entity_id)
+    assert kind is not None
+    capabilities = adapter_for(kind).capabilities(state, entry(state, "zha"), "°C")
+    capabilities = replace(capabilities, confirmed_modes=capabilities.hvac_modes & {"off", "cool"})
+    stored = capabilities.to_json()
+    assert all(not isinstance(value, Decimal) for value in stored.values())  # strings in JSON
+    assert DeviceCapabilities.from_json(stored) == capabilities
+
+
+def test_capabilities_json_keeps_the_written_decimal() -> None:
+    stored = adapter_for("climate").capabilities(AC, entry(AC, "midea"), "°C").to_json()
+    assert (stored["target_c_min"], stored["target_c_step"]) == ("8", "1.00")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"kind": "camera"},
+        {"actions": ["state.read"]},  # reads are no device ability
+        {"actions": ["light.dance"]},
+        {"target_c_min": 8},  # a float or int would lose the written form
+        {"target_c_max": "warm"},
+        {"confirmed_modes": ["heat_cool"]},  # not a product mode
+        {"confirmed_modes": ["off"], "hvac_modes": ["heat"]},  # not offered by the device
+        {"extra": 1},
+    ],
+)
+def test_capabilities_json_refuses_what_capabilities_never_hold(change: dict[str, Any]) -> None:
+    stored = adapter_for("climate").capabilities(AC, entry(AC, "midea"), "°C").to_json()
+    with pytest.raises(ValueError):
+        DeviceCapabilities.from_json(stored | change)
