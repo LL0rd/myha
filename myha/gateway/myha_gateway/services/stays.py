@@ -30,9 +30,11 @@ class IssuedInvite:
 
 
 def stay_status(stay: Stay, now: datetime) -> str:
-    """The stored status, with ``confirmed`` split into planned, ``active`` and ``ended``."""
-    if stay.status != "confirmed" or now < stay.starts_at:
+    """The stored status, with ``confirmed`` split into ``planned``, ``active`` and ``ended``."""
+    if stay.status != "confirmed":
         return stay.status
+    if now < stay.starts_at:
+        return "planned"
     return "active" if now < stay.ends_at else "ended"
 
 
@@ -140,6 +142,7 @@ async def issue_invites(
             created_at=now,
         )
         session.add(invite)
+        # The pin is base64 (+/=): percent-encoded, or URLSearchParams turns "+" into a space.
         url = f"{origin}/join#i={secret}&inst={instance.id}&fp={quote(pin, safe='')}"
         issued.append(IssuedInvite(invite, url))
     await session.flush()

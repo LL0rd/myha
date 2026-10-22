@@ -4,14 +4,16 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from myha_gateway.app import create_admin_app
 from myha_gateway.db import models as db
+from myha_gateway.db import write_session
 from myha_gateway.deps import AppContext
 from myha_gateway.ids import hash_secret
 from myha_gateway.services.stays import stay_status
@@ -137,6 +139,19 @@ async def test_stay_and_invites_secret_only_in_the_answer(
     assert code(r) == (409, "CONFLICT")
 
 
+async def test_primary_pin_round_trips_through_the_fragment(
+    ctx: AppContext, client: httpx.AsyncClient
+) -> None:
+    pin = "q+7/AbC=="  # base64 SPKI pins carry + / =
+    pins = [{"spki_sha256": "backup+/=", "role": "backup"}, {"spki_sha256": pin, "role": "primary"}]
+    async with write_session(ctx.engine) as session:
+        await session.execute(update(db.Instance).values(trust_pins=pins))
+    stay = (await create(client)).json()
+    r = await client.post(f"{STAYS}/{stay['id']}/invites", json={"count": 1})
+    fragment = urlsplit(r.json()["invites"][0]["join_url"]).fragment
+    assert parse_qs(fragment)["fp"] == [pin]
+
+
 async def test_redeem_window_is_capped(ctx: AppContext, client: httpx.AsyncClient) -> None:
     stay = (await create(client)).json()
     r = await client.post(
@@ -228,7 +243,7 @@ async def test_mutations_need_csrf(client: httpx.AsyncClient) -> None:
 def test_derived_status() -> None:
     start, end = datetime(2026, 11, 1, tzinfo=UTC), datetime(2026, 11, 4, tzinfo=UTC)
     stay = db.Stay(starts_at=start, ends_at=end, status="confirmed")
-    assert stay_status(stay, start - timedelta(seconds=1)) == "confirmed"
+    assert stay_status(stay, start - timedelta(seconds=1)) == "planned"
     assert stay_status(stay, start) == "active"
     assert stay_status(stay, end) == "ended"  # ends_at is exclusive
     for stored in ("draft", "checked_out", "cancelled"):

@@ -74,6 +74,7 @@ async def create(
 
 @router.get("/api/v1/admin/stays", dependencies=[Depends(require_admin(fresh=False))])
 async def list_stays(request: Request) -> dict[str, Any]:
+    """Every stay; status draft, planned, active, ended, checked_out or cancelled."""
     ctx: AppContext = request.app.state.ctx
     async with ctx.sessions() as session:
         stays = (await session.execute(select(Stay).order_by(Stay.starts_at))).scalars().all()
