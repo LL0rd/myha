@@ -26,7 +26,9 @@ Das Design umfasst vier Phasen und 17 Arbeitspakete. Ein einzelner Plan mit voll
 
 - **Fable 5.1** (Hauptsession): schreibt und pflegt die Pläne, dispatcht pro Task einen frischen **Opus-5.5-Subagenten** (`model: "opus"`) mit dem Task-Text, dem Pfad zum Design und zu diesem Plan sowie dem aktuellen Repo-Zustand; prüft nach jedem Task Tests und Diff; führt nach jedem Arbeitspaket einen Review-Subagenten (Spec-Treue, dann Codequalität) aus; führt WP16 selbst durch.
 - **Subagenten** arbeiten strikt TDD (Test zuerst, rot, grün, Commit) und committen kleinteilig auf `main` des jeweiligen Repos. Sie dürfen keine Secrets ausgeben (Supervisor-Token, HA-Token, Einladungs-Secrets) und keine Scope-Erweiterung vornehmen; Unklarheiten melden sie an Fable zurück statt zu raten.
-- **Reihenfolge:** Teilplan 1 vollständig vor Teilplan 2. Innerhalb eines Teilplans gilt die Task-Reihenfolge; als „parallelisierbar“ markierte Tasks dürfen gleichzeitig laufen.
+- **Reihenfolge:** Teilplan 1 vollständig vor Teilplan 2. Innerhalb eines Teilplans gilt die Task-Reihenfolge; als „parallelisierbar“ markierte Tasks dürfen gleichzeitig laufen. WP1 (S0-Real-Probe) läuft parallel zu WP2–WP4, weil diese nur den Simulator brauchen.
+- **Dimitris Produktiv-HA:** Jeder mutierende Schritt auf dem echten HA (Repository hinzufügen, App installieren oder neu bauen, Port öffnen, Backup erzeugen, Klimaanlage schalten) wird **von Fable selbst** ausgeführt, nachdem Dimitri im Chat ausdrücklich zugestimmt hat; Subagenten bereiten nur Skripte und Code vor. Ist das HA nicht erreichbar oder der Supervisor zu alt, wird WP1 als „offen“ markiert und blockiert WP2–WP4 nicht.
+- **Veröffentlichung:** Das Repo ist öffentlich. Keine LAN-IPs, Ingress-Tokens, HA-User-IDs oder Klarnamen Dritter in Berichten, Fixtures oder Tests.
 
 ## Konventionen (gelten für alle Teilpläne)
 
