@@ -1,7 +1,8 @@
 """Home Assistant WebSocket payloads as typed values, parsed at the trust boundary.
 
-The parsers raise one of ``MALFORMED`` for shapes Core never sends. List parsers skip and log a
-malformed entry instead, so one odd entity cannot take the whole snapshot down.
+The parsers raise one of ``MALFORMED`` for shapes Core never sends. List parsers skip malformed
+entries with one warning, so one odd entity cannot take the whole snapshot down; a list without
+a single valid entry raises, since an empty snapshot would pass for a valid one.
 """
 
 import logging
@@ -118,11 +119,17 @@ def _each[T](items: Any, parse: Callable[[Any], T], what: str) -> list[T]:
     if not isinstance(items, list):
         raise TypeError(f"expected a list of {what}s, got {type(items).__name__}")
     parsed: list[T] = []
+    errors: list[Exception] = []
     for item in items:
         try:
             parsed.append(parse(item))
         except MALFORMED as exc:
-            logger.warning("ignoring a malformed %s from Home Assistant: %r", what, exc)
+            errors.append(exc)
+    if errors:
+        summary = f"{len(errors)} of {len(items)} malformed {what}s, first: {errors[0]!r}"
+        if not parsed:
+            raise ValueError(summary)
+        logger.warning("skipping %s", summary)
     return parsed
 
 

@@ -26,11 +26,19 @@ USER = {
 }
 
 
-def test_malformed_states_are_skipped_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+def test_malformed_states_are_skipped_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
     naive = STATE | {"entity_id": "light.b", "last_updated": "2026-10-22T10:00:01"}
-    states = parse_states([STATE, naive, STATE | {"entity_id": "light.c", "state": 1}, None])
+    broken = [naive, STATE | {"entity_id": "light.c", "state": 1}, None]
+    states = parse_states([STATE, *broken])
     assert list(states) == ["light.a"] and states["light.a"].context_id == "c1"
-    assert caplog.text.count("ignoring a malformed state") == 3
+    [warning] = caplog.messages
+    assert warning.startswith("skipping 3 of 4 malformed states, first: ValueError(")
+    assert parse_states([]) == {}
+
+
+def test_states_without_a_valid_one_or_not_a_list_raise() -> None:
+    with pytest.raises(ValueError, match="2 of 2 malformed states"):
+        parse_states([{"entity_id": "light.b"}, None])
     with pytest.raises(TypeError):
         parse_states({"light.a": STATE})
 

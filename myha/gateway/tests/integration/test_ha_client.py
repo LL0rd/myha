@@ -1,9 +1,12 @@
-"""HAClient against the simulator (and a silent fake Core): snapshot, events, services,
-reconnect, registries, users, and its place in the admin app's lifespan."""
+"""HAClient against the simulator and an in-test fake Core: snapshot, events, services,
+reconnect, keepalive, registries, config, users, and its place in the admin app's lifespan."""
 
 import asyncio
+import contextlib
 import itertools
 import json
+import logging
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -11,46 +14,55 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from websockets.asyncio.server import ServerConnection, serve
+from websockets import ConnectionClosed, ServerConnection, serve
 
 from myha_gateway.app import create_admin_app
 from myha_gateway.deps import AppContext
 from myha_gateway.ha import client as ha_client
 from myha_gateway.ha.client import HAClient, HAProtocolError, HAServiceError, HAUnavailable
 from myha_gateway.ha.messages import ConnectionStatus, StateChanged
-from tests.conftest import SimHandle
-from tests.helpers import call, fake_supervisor
+from tests.helpers import SIM_TOKEN, SimHandle, call, fake_supervisor
 
-TOKEN = "sim-token"
+STATE = {
+    "entity_id": "light.a",
+    "state": "on",
+    "attributes": {},
+    "last_changed": "2026-10-22T10:00:00+00:00",
+    "last_updated": "2026-10-22T10:00:00+00:00",
+    "context": {"id": "c1"},
+}
+BROKEN = {"entity_id": "light.b"}  # no state, attributes or timestamps
 
 
 class Seen:
     """What a client reported; ``locked`` is its adapter_locked at each status report."""
 
-    def __init__(self) -> None:
+    def __init__(self, raises: type[BaseException] | None) -> None:
         self.events: list[StateChanged] = []
         self.statuses: list[ConnectionStatus] = []
         self.locked: list[bool] = []
         self.client: HAClient | None = None
-        self.fail_first_event = False
+        self.raises = raises  # both handlers raise it after recording
 
     async def on_event(self, change: StateChanged) -> None:
         self.events.append(change)
-        if self.fail_first_event and len(self.events) == 1:
-            raise RuntimeError("handler bug")
+        if self.raises is not None:
+            raise self.raises("handler bug")
 
     async def on_status(self, status: ConnectionStatus) -> None:
         assert self.client is not None
         self.statuses.append(status)
         self.locked.append(self.client.adapter_locked)
+        if self.raises is not None:
+            raise self.raises("handler bug")
 
 
 @asynccontextmanager
 async def started(
-    url: str, token: str = TOKEN, **kwargs: Any
+    url: str, token: str = SIM_TOKEN, raises: type[BaseException] | None = None, **kwargs: Any
 ) -> AsyncIterator[tuple[HAClient, Seen]]:
     """A started client; afterwards it is stopped and none of its tasks may be left."""
-    seen = Seen()
+    seen = Seen(raises)
     client = HAClient(url, token, on_event=seen.on_event, on_status=seen.on_status, **kwargs)
     seen.client = client
     before = asyncio.all_tasks()
@@ -70,34 +82,76 @@ async def until(condition: Callable[[], object], seconds: float = 3) -> None:
             await asyncio.sleep(0.01)
 
 
+class FakeCore:
+    """A Core that answers the client's setup, counts commands and fires events on demand.
+
+    Service calls stay unanswered or drop the connection; pings may stay unanswered too.
+    """
+
+    def __init__(
+        self,
+        *,
+        unit: str = "°C",
+        states: list[Any] | None = None,
+        answer_pings: bool = True,
+        drop_on_service: bool = False,
+    ) -> None:
+        self.unit, self.states = unit, [] if states is None else states
+        self.answer_pings, self.drop_on_service = answer_pings, drop_on_service
+        self.calls: Counter[str] = Counter()
+        self.subscriptions: dict[str, int] = {}  # event type -> subscribe id, latest connection
+        self.close_codes: list[int | None] = []
+        self.ws: ServerConnection | None = None
+        self.url = ""
+
+    async def handler(self, ws: ServerConnection) -> None:
+        self.ws = ws
+        with contextlib.suppress(ConnectionClosed):  # the client may leave at any time
+            await ws.send(json.dumps({"type": "auth_required"}))
+            await ws.recv()
+            await ws.send(json.dumps({"type": "auth_ok"}))
+            async for raw in ws:
+                await self.answer(ws, json.loads(raw))
+        self.close_codes.append(ws.close_code)
+
+    async def answer(self, ws: ServerConnection, msg: dict[str, Any]) -> None:
+        self.calls[msg["type"]] += 1
+        if msg["type"] == "ping":
+            if self.answer_pings:
+                await ws.send(json.dumps({"id": msg["id"], "type": "pong"}))
+            return
+        if msg["type"] == "call_service":
+            if self.drop_on_service:
+                await ws.close(1012)
+            return  # never answered
+        if msg["type"] == "subscribe_events":
+            self.subscriptions[msg["event_type"]] = msg["id"]
+        config = {"unit_system": {"temperature": self.unit}}
+        result = {"get_states": self.states, "get_config": config}.get(msg["type"], [])
+        reply = {"id": msg["id"], "type": "result", "success": True, "result": result}
+        await ws.send(json.dumps(reply))
+
+    async def fire(self, event_type: str) -> None:
+        assert self.ws is not None
+        time_fired = datetime.now(UTC).isoformat()
+        event = {"event_type": event_type, "data": {}, "time_fired": time_fired, "context": {}}
+        message = {"id": self.subscriptions[event_type], "type": "event", "event": event}
+        await self.ws.send(json.dumps(message))
+
+
 @asynccontextmanager
-async def fake_core(unit: str = "°C", drop_on_service: bool = False) -> AsyncIterator[str]:
-    """A Core that answers the client's setup but no service call; it may drop instead."""
-
-    async def handler(ws: ServerConnection) -> None:
-        await ws.send(json.dumps({"type": "auth_required"}))
-        await ws.recv()
-        await ws.send(json.dumps({"type": "auth_ok"}))
-        async for raw in ws:
-            msg = json.loads(raw)
-            if msg["type"] == "call_service":
-                if drop_on_service:
-                    await ws.close(1012)
-                continue
-            config = {"unit_system": {"temperature": unit}}
-            result = {"get_states": [], "get_config": config}.get(msg["type"], [])
-            reply = {"id": msg["id"], "type": "result", "success": True, "result": result}
-            await ws.send(json.dumps(reply))
-
-    async with serve(handler, "127.0.0.1", 0) as server:
-        yield f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+async def fake_core(**options: Any) -> AsyncIterator[FakeCore]:
+    core = FakeCore(**options)
+    async with serve(core.handler, "127.0.0.1", 0) as server:
+        core.url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        yield core
 
 
 def test_reconnect_delays_double_up_to_30_s_with_jitter() -> None:
     delays = list(itertools.islice(ha_client._backoff(), 2000))  # a long outage stays at 30 s
-    for delay, base in zip(delays, [1, 2, 4, 8, 16, 30, 30], strict=False):
-        assert 0.8 * base <= delay <= 1.2 * base
-    assert all(24 <= delay <= 36 for delay in delays[5:])
+    for delay, base in zip(delays, [1, 2, 4, 8, 16, 30], strict=False):
+        assert 0.8 * base <= delay <= min(1.2 * base, 30)
+    assert all(24 <= delay <= 30 for delay in delays[5:])
 
 
 async def test_start_loads_snapshot_registries_and_config(sim: SimHandle) -> None:
@@ -108,7 +162,7 @@ async def test_start_loads_snapshot_registries_and_config(sim: SimHandle) -> Non
     assert len(states) == 15 and ceiling is not None and states["light.living_ceiling"] == ceiling
     assert ceiling.state == "on" and ceiling.attributes["brightness"] == 140
     assert ceiling.last_changed.utcoffset() == timedelta(0) and ceiling.context_id
-    assert (client.generation, client.temperature_unit) == (1, "°C")
+    assert (client.generation, client.temperature_unit, client.registry_version) == (1, "°C", 1)
     assert seen.statuses == [ConnectionStatus(True, 1, None)] and seen.locked == [False]
     assert (len(registry.entities), len(registry.devices), len(registry.areas)) == (15, 15, 5)
     lamp = registry.entities["switch.living_floor_lamp"]
@@ -129,11 +183,10 @@ async def test_start_loads_snapshot_registries_and_config(sim: SimHandle) -> Non
 async def test_state_changes_update_the_snapshot_and_reach_the_handler(
     sim: SimHandle, caplog: pytest.LogCaptureFixture
 ) -> None:
-    async with started(sim.ws_url) as (client, seen):
-        seen.fail_first_event = True  # a failing handler is logged, the reader carries on
+    async with started(sim.ws_url, raises=RuntimeError) as (client, seen):
         await sim.control.post("state/light.hallway", {"state": "off"})
         await sim.control.post("state/sensor.outdoor_temp", {"state": "13.0"})
-        await until(lambda: len(seen.events) == 2)
+        await until(lambda: len(seen.events) == 2)  # a failing handler stops nothing
         hallway, outdoor = client.state("light.hallway"), client.state("sensor.outdoor_temp")
     change = seen.events[0]
     assert change.entity_id == "light.hallway" and change.new_state == hallway
@@ -142,6 +195,21 @@ async def test_state_changes_update_the_snapshot_and_reach_the_handler(
     assert change.context_id == hallway.context_id and change.time_fired.utcoffset() == timedelta(0)
     assert outdoor is not None and outdoor.state == "13.0"
     assert "state_changed handler failed" in caplog.text
+
+
+async def test_handlers_raising_cancelled_error_do_not_stop_the_client(
+    sim: SimHandle, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with started(sim.ws_url, raises=asyncio.CancelledError) as (client, seen):
+        assert client.connected
+        await sim.control.post("state/light.hallway", {"state": "off"})
+        await sim.control.post("state/light.hallway", {"state": "on"})
+        await until(lambda: len(seen.events) == 2)  # the reader outlived the first handler
+        await sim.control.post("drop-connections")
+        await until(lambda: client.generation == 2 and client.connected)
+    assert [status.connected for status in seen.statuses] == [True, False, True]
+    assert "state_changed handler was cancelled" in caplog.text
+    assert "connection status handler was cancelled" in caplog.text
 
 
 async def test_call_service_returns_the_context_and_the_state_follows(sim: SimHandle) -> None:
@@ -189,6 +257,32 @@ async def test_reconnects_after_the_connection_drops(sim: SimHandle) -> None:
     assert "1012" in (seen.statuses[1].reason or "")
 
 
+async def test_core_answers_the_keepalive_ping(
+    sim: SimHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ha_client, "PING_INTERVAL", 0.05)
+    monkeypatch.setattr(ha_client, "PING_TIMEOUT", 0.2)
+    async with started(sim.ws_url) as (client, seen):
+        await asyncio.sleep(0.5)  # about ten pings, each answered with a pong in time
+        assert client.connected
+    assert seen.statuses == [ConnectionStatus(True, 1, None)]
+
+
+async def test_unanswered_ping_counts_as_a_dead_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ha_client, "PING_INTERVAL", 0.05)
+    monkeypatch.setattr(ha_client, "PING_TIMEOUT", 0.1)
+    async with fake_core(answer_pings=False) as core, started(core.url) as (client, seen):
+        await until(lambda: client.generation == 2)
+    assert seen.statuses[:3] == [
+        ConnectionStatus(True, 1, None),
+        ConnectionStatus(False, 1, "ping_timeout"),
+        ConnectionStatus(True, 2, None),
+    ]
+    assert core.calls["ping"] >= 1
+
+
 async def test_auth_list_returns_the_users(sim: SimHandle) -> None:
     async with started(sim.ws_url) as (client, _):
         users = await client.auth_list()
@@ -212,8 +306,9 @@ async def test_auth_list_failure_is_a_protocol_error(sim: SimHandle, mode: str) 
 async def test_wrong_token_reports_auth_invalid_and_never_logs_it(
     sim: SimHandle, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level("DEBUG", logger="myha_gateway")
-    async with started(sim.ws_url, token="wrong-secret-7f3a") as (client, seen):
+    caplog.set_level(logging.DEBUG)  # the root logger: websockets would log every frame
+    token = "wrong-secret-7f3a9c"
+    async with started(sim.ws_url, token=token) as (client, seen):
         assert not client.connected and client.generation == 0 and client.adapter_locked
         assert seen.statuses == [ConnectionStatus(False, 0, "auth_invalid")]
         async with asyncio.timeout(0.1):  # at once, not after a command timeout
@@ -222,7 +317,10 @@ async def test_wrong_token_reports_auth_invalid_and_never_logs_it(
             with pytest.raises(HAUnavailable):
                 await client.auth_list()
     assert client.all_states() == {}
-    assert "rejected the access token" in caplog.text and "wrong-secret-7f3a" not in caplog.text
+    # The simulator's uvicorn logs the frames it receives; the client side must log none.
+    client_side = [r.getMessage() for r in caplog.records if not r.name.startswith("uvicorn")]
+    assert any("rejected the access token" in message for message in client_side)
+    assert not any(token[:9] in message for message in client_side)
 
 
 async def test_registry_follows_renames_and_area_changes(sim: SimHandle) -> None:
@@ -238,6 +336,75 @@ async def test_registry_follows_renames_and_area_changes(sim: SimHandle) -> None
         await sim.control.post("registry/area", move)
         await until(lambda: client.registry().devices["dev_living_lamp"].area_id == "area_kitchen")
         assert client.registry().effective_area("switch.living_floor_lamp") == "area_kitchen"
+
+
+async def test_a_burst_of_registry_events_reloads_once() -> None:
+    async with fake_core() as core, started(core.url, registry_debounce=0.1) as (client, _):
+        for _ in range(5):
+            await core.fire("entity_registry_updated")
+        await until(lambda: client.registry_version == 2)
+        await asyncio.sleep(0.3)  # three debounce periods later, still one reload
+    assert core.calls["config/entity_registry/list"] == 2 and client.registry_version == 2
+
+
+@pytest.mark.parametrize("event_type", ha_client.REGISTRY_EVENTS)
+async def test_every_registry_event_reloads_the_registries(event_type: str) -> None:
+    async with fake_core() as core, started(core.url, registry_debounce=0.05) as (client, _):
+        await core.fire(event_type)
+        await until(lambda: client.registry_version == 2)
+    assert core.calls["config/area_registry/list"] == 2
+
+
+async def test_registries_also_reload_periodically() -> None:
+    async with fake_core() as core, started(core.url, registry_refresh=0.3) as (client, _):
+        await until(lambda: client.registry_version >= 4, seconds=1.5)  # three reloads
+    assert core.calls["config/entity_registry/list"] >= 4
+
+
+async def test_temperature_unit_decides_the_adapter_lock_also_at_runtime() -> None:
+    async with fake_core(unit="°F") as core, started(core.url) as (client, seen):
+        assert client.connected and client.adapter_locked and client.temperature_unit == "°F"
+        core.unit = "°C"
+        await core.fire("core_config_updated")
+        await until(lambda: not client.adapter_locked)
+        core.unit = "°F"
+        await core.fire("core_config_updated")
+        await until(lambda: client.adapter_locked and client.temperature_unit == "°F")
+    assert seen.locked == [True] and core.calls["get_config"] == 3
+
+
+async def test_config_change_announced_during_get_config_keeps_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = Seen(None)
+    client = HAClient("ws://unused", SIM_TOKEN, on_event=seen.on_event, on_status=seen.on_status)
+
+    async def answer_while_a_change_is_announced(message: dict[str, Any]) -> Any:
+        client._config_dirty.set()  # what the reader does on core_config_updated
+        return {"unit_system": {"temperature": "°C"}}
+
+    monkeypatch.setattr(client, "_result", answer_while_a_change_is_announced)
+    await client._load_config()
+    assert client.temperature_unit == "°C" and client.adapter_locked
+
+
+async def test_snapshot_without_a_valid_state_is_no_connection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with fake_core(states=[BROKEN] * 200) as core, started(core.url) as (client, seen):
+        assert not client.connected and client.all_states() == {} and client.adapter_locked
+    reason = seen.statuses[0].reason or ""
+    assert "get_states failed: malformed" in reason and "200 of 200 malformed states" in reason
+    assert "skipping" not in caplog.text  # one status line instead of 200 warnings
+
+
+async def test_malformed_states_are_skipped_with_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with fake_core(states=[STATE, BROKEN, BROKEN]) as core, started(core.url) as (client, _):
+        assert client.connected and list(client.all_states()) == ["light.a"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and warnings[0].startswith("skipping 2 of 3 malformed states")
 
 
 async def test_event_skew_compares_time_fired_with_the_clock(sim: SimHandle) -> None:
@@ -258,23 +425,29 @@ async def test_unanswered_call_times_out_but_keeps_the_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(ha_client, "SERVICE_TIMEOUT", 0.2)
-    async with fake_core() as url, started(url) as (client, _):
+    async with fake_core() as core, started(core.url) as (client, _):
         with pytest.raises(HAUnavailable, match="no answer within 0.2 s"):
             await client.call_service("light", "turn_on", "light.any", {})
         assert client.connected
 
 
 async def test_waiting_call_fails_at_once_when_the_connection_drops() -> None:
-    async with fake_core(drop_on_service=True) as url, started(url) as (client, _):
+    async with fake_core(drop_on_service=True) as core, started(core.url) as (client, _):
         async with asyncio.timeout(2):  # long before the 15 s service timeout
             with pytest.raises(HAUnavailable, match="lost"):
                 await client.call_service("light", "turn_on", "light.any", {})
 
 
-async def test_unit_other_than_celsius_keeps_adapters_locked() -> None:
-    async with fake_core(unit="°F") as url, started(url) as (client, seen):
-        assert client.connected and client.adapter_locked and client.temperature_unit == "°F"
-        assert seen.locked == [True]
+async def test_stop_closes_normally_and_a_new_start_connects_again() -> None:
+    async with fake_core() as core:
+        async with started(core.url) as (client, _):
+            pass
+        await until(lambda: core.close_codes)
+        await client.start()  # waits for its own first attempt again
+        assert client.connected and client.generation == 2
+        await client.stop()
+        await until(lambda: len(core.close_codes) == 2)
+    assert core.close_codes == [1000, 1000]
 
 
 async def test_admin_lifespan_runs_the_ha_client(
@@ -282,18 +455,19 @@ async def test_admin_lifespan_runs_the_ha_client(
 ) -> None:
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYHA_HA_WS_URL", sim.ws_url)
-    monkeypatch.setenv("SUPERVISOR_TOKEN", TOKEN)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", SIM_TOKEN)
     ctx = await AppContext.create()
     ctx.supervisor = fake_supervisor()
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         await until(lambda: ctx.ha.connected)
-        probe = (await call(app, "GET", "/api/v1/admin/probe")).json()
+        owner = {"X-Remote-User-Id": "owner1"}  # an admin, for when the probe asks Core
+        probe = (await call(app, "GET", "/api/v1/admin/probe", headers=owner)).json()
     assert (probe["ha_connected"], probe["ha_generation"]) == (True, 1)
     assert not ctx.ha.connected  # stopped with the admin app
 
 
-async def test_admin_app_serves_while_home_assistant_is_unreachable(
+async def test_admin_app_starts_while_home_assistant_is_unreachable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
@@ -301,7 +475,5 @@ async def test_admin_app_serves_while_home_assistant_is_unreachable(
     ctx = await AppContext.create()
     ctx.supervisor = fake_supervisor()
     app = create_admin_app(ctx)
-    async with app.router.lifespan_context(app):
-        r = await call(app, "GET", "/api/v1/admin/probe")
-    assert r.status_code == 200
-    assert (r.json()["ha_connected"], r.json()["ha_generation"]) == (False, 0)
+    async with asyncio.timeout(2), app.router.lifespan_context(app):  # not held up by HA
+        assert not ctx.ha.connected and ctx.ha.generation == 0

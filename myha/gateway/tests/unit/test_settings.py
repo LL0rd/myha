@@ -12,7 +12,8 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_defaults(data_dir: Path) -> None:
+def test_defaults(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MYHA_HA_WS_URL")  # conftest points it at a closed port
     s = Settings()
     assert s.data_dir == data_dir
     assert s.state_dir == data_dir / "state" and s.backup_dir == data_dir / "backup"

@@ -15,8 +15,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-import websockets
-from websockets.asyncio.client import ClientConnection
+from websockets import ClientConnection, ConnectionClosed, WebSocketException, connect
 
 from myha_gateway.ha.messages import (
     MALFORMED,
@@ -36,16 +35,21 @@ from myha_gateway.ha.messages import (
 )
 
 logger = logging.getLogger(__name__)
+# websockets logs every frame at DEBUG, the auth frame with the token included.
+_ws_logger = logging.getLogger(f"{__name__}.websocket")
+_ws_logger.setLevel(logging.INFO)
 
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024  # get_states of a large installation; check in S0
 COMMAND_TIMEOUT = 30.0
 SERVICE_TIMEOUT = 15.0
+# Core's own ping: the Supervisor proxy answers WebSocket protocol pings without Core.
+PING_INTERVAL = 20.0
+PING_TIMEOUT = 15.0
 START_WAIT = 10.0  # start() waits at most this long for the first attempt
 BACKOFF_MAX = 30.0
-REGISTRY_DEBOUNCE = 0.5
-REGISTRY_REFRESH = 300.0
 CELSIUS = "°C"
 REGISTRY_EVENTS = ("entity_registry_updated", "device_registry_updated", "area_registry_updated")
+EVENTS = ("state_changed", "core_config_updated", *REGISTRY_EVENTS)
 
 
 def utcnow() -> datetime:
@@ -80,7 +84,8 @@ def _backoff() -> Iterator[float]:
     """Reconnect delays: 1, 2, 4, … 30 s, each ±20 % so that restarts do not align."""
     delay = 1.0
     while True:
-        yield delay * random.uniform(0.8, 1.2)  # noqa: S311 (jitter, not a secret)
+        jittered = delay * random.uniform(0.8, 1.2)  # noqa: S311 (jitter, not a secret)
+        yield min(jittered, BACKOFF_MAX)
         delay = min(delay * 2, BACKOFF_MAX)
 
 
@@ -110,27 +115,37 @@ class HAClient:
         on_event: Callable[[StateChanged], Awaitable[None]],
         on_status: Callable[[ConnectionStatus], Awaitable[None]],
         clock: Callable[[], datetime] = utcnow,
+        registry_debounce: float = 0.5,
+        registry_refresh: float = 300.0,
     ) -> None:
         self._ws_url, self._token = ws_url, token
         self._on_event, self._on_status, self._clock = on_event, on_status, clock
+        self._registry_debounce, self._registry_refresh = registry_debounce, registry_refresh
         self.generation = 0  # +1 per successful (re)connect
-        self.adapter_locked = True  # until get_config confirms °C after each (re)connect
+        self.adapter_locked = True  # until get_config confirms °C, after each (re)connect too
         self.temperature_unit: str | None = None
         self._connected = False
         self._status: ConnectionStatus | None = None
         self._states: dict[str, HAState] = {}
         self._registry = Registry({}, {}, {})
+        self._registry_version = 0
         self._skew: float | None = None
         self._ws: ClientConnection | None = None
         self._next_id = 0
         self._pending: dict[int, tuple[str, asyncio.Future[dict[str, Any] | None]]] = {}
         self._registry_dirty = asyncio.Event()
+        self._config_dirty = asyncio.Event()
         self._first_attempt = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def registry_version(self) -> int:
+        """+1 per applied registry load, so that callers can tell a newer registry."""
+        return self._registry_version
 
     def state(self, entity_id: str) -> HAState | None:
         return self._states.get(entity_id)
@@ -148,6 +163,7 @@ class HAClient:
     async def start(self) -> None:
         """Start connecting; waits for the first attempt but never fails when Core does."""
         if self._runner is None:
+            self._first_attempt.clear()
             self._runner = asyncio.create_task(self._run(), name="ha-client")
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(START_WAIT):
@@ -158,8 +174,7 @@ class HAClient:
         runner, self._runner = self._runner, None
         if runner is not None:
             runner.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await runner
+            await asyncio.gather(runner, return_exceptions=True)
 
     async def call_service(
         self, domain: str, service: str, entity_id: str, data: dict[str, Any]
@@ -182,7 +197,11 @@ class HAClient:
         return ServiceResult(context_id(context))
 
     async def auth_list(self) -> list[HAUser]:
-        """``config/auth/list``, never cached; any failure or missing field: HAProtocolError."""
+        """``config/auth/list``, never cached.
+
+        Not connected, connection lost or no answer: ``HAUnavailable``. A failed command or a
+        user without the fields the role check needs: ``HAProtocolError``.
+        """
         if not self._connected:
             raise HAUnavailable("not connected to Home Assistant")
         users = await self._result({"type": "config/auth/list"})
@@ -201,7 +220,7 @@ class HAClient:
                 except _AuthInvalid:
                     logger.warning("Home Assistant rejected the access token")
                     reason = "auth_invalid"
-                except (OSError, websockets.WebSocketException, HAError) as exc:
+                except (OSError, WebSocketException, HAError) as exc:
                     reason = f"{type(exc).__name__}: {exc}"
                 except Exception as exc:  # a bug must not end the reconnect loop
                     logger.exception("Home Assistant connection failed")
@@ -219,30 +238,41 @@ class HAClient:
 
     async def _connection(self) -> str:
         """One connection from handshake to close; returns why it closed."""
-        async with websockets.connect(
+        ws = await connect(
             self._ws_url,
             max_size=MAX_MESSAGE_BYTES,
             open_timeout=10,
-            ping_interval=20,
-            ping_timeout=20,
+            ping_interval=None,  # one keepalive: Core's own ping in _keepalive
+            close_timeout=2,  # stop() stays within the Supervisor's 10 s stop budget
             proxy=None,  # the token goes straight to Core, never through a proxy from the env
-        ) as ws:
+            logger=_ws_logger,
+        )
+        tasks: list[asyncio.Task[None]] = []
+        try:
             await self._authenticate(ws)
             self._ws = ws
-            tasks = [asyncio.create_task(self._read(ws), name="ha-client-reader")]
-            try:
-                await self._load()
-                refresh = asyncio.create_task(self._refresh_registry(), name="ha-client-registry")
-                tasks.append(refresh)
-                self.generation += 1
-                await self._set_status(True, None)
-                await tasks[0]  # until the connection closes
-            finally:
-                self._ws = None
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-        return f"connection closed ({ws.close_code})"
+            reader = asyncio.create_task(self._read(ws), name="ha-client-reader")
+            tasks.append(reader)
+            await self._load()
+            keepalive = asyncio.create_task(self._keepalive(), name="ha-client-keepalive")
+            tasks += [
+                keepalive,
+                asyncio.create_task(self._refresh_registry(), name="ha-client-registry"),
+                asyncio.create_task(self._refresh_config(), name="ha-client-config"),
+            ]
+            self.generation += 1
+            await self._set_status(True, None)
+            await asyncio.wait([reader, keepalive], return_when=asyncio.FIRST_COMPLETED)
+            if not reader.done():
+                return "ping_timeout"
+            await reader  # raises how the connection broke, unless it closed normally
+            return f"connection closed ({ws.close_code})"
+        finally:
+            self._ws = None
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await ws.close()  # 1000, also on stop(): the context manager would send 1011
 
     async def _authenticate(self, ws: ClientConnection) -> None:
         async with asyncio.timeout(COMMAND_TIMEOUT):
@@ -258,20 +288,11 @@ class HAClient:
     async def _load(self) -> None:
         """Subscribe first, then load: every event read after an answer is newer than it."""
         self.adapter_locked = True
-        for event_type in ("state_changed", *REGISTRY_EVENTS):
+        for event_type in EVENTS:
             await self._result({"type": "subscribe_events", "event_type": event_type})
-        if not isinstance(await self._result({"type": "get_states"}), list):
-            raise HAProtocolError("get_states: result is not a list")
+        await self._result({"type": "get_states"})  # the reader applies the answer
         await self._load_registry()
-        config = await self._result({"type": "get_config"})
-        try:
-            self.temperature_unit = parse_temperature_unit(config)
-        except MALFORMED as exc:
-            raise HAProtocolError(f"get_config: no temperature unit: {exc!r}") from exc
-        self.adapter_locked = self.temperature_unit != CELSIUS
-        if self.adapter_locked:
-            unit = self.temperature_unit
-            logger.warning("Home Assistant uses %s instead of °C: device writes stay locked", unit)
+        await self._load_config()
 
     async def _load_registry(self) -> None:
         self._registry_dirty.clear()  # changes from now on trigger another reload
@@ -282,18 +303,48 @@ class HAClient:
             self._registry = parse_registry(entities, devices, areas)
         except MALFORMED as exc:
             raise HAProtocolError(f"registry: {exc!r}") from exc
+        self._registry_version += 1
+
+    async def _load_config(self) -> None:
+        """Only °C unlocks the write adapters."""
+        self._config_dirty.clear()  # changes from now on trigger another reload
+        config = await self._result({"type": "get_config"})
+        try:
+            unit = parse_temperature_unit(config)
+        except MALFORMED as exc:
+            raise HAProtocolError(f"get_config: no temperature unit: {exc!r}") from exc
+        self.temperature_unit = unit
+        # A change announced while this answer was underway keeps the lock until it is re-read.
+        self.adapter_locked = unit != CELSIUS or self._config_dirty.is_set()
+        if unit != CELSIUS:
+            logger.warning("Home Assistant uses %s instead of °C: device writes stay locked", unit)
+
+    async def _keepalive(self) -> None:
+        """Ping Core; ends with HAUnavailable when a pong does not come in time."""
+        while True:
+            await asyncio.sleep(PING_INTERVAL)
+            await self._command({"type": "ping"}, PING_TIMEOUT)
 
     async def _refresh_registry(self) -> None:
-        """Reload 0.5 s after registry events (a burst reloads once) and every 5 minutes."""
+        """Reload after registry events (a burst reloads once) and periodically."""
         while True:
             with contextlib.suppress(TimeoutError):
-                async with asyncio.timeout(REGISTRY_REFRESH):
+                async with asyncio.timeout(self._registry_refresh):
                     await self._registry_dirty.wait()
-                await asyncio.sleep(REGISTRY_DEBOUNCE)
+                await asyncio.sleep(self._registry_debounce)
             try:
                 await self._load_registry()
             except HAError as exc:
                 logger.warning("reloading the Home Assistant registries failed: %s", exc)
+
+    async def _refresh_config(self) -> None:
+        """Read get_config again after core_config_updated; adapters stay locked until then."""
+        while True:
+            await self._config_dirty.wait()
+            try:
+                await self._load_config()
+            except HAError as exc:
+                logger.warning("reloading the Home Assistant config failed: %s", exc)
 
     async def _set_status(self, connected: bool, reason: str | None) -> None:
         """Record the status; report and log it only when it changed."""
@@ -305,11 +356,20 @@ class HAClient:
                 logger.info("connected to Home Assistant (generation %d)", self.generation)
             else:
                 logger.info("not connected to Home Assistant: %s", reason)
-            try:
-                await self._on_status(status)
-            except Exception:
-                logger.exception("connection status handler failed")
+            await self._notify(self._on_status, status, "connection status")
         self._first_attempt.set()  # start() returns once the first status is reported
+
+    async def _notify[T](self, handler: Callable[[T], Awaitable[None]], arg: T, what: str) -> None:
+        """Call a handler; whatever it raises is logged, never passed on to the client's tasks."""
+        try:
+            await handler(arg)
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise  # stop() or the end of the connection
+            logger.error("%s handler was cancelled", what)
+        except Exception:
+            logger.exception("%s handler failed", what)
 
     async def _command(self, message: dict[str, Any], seconds: float) -> dict[str, Any]:
         """Send ``message`` with the next id; Core's answer, or HAUnavailable after ``seconds``."""
@@ -321,10 +381,10 @@ class HAClient:
         future: asyncio.Future[dict[str, Any] | None] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = (message["type"], future)
         try:
-            await ws.send(json.dumps({"id": msg_id, **message}))
-            async with asyncio.timeout(seconds):
+            async with asyncio.timeout(seconds):  # a full send buffer counts as no answer
+                await ws.send(json.dumps({"id": msg_id, **message}))
                 reply = await future
-        except websockets.ConnectionClosed as exc:
+        except ConnectionClosed as exc:
             raise HAUnavailable("connection to Home Assistant lost") from exc
         except TimeoutError as exc:
             raise HAUnavailable(f"{message['type']}: no answer within {seconds:g} s") from exc
@@ -355,13 +415,17 @@ class HAClient:
     async def _dispatch(self, raw: str | bytes) -> None:
         try:
             message = json.loads(raw)
-            if message["type"] == "result":
+            if message["type"] in ("result", "pong"):
                 self._resolve(message)
                 return
             if message["type"] != "event":
                 return
             event = message["event"]
             self._skew = (parse_time(event["time_fired"]) - self._clock()).total_seconds()
+            if event["event_type"] == "core_config_updated":
+                self.adapter_locked = True  # the unit may have changed: check before writes
+                self._config_dirty.set()
+                return
             if event["event_type"] in REGISTRY_EVENTS:
                 self._registry_dirty.set()
                 return
@@ -375,19 +439,19 @@ class HAClient:
             self._states.pop(change.entity_id, None)
         else:
             self._states[change.entity_id] = change.new_state
-        try:
-            await self._on_event(change)
-        except Exception:
-            logger.exception("state_changed handler failed")
+        await self._notify(self._on_event, change, "state_changed")
 
     def _resolve(self, message: dict[str, Any]) -> None:
         pending = self._pending.get(message["id"])
         if pending is None:
             return  # answered after its timeout
         command, future = pending
-        result = message.get("result")
-        if command == "get_states" and message.get("success") is True and isinstance(result, list):
+        if command == "get_states" and message.get("success") is True:
             # Here and not in _load: events read after this answer must apply on top of it.
-            self._states = parse_states(result)
+            try:
+                self._states = parse_states(message.get("result"))
+            except MALFORMED as exc:  # _load fails at once instead of waiting for a timeout
+                error = {"code": "malformed", "message": repr(exc)}
+                message = {"id": message["id"], "type": "result", "success": False, "error": error}
         if not future.done():
             future.set_result(message)

@@ -16,6 +16,7 @@ def hermetic_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.upper().startswith("MYHA_") or key.upper() == "SUPERVISOR_TOKEN":
             monkeypatch.delenv(key)
+    monkeypatch.setenv("MYHA_HA_WS_URL", "ws://127.0.0.1:1/api/websocket")  # refused, no DNS
 
 
 @pytest.fixture
