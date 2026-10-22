@@ -10,6 +10,8 @@
 
 **Design-Referenz:** `docs/superpowers/specs/2026-10-22-myha-design.md` – bei Widerspruch zwischen Plan und Design gilt das Design; Abweichungen an Fable melden. Der Plan folgt dem Design-Stand von Commit `e7e26cb` (Regel „Cover“ analog E7, „ein Deny erweitert nie“, implizites `metadata.read`, Principal-Status `active` | `disabled`, Admin-Endpunkte `GET session` und `POST session/check`). Abnahmefälle: Spez §19 (`docs/reference/2026-10-22-ha-access-ui-spezifikation-chatgpt.md`), Status in `docs/acceptance.md`.
 
+**Revision 2** (nach Plan-Review): 27 Befunde eingearbeitet, unter anderem Export-Platzhalter für NOT-NULL-Spalten, Benutzername beim Credential-Reset, Zimmerwechsel mit Einladungen und Bestätigungssperre, CIDR-Normalisierung, Pins nur aus systemvertrauten Ketten, E28 über den laufenden SSL-Kontext, Prüfung `time`, Restprüfung statt Task 1.6, Aufteilung in 12.3/12.4, Markierung der Schritte, die den Betreiber brauchen.
+
 **Voraussetzung:** Gate Teilplan 2 → 3 (Masterplan). Teilplan 3 baut auf den Dateien und Schnittstellen aus Teilplan 2 auf: `auth/{public,cookies,ratelimit}.py`, `services/{audit,stays,sessions,preview,commands,timeguard}.py`, `policy/{loader,drift}.py`, `events/{bus,connection,ws}.py`, `projection/*`, `api/public/*`, `api/admin/{stays,invites,sessions,preview,audit}.py`, `devseed.py`, Web `src/{api,transport,i18n,ui,guest}`, `tests/e2e/*`. Weichen Namen in der Umsetzung ab, gilt der Code; der Implementierer passt den Task an und meldet die Abweichung an Fable.
 
 ---
@@ -34,48 +36,55 @@ cd tests/e2e && pnpm exec playwright test                                       
 - **Geheimnisse:** Einladungs-Secrets, Passwörter, Token, Poll-Token, Tickets, CSRF-Token und `server_secret` erscheinen nie in Logs, Audit, Diagnose, URL-Pfaden oder `localStorage`. Formatprüfung von Token vor `hash_secret` (Regex base64url, 43 Zeichen), weil einzelne Surrogates sonst `UnicodeEncodeError` auslösen.
 - **Migrationen:** Dateiname `NNNN_<name>.py` mit der nächsten freien Nummer nach dem Stand von Teilplan 2, `down_revision` = bisheriger Head; `test_migrated_schema_matches_models` bleibt grün. Ein späterer Batch-Rebuild von `instance` muss den Singleton-Trigger aus Task 12.3 neu anlegen; einer von `audit_event` braucht `table_kwargs={"sqlite_autoincrement": True}`.
 - **Admin-Testfixtures:** `ctx`, `clocks`, `admin_app` und `admin_client` liegen in `tests/acceptance/conftest.py`. Integrationstests unter `tests/integration/` nutzen sie ebenfalls; falls Teilplan 2 sie noch nicht nach `tests/conftest.py` verschoben hat, verschiebt Task 5b.2 sie dorthin.
+- **Vorgaben aus Teilplan 2 (Commit `963f700`, verbindlich):** Fähigkeiten werden über `DeviceCapabilities.to_json`/`from_json` gespeichert und gelesen; `decide()` bekommt `execute` immer ausdrücklich; Loader und Admin-Antworten lesen `policy_version` und `time_trusted` aus der DB, nie aus `ctx.instance`; nach einem Publish wird zuerst der Index neu gebaut; HA-Aufrufe und Lesesessions finden nie innerhalb einer offenen Schreibsession statt (der Laufzeit-Wächter aus Teilplan 2 lehnt sie ab), also HA-Zustand und Fähigkeiten vor `write_session` lesen; das Body-Limit des Public-Listeners gilt auch für Login, Refresh und Pairing.
+- **„braucht den Betreiber“:** Der Schritt braucht eine Entscheidung, ein Gerät oder eine Einstellung von Dimitri (offene Punkte 1, 10, 11, 14) und blockiert nur sich selbst.
 - **Referenzinstallation:** Schritte mit **„Fable, nach Zustimmung“** führt Fable selbst aus, erst nachdem Dimitri im Chat ausdrücklich zugestimmt hat. Subagenten bereiten nur Code und Skripte vor. Berichte und Doku enthalten keine LAN-IPs, Ingress-Token, HA-User-IDs, Entity-IDs der Referenzinstallation oder Klarnamen Dritter.
 
 ## Reihenfolge
 
 | Block | Tasks | Hinweis |
 |---|---|---|
-| 0 | 13.1 | Reine Löschung des S0-Probe-Modus auf `main`, vorgezogen, weil 9a und 11 dieselben Dateien ändern. Der Branch `s0-probe` bleibt bis Task 13.5 bestehen; die S0-Läufe auf der Referenzinstallation beziehen ihn unabhängig von `main`. |
+| 0 | 13.1 | Nur Restprüfung: Task 1.6 aus Teilplan 1 ist als `fe5c10b` gelandet. |
 | 1 | 5b.1–5b.8 | Öffentliche Auth Teil 2 |
 | 2 | 9a.1–9a.7, danach 9a.8–9a.11 | Admin-API, dann Admin-UI Teil 1 |
 | 3 | 10.1–10.7 | Aufenthalte vollständig |
 | 4 | 11.1–11.6 | Setup-Assistent, TLS-Modi, Trustprofil |
-| 5 | 12.1–12.3 | Backup und Restore |
+| 5 | 12.1–12.4 | Backup und Restore |
 | 6 | 9b.1–9b.8 | Admin-UI Teil 2 auf den APIs aus Teilplan 2 (Preview), 10, 11 und 12 |
-| 7 | 13.2–13.7 | 13.5–13.7 „Fable, nach Zustimmung“ |
-| 8 | 14.1–14.7 | 14.7 im privaten Repo, nach dem Abschluss-Task 14.6 |
+| 7 | 13.2, 13.4, 14.1–14.4 | Code, E2E und Lastskript vor der realen Installation; in 14.4 braucht nur der 72-Stunden-Lauf den Betreiber |
+| 8 | 13.5–13.7 | „Fable, nach Zustimmung“; Schritte mit „braucht den Betreiber“ warten auf Dimitri und blockieren nur sich selbst |
+| 9 | 14.5–14.7 | Doku, Abschluss, Submodule im privaten Repo |
 
-Es läuft immer nur ein Implementierer je Repository. Nach jedem Arbeitspaket folgt ein Review-Subagent (Spec-Treue, dann Codequalität).
+Task 13.3 entfällt (der Hook-Smoke steht in Task 12.2). Es läuft immer nur ein Implementierer je Repository. Nach jedem Arbeitspaket folgt ein Review-Subagent (Spec-Treue, dann Codequalität).
 
 ## Abnahmefälle in diesem Teilplan
 
 | Fall | Stand nach Teilplan 2 | Teilplan 3 | Nachweis |
 |---|---|---|---|
+| A01–A05 real | automatisiert gegen den Simulator | 13.5, 13.6 | über den echten Ingress: `ingress-get api/v1/admin/session`, Admin-UI in der HA-Seitenleiste, A01 per `curl` am Public Origin; A04 mit einem herabgestuften Testbenutzer (braucht den Betreiber) |
+| A03 (Hinweis in der UI) | Guard antwortet 503 mit `details.reason` | 9a.8 | Vitest: `supervisor_version` zeigt den sperrenden Update-Hinweis mit Ist- und Mindestversion |
 | A04 (Live-Admin) | Mutationen grün | 9a.7 | `test_a04_admin_ws_closes_after_demotion` |
-| A19, A21–A24, A28–A32, A34, A50, A52 | grün | Regression über E2E (14.1); A50 zusätzlich als „Preview this invite“ in der UI (9b.3) | — |
+| A18 real | automatisiert | 13.6 Step 2 | Moduswechsel an der echten Klimaanlage gegen den Prüfbereich |
+| A19, A21–A24, A28–A32, A34, A52 | grün | — | Die Regression tragen die Tests aus Teilplan 2, die in der Gateway-Prüfung jedes Tasks laufen; 14.1 ergänzt nur den Browserpfad |
 | A20 | grün über direkte DB-Änderung | 9a.3 über die Admin-API | `test_a20_membership_removed_via_admin_api_updates_open_connection` |
 | A25 | Widerruf schließt ≤ 5 s | 10.2 Checkout | `test_a25_checkout_ends_sessions_refresh_families_and_invites` |
-| A26 | offen | 10.2 | `test_a26_no_static_room_qr` |
+| A26 | offen | 10.2 | `test_a26_no_static_room_qr` (einschließlich der Einladungen aus `stays/{id}/move`) |
 | A27 | keine Historienfelder | 10.2 | `test_a27_next_stay_sees_nothing_of_previous_stay` |
 | A33 | entfällt (E21) | — | — |
 | A35 | CSRF, Origin, Ticket, Widerruf | 5b.4, 5b.5 | `test_a35_rotated_refresh_token_revokes_family`, `test_a35_expired_access_token_rejected`, Login-Origin-Test |
 | A36–A38, A43 | Teilplan 4 | Serverteil: Trustprofil und Leaf-Pins (5b.3, 11.3, 11.4) | Geräte in Teilplan 4 |
-| A39 | offen | 12.3 | `test_a39_restore_does_not_reactivate_codes_sessions_or_passwords`; optional real (13.6) |
-| A40 | offen | 12.3, 13.2 | `test_a40_backup_without_restore_keeps_live_state`, `test_a40_restore_never_widens`, `test_a40_fingerprint_upgrade_neither_widens_nor_flags`; `docs/restore.md` |
-| A41 | offen | 14.2 | `tests/e2e/a11y.spec.ts` + Doku |
-| A42 | Gast-Tastatur (Teilplan 2) | 9a/9b, 14.2, 13.6 | Vitest, `a11y.spec.ts`, manuelle Screenreader-Prüfung dokumentiert |
-| A44 | offen | 11.5 Serverteil, 13.6 real | Setup-Tests; Nachweis im echten Gast-WLAN dokumentiert |
+| A39 | offen | 12.4 | `test_a39_restore_does_not_reactivate_codes_sessions_or_passwords` (mit neu gesetztem Benutzernamen); optional real (13.6 Step 4) |
+| A40 | offen | 12.4, 13.2, 13.6 | `test_a40_backup_without_restore_keeps_live_state`, `test_a40_restore_never_widens`, `test_a40_fingerprint_upgrade_neither_widens_nor_flags`; real: Update per `rebuild` ohne `needs_review`-Welle (13.6 Step 6); `docs/restore.md` |
+| A41 | offen | 14.2 | `a11y.spec.ts`: Viewports und 200 % Root-Schriftgröße bei 320 und 768 px |
+| A42 | Gast-Tastatur (Teilplan 2) | 9a/9b, 14.2, 13.6 | Vitest, `a11y.spec.ts`; Screenreader manuell für Login, Dashboard, Rechteeditor und Vorschau |
+| A44 | offen | 11.5 Serverteil, 13.6 real | Setup-Tests; Nachweis im echten Gast-WLAN (braucht den Betreiber) |
 | A45 | Redaction-Filter | 14.3 | `test_a45_logs_audit_and_diagnostics_hold_no_secrets` |
-| A46 | offen | 14.4 | Lastskript, Ergebnis und Grenzen dokumentiert |
+| A46 | offen | 14.4 | Lastskript; der 72-Stunden-Lauf braucht den Betreiber |
 | A47 | offen | 12.1, 13.6 | `test_a47_export_holds_no_live_state_or_secrets`; reales Archiv |
-| A48 | offen | 12.1–12.3 | `test_a48_*` |
-| A49 | Transport ohne Redirects | 5b.5 | `test_a49_auth_endpoints_never_redirect` |
-| A51 | offen | 10.3–10.5 | `test_a51_*` |
+| A48 | offen | 12.1–12.4, 13.6 | `test_a48_*`; „gestoppte App“ als dokumentierter Lauf (13.6 Step 4) |
+| A49 | Transport ohne Redirects | 5b.5, 5b.6 | `test_a49_auth_endpoints_never_redirect` |
+| A50 | grün | 9b.3 | „Diese Einladung prüfen“ in der UI; Regression durch die Tests aus Teilplan 2 |
+| A51 | offen | 10.3–10.5 | `test_a51_*` einschließlich `test_a51_moved_draft_cannot_bypass_confirm` |
 
 ---
 
@@ -83,7 +92,7 @@ Es läuft immer nur ein Implementierer je Repository. Nach jedem Arbeitspaket fo
 
 ```
 myha/gateway/myha_gateway/
-├── public_listener.py · proxy.py
+├── public_listener.py · proxy.py · net.py
 ├── auth/passwords.py (erweitert) · auth/tokens.py · auth/pairing.py · auth/trust.py
 ├── backup/__init__.py · backup/export.py · backup/restore.py · backup/status.py
 ├── events/admin_hub.py · events/admin_ws.py
@@ -107,19 +116,14 @@ Jede Datei hat eine Verantwortung: `auth/tokens.py` gibt Token aus und rotiert s
 
 ---
 
-## Vorgezogen: WP13 Task 13.1 – S0-Probe-Modus entfernen
+## Vorgezogen: WP13 Task 13.1 – Restprüfung S0-Probe
 
-Teilplan 1, Task 1.6 Step 2, in einem einzigen Commit: Fehlt `probe_mode` in `Settings`, steht es aber noch in der Optionen-Whitelist, scheitert der Start an `extra_forbidden`.
+Task 1.6 aus Teilplan 1 ist als `fe5c10b` gelandet: Probe-Route, CLI `probe`, Lifespan-Hook, `probe_mode` in `Settings` und in der Optionen-Whitelist, Probe-Zweig im Run-Skript; `/healthz` liefert nur `status` und `client_ip`. Der A01-Beleg `test_public_listener_has_no_admin_routes` bleibt. Übrig ist nur die Restprüfung.
 
-**Files:**
-- Delete: `myha_gateway/api/admin/probe.py`, `tests/unit/test_probe_cli.py`
-- Modify: `myha_gateway/app.py` (Import, bedingte Router-Registrierung, Probe-Hook in `_admin_lifespan`, Docstrings), `myha_gateway/__main__.py` (Import, `_probe`, Choice `probe`, Modul-Docstring), `myha_gateway/settings.py` (Feld `probe_mode`, Validator-Zweig, `"probe_mode"` in `_AddonOptions` samt Kommentar), `myha_gateway/auth/admin.py` (Modul-Docstring), `myha_gateway/api/public/health.py` (nur `status` und `client_ip`), `myha/config.yaml` (`probe_mode: bool?`), `myha/rootfs/etc/s6-overlay/s6-rc.d/myha/run` (Probe-Zweig und Kommentar), `myha/DOCS.md` (Optionszeile `probe_mode`), `scripts/install-on-ha.py` (Hilfetext `ingress-get` → `api/v1/admin/session`, Backup-Name `myha-dev`)
-- Test: `tests/unit/test_settings.py`, `tests/integration/test_listeners.py`, `tests/acceptance/test_matrix_admin.py`, `tests/unit/test_install_script.py`
+**Files:** keine, außer die Prüfung findet etwas außerhalb der Allowlist.
 
-- [ ] **Step 1 – Tests anpassen (rot):** `test_settings.py`: `test_options_json_sets_only_log_level` (`options.json` mit `log_level`, `probe_mode: true`, `admin_port` → nur `log_level` übernommen, kein Fehler, `public_enabled` bleibt aus). `test_listeners.py`: alle Probe-Tests und `probe_app` löschen; neu `test_no_probe_route_and_no_probe_cli` (`GET /api/v1/admin/probe` vom Ingress-Peer mit Admin-Header → 404; `main(["probe"])` → `SystemExit` mit Code 2); `test_public_health_reports_client_ip` erwartet exakt `{"status": "ok", "client_ip": "203.0.113.9"}`; `test_healthz_echoes_forwarding_headers_without_trusting_them` und die Probe-Parametrisierung der Slash-Tests entfallen. `test_matrix_admin.py`: Konstante `PROBE` mit allen Verwendungen (A01-Schleife, `probe_on` in A02, Ausnahme im Routen-Audit) entfernen. `test_install_script.py`: Backup-Name `myha-dev`. Lauf: `cd myha/gateway && uv run pytest tests/unit/test_settings.py tests/integration/test_listeners.py -q` → FAIL.
-- [ ] **Step 2 – Löschen und ändern** wie unter Files. `ha/supervisor.py` und `auth/passwords.py` bleiben (`measure_argon2` nutzt Task 9b.1).
-- [ ] **Step 3 – Grün:** Gateway-Prüfung; `uv run mypy --strict ../../scripts/install-on-ha.py`; `bash scripts/build-image.sh` (Smoke mit geändertem Run-Skript) → PASS. `grep -rn probe_mode myha/ scripts/` → keine Treffer.
-- [ ] **Step 4 – Commit:** `chore: remove S0 probe mode`.
+- [ ] **Step 1 – Prüfen:** `grep -rni probe myha scripts .github --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=dist`. Erlaubt sind: die S0-Dummies `myha/rootfs/opt/myha/backup-export` und `backup-cleanup` (Task 12.2 ersetzt sie), der Whitelist-Kommentar in `myha_gateway/settings.py`, `tests/unit/test_settings.py` (ein alter `probe_mode`-Schlüssel wird ignoriert), `tests/integration/test_listeners.py::test_no_probe_route_and_no_probe_cli`, der Dateiname `probe.tar` in `tests/unit/test_install_script.py` und der Kommentar in `tests/integration/test_startup.py`.
+- [ ] **Step 2 – Nur bei weiteren Treffern:** entfernen, Gateway-Prüfung, Commit `chore: remove S0 probe leftovers`. Ohne Treffer kein Commit.
 
 ---
 
@@ -155,7 +159,7 @@ Abnahme: A35 (rotierter Refresh-Token, abgelaufene Session), A49, Token-Tests; S
 ### Task 5b.2: Passwörter und Bewohnerverwaltung
 
 **Files:**
-- Modify: `myha_gateway/auth/passwords.py`, `myha_gateway/app.py` (Router), `myha_gateway/services/sessions.py` (`revoke_principal_sessions`, falls Teilplan 2 ihn nicht hat)
+- Modify: `myha_gateway/auth/passwords.py`, `myha_gateway/deps.py` (`hash_slots`), `myha_gateway/app.py` (Router), `myha_gateway/services/sessions.py` (`revoke_principal_sessions`, falls Teilplan 2 ihn nicht hat)
 - Create: `myha_gateway/services/admin_write.py`, `myha_gateway/services/principals.py`, `myha_gateway/api/admin/principals.py`
 - Test: `tests/unit/test_passwords.py`, `tests/integration/test_admin_principals.py`
 
@@ -175,18 +179,17 @@ def admin_actor(admin: AdminIdentity) -> str:
     return f"admin:{admin.user_id}"
 ```
 
-`auth/passwords.py` (mypy strict, Coverage-Gate):
+`auth/passwords.py` (mypy strict, Coverage-Gate); die Semaphore `AppContext.hash_slots = asyncio.Semaphore(2)` (höchstens zwei Hashes gleichzeitig: begrenzt CPU und 2 × 64 MiB) liegt im Kontext, nicht modulweit, damit jeder Event-Loop und jeder Test seine eigene hat:
 
 ```python
 # shortcut: provisional until S0 row 15 is measured (Task 13.6); check_needs_rehash upgrades
 # existing hashes on the next login when these change.
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1)
-_SLOTS = asyncio.Semaphore(2)  # at most two hashes at once: bounds CPU and 2 x 64 MiB memory
 
 def normalize_username(raw: str) -> str: ...   # NFKC, casefold, strip; then ^[\w.@+-]{3,64}$ (Unicode letters allowed) else ValueError
 def validate_password(password: str) -> str: ...  # NFKC; 10..512 characters else ValueError
-async def hash_password(password: str) -> str: ...  # in a worker thread under _SLOTS
-async def verify_password(stored: str | None, password: str) -> bool: ...
+async def hash_password(password: str, slots: asyncio.Semaphore) -> str: ...  # worker thread under slots
+async def verify_password(stored: str | None, password: str, slots: asyncio.Semaphore) -> bool: ...
     # None (unknown user) verifies against a lazily created dummy hash: same cost, always False
 def needs_rehash(stored: str) -> bool: ...
 ```
@@ -195,11 +198,11 @@ Admin-API (`api/admin/principals.py`, Router mit `not_in_restore` ab Task 9a.1):
 - `GET /api/v1/admin/principals?type=resident|display` (`fresh=False`) → `[{id, type, display_name, status, username, has_password, locale, version, active_sessions}]`, nie Gäste.
 - `POST /api/v1/admin/principals` (`require_csrf`): `{type: "resident", display_name, username, password, locale?}` oder `{type: "display", display_name}` → 201; normalisierter Benutzername schon vergeben → 409; Passwort nie in der Antwort; Audit `principal.create` mit `resource_id = principal_id`.
 - `PATCH /api/v1/admin/principals/{id}` `{display_name?, status?: "active"|"disabled", locale?, expected_version}`; `disabled` widerruft alle Sessions und Refresh-Familien des Principals (Grund `principal_disabled`) und erhöht `policy_version`.
-- `PUT /api/v1/admin/principals/{id}/credential` `{password, expected_version}` (nur Bewohner): neuer Hash, `changed_at = now`, `must_reset = False`, alle Sessions des Principals widerrufen (Grund `password_reset`); Audit `credential.reset` ohne Passwort.
+- `PUT /api/v1/admin/principals/{id}/credential` `{password, username?, expected_version}` (nur Bewohner): legt das Credential an oder ersetzt es. `username` ist Pflicht, solange der Bewohner keins hat (`has_password == false`, etwa nach einem Restore, Task 12.4), sonst optional zum Umbenennen; ein vergebener normalisierter Name → 409. Neuer Hash, `changed_at = now`, `must_reset = False` (gespeichert, nicht durchgesetzt), alle Sessions des Principals widerrufen (Grund `password_reset`); Audit `credential.reset` ohne Passwort und ohne Namen.
 
-Nicht in diesem Teilplan: Passwortänderung durch den Bewohner selbst und die Durchsetzung von `must_reset` (offener Punkt 4).
+Nicht in diesem Teilplan: Passwortänderung durch den Bewohner selbst; `must_reset` bleibt `false` und wird nicht durchgesetzt (Entscheidung 4).
 
-- [ ] **Step 1 – Tests (rot):** Unit: `normalize_username("  Ｍia.K ") == "mia.k"`; `normalize_username("Jürgen") == "jürgen"`; Leerzeichen innen oder `/` → `ValueError`; Passwort mit 9 bzw. 513 Zeichen → `ValueError`; `hash_password`/`verify_password` Rundlauf; falsches Passwort → `False`; `verify_password(None, "x")` → `False` und prüft gegen den Dummy-Hash (Zähler per Monkeypatch, kein Zeitvergleich); `needs_rehash` wahr für einen Hash mit `time_cost=2`. Integration: Bewohner anlegen → 201, Hash in der DB beginnt mit `$argon2id$`, Passwort nicht in der Antwort; Benutzername `MIA.k` nach `mia.k` → 409; POST ohne CSRF → 403; Reset widerruft eine vorhandene Session (`revoke_reason == "password_reset"`); Deaktivieren widerruft und erhöht `policy_version`; veraltete `expected_version` → 409 mit `current_version`; Liste ohne Gäste. Lauf: `uv run pytest tests/unit/test_passwords.py tests/integration/test_admin_principals.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Unit: `normalize_username("  Ｍia.K ") == "mia.k"`; `normalize_username("Jürgen") == "jürgen"`; Leerzeichen innen oder `/` → `ValueError`; Passwort mit 9 bzw. 513 Zeichen → `ValueError`; `hash_password`/`verify_password` Rundlauf; falsches Passwort → `False`; `verify_password(None, "x")` → `False` und prüft gegen den Dummy-Hash (Zähler per Monkeypatch, kein Zeitvergleich); `needs_rehash` wahr für einen Hash mit `time_cost=2`. Integration: Bewohner anlegen → 201, Hash in der DB beginnt mit `$argon2id$`, Passwort nicht in der Antwort; Benutzername `MIA.k` nach `mia.k` → 409; POST ohne CSRF → 403; Reset widerruft eine vorhandene Session (`revoke_reason == "password_reset"`); Bewohner ohne Credential: `PUT credential` ohne `username` → 400, mit freiem Namen → 200 und Login möglich, mit vergebenem Namen → 409; Deaktivieren widerruft und erhöht `policy_version`; veraltete `expected_version` → 409 mit `current_version`; Liste ohne Gäste. Lauf: `uv run pytest tests/unit/test_passwords.py tests/integration/test_admin_principals.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren:** wie oben; Fixtures gemäß Konvention nach `tests/conftest.py` verschieben, falls nötig.
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(auth): argon2id passwords and resident management api`.
@@ -296,7 +299,7 @@ Verhalten:
 2. `client == "browser"`: `Origin` muss exakt `ctx.public_origin` sein, sonst 403 (Login-CSRF). Native Clients senden kein `Origin` und erhalten nie ein Cookie.
 3. Benutzername normalisieren; der Limiter je Benutzername zählt auch unbekannte und ungültige Namen (Schlüssel: Kleinschreibung, auf 64 Zeichen gekürzt).
 4. Credential über `username_normalized` laden, Principal `type == "resident"` und `status == "active"`.
-5. `verify_password(hash or None, password)` im Worker-Thread; beide Listener teilen den Event-Loop.
+5. `verify_password(hash or None, password, ctx.hash_slots)` im Worker-Thread; beide Listener teilen den Event-Loop.
 6. Jeder Fehlschlag → 401 `UNAUTHENTICATED` „Invalid username or password“, byte-identisch für unbekannten Namen, falsches Passwort, deaktivierten Principal und ungültigen Namen; anonymes Audit `auth.login` mit Ergebnis `denied` und ohne den versuchten Namen (A45).
 7. Erfolg: bei Bedarf neu hashen; Session mit `purpose=access`, `principal_id`, `unit_ids=[]`, `not_after = now + resident_browser_days` (Browser) bzw. `now + resident_refresh_days` (nativ, dann `issue_family`), `csrf_secret`, `device_label[:60]`. Browser → Cookie (Teilplan 2) und `{session, csrf_token}`; nativ → `TokenPair`. Audit `auth.login` mit dem Principal als Akteur.
 
@@ -314,7 +317,7 @@ Verhalten:
 
 Zustandsautomat (bei `client == "browser"` verlangen Start und Poll wie der Login `Origin` exakt gleich `ctx.public_origin`, weil der Poll ein Cookie setzt):
 1. **Start** – `POST /api/v1/auth/pair/start {device_label?, client}`: höchstens 20 offene, nicht abgelaufene Anfragen insgesamt, sonst 429. Neue Zeile mit `id = new_id("pair")`, `code = f"{secrets.randbelow(10**6):06d}"`, `poll_token_hash`, `expires_at = now + 10 min`, `status = pending`, `audience`, `device_label[:60]`, `client_ip`. Antwort `{pairing_id, code, poll_token, expires_at}`; anonymes Audit `pairing.start`.
-2. **Admin-Liste** – `GET /api/v1/admin/pairings` (`fresh=False`) → offene, nicht abgelaufene Anfragen `{id, device_label, client_ip, created_at, expires_at}` **ohne Code**: Der Admin liest den Code am Tablet ab, so bestätigt er genau dieses Gerät.
+2. **Admin-Liste** – `GET /api/v1/admin/pairings` (`require_csrf`: sensibel wie Sessions, Liste der sensiblen GETs in Task 11.6) → offene, nicht abgelaufene Anfragen `{id, device_label, client_ip, created_at, expires_at}` **ohne Code**: Der Admin liest den Code am Tablet ab, so bestätigt er genau dieses Gerät.
 3. **Bestätigen** – `POST /api/v1/admin/pairings/{id}/approve {code, principal_id? | display_name?, unit_ids}` (`require_csrf`): Anfrage offen und nicht abgelaufen, sonst 409. Code zeitkonstant vergleichen; falsch → `failed_attempts + 1` und 400, beim fünften Fehlversuch `status = rejected`. `unit_ids` nicht leer und alle vorhanden, sonst 400: Eine leere Liste hieße „keine Obergrenze“ und ist für Displays verboten. Bestehender aktiver Display-Principal oder neuer (`type = display`, `display_name`). Speichern: `status = approved`, `principal_id`, `unit_ids`, `decided_by`, `decided_at`; Audit `pairing.approve`.
 4. **Ablehnen** – `POST /api/v1/admin/pairings/{id}/reject` → `rejected`; Audit.
 5. **Poll** – `POST /api/v1/auth/pair/poll {pairing_id, poll_token}`: Token-Format und Hash prüfen, sonst 401 (einheitlich). Abgelaufen oder abgelehnt → `{status: "expired"|"rejected"}`; offen → `{status: "pending", expires_at}`; bestätigt → eine Schreibtransaktion: `UPDATE pairing_request SET status = 'consumed', approved_session_id = :sid WHERE id = :id AND status = 'approved'` mit `rowcount == 1`, sonst 401; Session `purpose = access`, `principal_id`, `audience`, **`unit_ids = request.unit_ids`**, `not_after = now + display_days`, `csrf_secret`, `device_label`. Browser → Cookie und `{status: "paired", session, csrf_token}`; nativ → `{status: "paired", ...TokenPair}`. Audit `pairing.paired`. Jeder weitere Poll → 401.
@@ -329,13 +332,14 @@ Zustandsautomat (bei `client == "browser"` verlangen Start und Poll wie der Logi
 ### Task 5b.7: Test-QR-Sessions und Renewal aller Principal-Typen
 
 **Files:**
+- Create: `myha_gateway/net.py` (`client_ip_class`, später `parse_proxy_cidrs` aus Task 11.2)
 - Modify: `myha_gateway/auth/public.py` (Redeem `purpose = guest_test`, `require_session` mit zulässigen Zwecken), `myha_gateway/api/public/me.py`, `myha_gateway/api/public/ws_ticket.py`, `myha_gateway/events/ws.py`
-- Test: `tests/integration/test_test_sessions.py`, `tests/integration/test_renew.py`
+- Test: `tests/unit/test_net.py`, `tests/integration/test_test_sessions.py`, `tests/integration/test_renew.py`
 
 Verhalten:
 - Einladung mit `purpose = guest_test` (ohne Aufenthalt; angelegt ab Task 11.5, hier per Testhelfer): Redeem erzeugt eine Session `purpose = test`, `principal_id = None`, `unit_ids = []`, `not_after = now + 10 min`; nativ mit Familie, die ebenfalls nach 10 min endet.
 - Zulässig für Testsessions: `GET /me`, `POST /ws-ticket`, `WS /events` (Snapshot mit leerem Dashboard), `GET /me/trust`, `POST /auth/logout`. Alles andere (Dashboard, Aktionen, Befehle, Renew) → 401.
-- Erste erfolgreiche WS-Authentifizierung einer Testsession: Audit `setup.guest_test` (Ergebnis `ok`, `normalized_params = {"client_ip_class": …, "audience": …}`; nur die Klasse, nie die Adresse); `instance.setup_state` wechselt von `configured` auf `verified`. `client_ip_class(ip)`: `loopback`; `docker` für `172.30.32.0/23` (HAOS-hassio-Netz) und `172.17.0.0/16`; `private` für RFC 1918, ULA und Link-local; sonst `public`.
+- Erste erfolgreiche WS-Authentifizierung einer Testsession: Audit `setup.guest_test` (Ergebnis `ok`, `normalized_params = {"client_ip_class": …, "audience": …}`; nur die Klasse, nie die Adresse); `instance.setup_state` wechselt per DB-Update (`WHERE setup_state = 'configured'`) auf `verified`; `ctx.instance` wird dafür nicht ersetzt, Admin-Antworten lesen den Zustand aus der DB. `client_ip_class(ip)` in `net.py`: `loopback`; `docker` für `172.30.32.0/23` (HAOS-hassio-Netz) und `172.17.0.0/16`; `private` für RFC 1918, ULA und Link-local; sonst `public`.
 - `/me` liefert `principal: {id, type, display_name} | null` und `session: {purpose, audience, not_before, not_after, waiting}` (ergänzen, falls Teilplan 2 Felder fehlen).
 - Renew (Teilplan 2, `POST /api/v1/auth/session/renew`) für Bewohner und Displays: neues Cookie mit dem gespeicherten `not_after`, nie größer (Bewohner: Login + `resident_browser_days`, Display: Pairing + `display_days`). Gäste wie in Teilplan 2; eine Verlängerung des Aufenthalts (Task 10.3) setzt `not_after` vorher serverseitig.
 
@@ -352,7 +356,7 @@ Verhalten:
 - Test: `web/src/guest/routes/Login.test.tsx`, `Pair.test.tsx`, `DeviceTest.test.tsx`, `Dashboard.test.tsx`
 
 Verhalten:
-- Layout wie die Einladungsseite des Mockups (zentrierte Karte, Instanzname und Betreiberkontakt aus `GET /api/v1/public/config`). Ein eigenes Login-Design liegt nicht in `docs/reference/design/` (offener Punkt 5).
+- Layout wie die Einladungsseite des Mockups (zentrierte Karte, Instanzname und Betreiberkontakt aus `GET /api/v1/public/config`). Ein eigenes Login-Design liegt nicht in `docs/reference/design/` (Entscheidung 5).
 - **Login:** Felder mit `autocomplete="username"` und `current-password`; Absenden nur per `fetch` (`onSubmit` mit `preventDefault`, `redirect: "manual"`), `client: "browser"`. Jedes 401 zeigt dieselbe Meldung, 429 die Wartezeit aus `Retry-After`; Erfolg → `/`. Das Passwortfeld wird nach jedem Versuch geleert; nichts landet in `localStorage`.
 - **Pair:** optionales Gerätelabel → Start → großer Code `123 456` in einer `aria-live`-Region, Countdown bis `expires_at`. Poll alle 3 s, pausiert bei verborgenem Tab und läuft bei Sichtbarkeit weiter. `paired` → `/`; `rejected`/`expired` → Hinweis und „Neu starten“.
 - **Dashboard:** `principal.type == "display"` → `GuestPanel` im Wandmodus (64-px-Ziele); `resident` → Schaltfläche „Abmelden“ (`POST /auth/logout` → `/login`); nach jedem `policy.changed` `/me` neu laden und `session/renew` aufrufen, wenn `not_after` gewachsen ist (Clientteil von A51).
@@ -374,16 +378,17 @@ Abnahme: A04 (Live-Adminansicht), A20 über die Admin-API, A11 über die Admin-A
 **Files:**
 - Modify: `myha_gateway/auth/admin.py` (`not_in_restore`, `AdminGuard.csrf_secret`, `identity()` nimmt `HTTPConnection`), `myha_gateway/deps.py` (`restore_secret`), `myha_gateway/api/admin/session.py`, `myha_gateway/api/admin/{principals,pairings,stays,invites,sessions,preview,audit}.py` (Router-Dependency nachrüsten), `myha_gateway/app.py`
 - Create: `myha_gateway/api/admin/units.py`, `myha_gateway/api/admin/ha.py`
-- Test: `tests/integration/test_admin_units.py`, `tests/acceptance/test_matrix_admin.py` (Routen-Audit)
+- Test: `tests/integration/test_admin_units.py`, `tests/acceptance/test_matrix_admin.py` (Routen-Audit; Ersatz für `test_restore_pending_answers_503`)
 
 Verhalten:
-- `not_in_restore`: `ctx.restore_mode` → 503 `UPSTREAM_UNAVAILABLE`, `details.reason = "restore_pending"`. Alle Admin-Router außer `session` und `restore` (Task 12.3) deklarieren sie; die Admin-Router aus Teilplan 2 und aus WP5b werden nachgerüstet.
-- `AdminGuard.csrf_secret` → `ctx.instance.server_secret`, ohne Instanzzeile (Restore-Modus ohne Live-DB) `ctx.restore_secret` (je Prozess `new_secret()` in `AppContext.create`). `GET /api/v1/admin/session` antwortet im Restore-Modus 200 mit `setup_state = "restore_pending"` und, ohne Instanzzeile, `time_trusted = null` statt 503: Das ist der Einstieg der UI in den Restore-Screen. Zusätzlich liefert `GET session` ab jetzt `policy_version` (Kopfzeile der UI).
-- `GET /api/v1/admin/units` (`fresh=False`) → `[{id, name, sort, version, bindings, needs_review, blocked}]` nach `sort`; `POST /units {name, sort?}` → `unit_<hex>`; `PATCH /units/{id} {name?, sort?, expected_version}`; `DELETE /units/{id}?expected_version=` → 409, solange Bindungen, Aufenthalte oder Zuweisungen sie nennen. Jede Unit-Änderung erhöht `policy_version`, weil der Raumname in der Projektion steckt.
+- `not_in_restore`: `ctx.restore_mode` → 503 `UPSTREAM_UNAVAILABLE`, `details.reason = "restore_pending"`. Alle Admin-Router außer `session` und `restore` (Tasks 12.3, 12.4) deklarieren sie; die Admin-Router aus Teilplan 2 und aus WP5b werden nachgerüstet.
+- Restore-Modus mit Session statt 503: `AdminGuard.csrf_secret` → `ctx.instance.server_secret`, ohne Instanzzeile `ctx.restore_secret` (je Prozess `new_secret()` in `AppContext.create`). Im Restore-Modus antwortet `GET /api/v1/admin/session` 200 mit `setup_state = "restore_pending"`; das ist der Einstieg der UI in den Restore-Screen. Fehlt die Instanzzeile **ohne** Restore-Modus (ein Fehlerzustand), bleibt es bei der heutigen 503 `restore_pending`.
+- `GET /api/v1/admin/session` liest `setup_state`, `time_trusted` und `policy_version` in einem kurzen Select aus der DB, nie aus `ctx.instance` (Startstand; Vorgabe aus Teilplan 2); ohne Instanzzeile sind `time_trusted` und `policy_version` `null`.
+- `GET /api/v1/admin/units` (`fresh=False`) → `[{id, name, sort, version, bindings, needs_review, blocked}]` nach `sort`; `POST /units {name, sort?}` → `unit_<hex>`; `PATCH /units/{id} {name?, sort?, expected_version}`; `DELETE /units/{id}?expected_version=` → 409, solange Bindungen, Aufenthalte, Zuweisungen oder Unit-Fences sie nennen; sonst löscht es die `dashboard`-Zeile der Unit in derselben Transaktion mit. Jede Unit-Änderung erhöht `policy_version`, weil der Raumname in der Projektion steckt.
 - `GET /api/v1/admin/ha/areas` → `[{id, name}]` aus `ctx.ha.registry().areas`.
 - `GET /api/v1/admin/ha/entities?area=&kind=` → Kandidaten: nicht deaktivierte Registry-Entities mit `detect_kind(...)` in den fünf Arten und, falls `area` gesetzt, `registry.effective_area(entity_id) == area`; je Kandidat `{entity_id, name, kind, area_id, platform, preview: {actions, target_c_min, target_c_max, target_c_step, hvac_modes}, blocked_reason, bound_to}` über `adapter_for(kind).capabilities(state, entity, ha.temperature_unit)`. HA getrennt → 503 `details.reason = "ha_unavailable"`. Nur Anzeige, nie Rechte.
 
-- [ ] **Step 1 – Tests (rot):** Unit-CRUD, veraltete Version → 409, Löschen mit Bindung → 409; Kandidaten enthalten `light.living_ceiling` mit Aktionen, `light.group_all` mit `blocked_reason == "group_entity"`, `climate.room_204_dual` mit `dual_setpoint`, `switch.living_floor_lamp` unter `area_living` über das Gerät, nie `camera.*` oder `person.*`; Restore-Modus → `GET /units` 503 `restore_pending`, `GET /session` 200 mit `setup_state == "restore_pending"` und einem CSRF-Token, das `POST /session/check` annimmt; Routen-Audit: jede Admin-API-Route außer `session` und `session/check` hängt an `not_in_restore`. Lauf: `uv run pytest tests/integration/test_admin_units.py tests/acceptance/test_matrix_admin.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Unit-CRUD, veraltete Version → 409, Löschen mit Bindung oder Unit-Fence → 409, Löschen ohne Referenzen entfernt auch die Dashboard-Zeile; Kandidaten enthalten `light.living_ceiling` mit Aktionen, `light.group_all` mit `blocked_reason == "group_entity"`, `climate.room_204_dual` mit `dual_setpoint`, `switch.living_floor_lamp` unter `area_living` über das Gerät, nie `camera.*` oder `person.*`. `test_restore_pending_answers_503` wird ersetzt durch `test_restore_mode_session_uses_ephemeral_csrf` (Restore-Modus ohne Instanz: `GET /session` 200 mit `setup_state == "restore_pending"`, `POST /session/check` mit diesem Token 204, `GET /units` 503 `restore_pending`) und `test_missing_instance_outside_restore_answers_503`; `GET /session` zeigt eine `policy_version`, die ein Test direkt in der DB erhöht hat; Routen-Audit: jede Admin-API-Route außer `session` und `session/check` hängt an `not_in_restore`. Lauf: `uv run pytest tests/integration/test_admin_units.py tests/acceptance/test_matrix_admin.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(admin): restore gate, units and home assistant candidates`.
@@ -397,7 +402,7 @@ Verhalten:
 
 Verhalten:
 - `GET /api/v1/admin/units/{id}/bindings` → `[{id, entity_id, kind, label, icon, status, block_reason, capabilities, version}]`.
-- `POST /api/v1/admin/units/{id}/bindings {entity_id, label, icon?, confirmed_modes?}`: Fähigkeiten über den Adapter und `with_fingerprint`; `confirmed_modes ⊆ hvac_modes ∩ {off, cool, heat}`, sonst 400; Status `blocked`, wenn der Adapter einen Blockgrund meldet (`group_entity`, `template_entity`, `wrapper_entity`, `dual_setpoint`, `unit_not_celsius`, `no_setpoint`, `invalid_range`), sonst `confirmed`. Gespeichert werden `registry_entity_id`, `unique_id`, `device_id`, effektive `area_id`, `confirmed_capabilities` (JSON mit Aktionen, Bereich, Schritt, `hvac_modes`, `confirmed_modes`, `blocked_reason`) und `capability_fingerprint`. Entity schon gebunden → 409; HA getrennt oder Temperatureinheit unbekannt → 503 `ha_unavailable`. Policy-Bump, Audit `binding.create`.
+- `POST /api/v1/admin/units/{id}/bindings {entity_id, label, icon?, confirmed_modes?}`: Fähigkeiten über den Adapter und `with_fingerprint`; `confirmed_modes ⊆ hvac_modes ∩ {off, cool, heat}`, sonst 400; Status `blocked`, wenn der Adapter einen Blockgrund meldet (`group_entity`, `template_entity`, `wrapper_entity`, `dual_setpoint`, `unit_not_celsius`, `no_setpoint`, `invalid_range`), sonst `confirmed`. Gespeichert werden `registry_entity_id`, `unique_id`, `device_id`, effektive `area_id`, `confirmed_capabilities` über `DeviceCapabilities.to_json` (Aktionen, Bereich, Schritt, `hvac_modes`, `confirmed_modes`, `blocked_reason`) und `capability_fingerprint`. HA-Zustand und Fähigkeiten werden vor der Schreibsession gelesen. Entity schon gebunden → 409; HA getrennt oder Temperatureinheit unbekannt → 503 `ha_unavailable`. Policy-Bump, Audit `binding.create`.
 - `GET /api/v1/admin/bindings/{id}/review` → `{status, reasons, stored, current}`; `reasons` ⊆ `capabilities_changed`, `area_changed`, `device_replaced`, `entity_missing`, berechnet mit derselben Vergleichsfunktion wie `policy/drift.py`; `current` ist `null`, wenn die Entity fehlt.
 - `POST /api/v1/admin/bindings/{id}/confirm {expected_version, confirmed_modes?}`: Neuberechnung aus dem aktuellen HA-Zustand. Meldet der Adapter jetzt einen Blockgrund, wird bzw. bleibt der Status `blocked` (200, Grund in der Antwort); sonst `confirmed` mit neuem Fingerprint, Bereich, `unique_id` und `device_id`. Policy-Bump, Audit `binding.confirm`. Eine `blocked`-Bindung fällt nie von selbst auf `needs_review` zurück; nur diese ausdrückliche Bestätigung ändert sie.
 - `PATCH /api/v1/admin/bindings/{id} {label?, icon?, expected_version}` (Label wird projiziert → Policy-Bump); `icon` passt auf `^[a-z0-9-]{1,40}$`. `DELETE /api/v1/admin/bindings/{id}?expected_version=` → Policy-Bump, Karte verschwindet aus dem Layout.
@@ -432,14 +437,14 @@ Verhalten: `GET/POST /api/v1/admin/groups`, `PATCH /groups/{id} {name?, descript
 Verhalten:
 - `GET /api/v1/admin/roles` → `[{id, name, description, latest_version, has_draft, version}]`; `POST /roles {name, description?}` → Vorlage mit leerem Entwurf; `PATCH /roles/{id} {name?, description?, expected_version}`.
 - `GET /roles/{id}` → Vorlage, Entwurf, `draft_based_on`, Versionen `[{version_number, published_at, based_on_version}]`; `GET /roles/{id}/versions/{n}` → Regeln.
-- `PUT /roles/{id}/draft {rules, based_on, expected_version}`: `RoleRules.model_validate` (`extra="forbid"`); alle Ressourcen-IDs sind Bindungen (sonst 400 mit den unbekannten IDs); `target_c`-Grenzen, Schritte und Ursprünge auf dem 0,1-Raster, `level_pct` und `position_pct` ganzzahlig, Modi ⊆ {off, cool, heat}; setzt `draft_based_on = based_on`; Versions-Bump der Vorlage. Kein Policy-Bump: Entwürfe gewähren nichts. Die Antwort enthält `warnings` für die Regel „Cover“ (Design §4.1), soweit sie aus dem Entwurf allein folgt: `cover.open` gewährt, aber 100 liegt in keinem `position_pct`-Intervall der Grants dieser Ressource (`cover_open_never_offered`), entsprechend `cover.close` und 0 (`cover_close_never_offered`). Ein Deny auf `cover.set_position` ändert daran nichts, denn ein Deny erweitert nie; Fences prüft erst die Live-Vorschau.
+- `PUT /roles/{id}/draft {rules, based_on, expected_version}`: `RoleRules.model_validate` (`extra="forbid"`); alle Ressourcen-IDs sind Bindungen (sonst 400 mit den unbekannten IDs); `target_c`-Grenzen, Schritte und Ursprünge auf dem 0,1-Raster, `level_pct` und `position_pct` ganzzahlig, Modi ⊆ {off, cool, heat}; setzt `draft_based_on = based_on`; Versions-Bump der Vorlage. Kein Policy-Bump: Entwürfe gewähren nichts. Die Antwort enthält `warnings` für die Regel „Cover“ (Design §4.1), soweit sie aus dem Entwurf allein folgt, nach derselben Logik wie `PolicyIndex.end_code`: Nur wenn die Ressource einen `cover.set_position`-Grant hat, gilt `cover.open` gewährt, aber 100 in keinem seiner `position_pct`-Intervalle → `cover_open_never_offered`, entsprechend `cover.close` und 0 → `cover_close_never_offered`. Ohne `set_position`-Grant gibt es keine Regel und keine Warnung. Ein Deny auf `cover.set_position` ändert daran nichts, denn ein Deny erweitert nie; Fences prüft erst die Live-Vorschau.
 - `DELETE /roles/{id}/draft?expected_version=` verwirft den Entwurf.
 - `GET /roles/{id}/diff?from=<n>&to=<n|draft>` (Default: neueste veröffentlichte Version gegen Entwurf) → `{changes: [{resource_id, action, type, before, after}], affected: {assignments, stays: [{id, unit_name, status}], open_sessions}}` mit `type` ∈ `added`, `removed`, `widened`, `narrowed`, `changed`. Reine Funktion `diff_rules(before: RoleRules | None, after: RoleRules) -> list[Change]`: je (Ressource, Aktion) und Parameter vergleicht sie die Vereinigung der Intervalle als Decimal-Mengen (umfasst mehr → `widened`, weniger → `narrowed`, Schrittwechsel → `changed`), Enum-Mengen entsprechend; ein neuer Deny ist `narrowed`, ein entfernter `widened`.
 - `POST /roles/{id}/publish {expected_version, rollout: false}`: 409, wenn `draft_based_on` nicht die neueste veröffentlichte Version ist (jemand hat inzwischen veröffentlicht) oder die Version abweicht. Neue `RoleVersion(id=f"{template_id}@{n + 1}", grants, denies, published_at, based_on_version)`; veröffentlichte Versionen ändert keine Route mehr. Entwurf geleert, Policy-Bump, Audit `role.publish` mit alter und neuer `policy_version`. `rollout: true` → 400 bis Task 10.6.
 
 - [ ] **Step 1 – Unit-Tests für `diff_rules` (rot):** hinzugefügter und entfernter Grant, 19–23 → 19–24 `widened`, → 20–23 `narrowed`, Schritt 0,5 → 1 `changed`, neuer Deny `narrowed`; das A10-Beispiel mit zwei Intervallen wird nicht zu einer Spanne verschmolzen. Lauf: `uv run pytest tests/unit/test_role_diff.py -q` → FAIL.
 - [ ] **Step 2 – `diff_rules` in `services/roles.py` implementieren;** Lauf wie Step 1 → PASS.
-- [ ] **Step 3 – Integrationstests der Rollen-API (rot):** Entwurf mit `res_unknown` → 400; Grenze `21.55` → 400; `cover.open` mit `position_pct` 0–60 → 200 mit Warnung `cover_open_never_offered`, mit 0–100 ohne Warnung, mit zusätzlichem Deny auf `cover.set_position` weiterhin mit Warnung; Entwurf speichern und laden; zweimal vom selben Stand veröffentlichen → zweites Mal 409; Veröffentlichen erzeugt v1 und v2 mit `based_on`; Aufenthalte behalten ohne Rollout ihre Version; `GET diff` nennt die betroffenen Aufenthalte; `rollout: true` → 400. Lauf: `uv run pytest tests/integration/test_admin_roles.py -q` → FAIL.
+- [ ] **Step 3 – Integrationstests der Rollen-API (rot):** Entwurf mit `res_unknown` → 400; Grenze `21.55` → 400; `cover.open` plus `cover.set_position` 0–60 → 200 mit Warnung `cover_open_never_offered`; `cover.open` ohne `set_position`-Grant → keine Warnung; `set_position` 0–100 → keine Warnung; zusätzlicher Deny auf `cover.set_position` → Warnung bleibt; Entwurf speichern und laden; zweimal vom selben Stand veröffentlichen → zweites Mal 409; Veröffentlichen erzeugt v1 und v2 mit `based_on`; Aufenthalte behalten ohne Rollout ihre Version; `GET diff` nennt die betroffenen Aufenthalte; `rollout: true` → 400. Lauf: `uv run pytest tests/integration/test_admin_roles.py -q` → FAIL.
 - [ ] **Step 4 – Dienst und Routen implementieren;** Lauf wie Step 3 → PASS.
 - [ ] **Step 5 – Grün:** Gateway-Prüfung.
 - [ ] **Step 6 – Commit:** `feat(admin): role drafts, versions, diff and publish`.
@@ -467,7 +472,7 @@ Verhalten:
 - Modify: `myha_gateway/app.py`
 - Test: `tests/integration/test_admin_explain.py`
 
-Verhalten: `GET /api/v1/admin/preview/{preview_id}/explain?resource_id=` (`require_csrf`; nur die Vorschau des aufrufenden Admins, wie die Vorschau-Routen aus Teilplan 2) → je angebotener Schreibaktion der Ressource plus `state.read`: `{action, decision: {code, public_code}, grants: [matched ids], denied, fences, capability}`. `decision` kommt aus `decide(execute=False)` mit der Live-`state_view`; `fences` sind ausschließlich `index.fences(ctx, resource_id, action)` als JSON, nie `ctx.fences` (enthält die Unit-Fences aller Units); `capability` ist `effective_capability` oder `null`. Ressource außerhalb des Scopes → 404 `NOT_FOUND` wie in Teilplan 2.
+Verhalten: `GET /api/v1/admin/preview/{preview_id}/explain?resource_id=` (`require_csrf`; nur die Vorschau des aufrufenden Admins, wie die Vorschau-Routen aus Teilplan 2) → je angebotener Schreibaktion der Ressource plus `state.read`: `{action, decision: {code, public_code}, grants: [matched ids], denied, fences, capability}`. `decision` kommt für Aktionen ohne Parameter aus `decide(..., execute=False)` mit der Live-`state_view`; für Aktionen mit Parametern (`light.set_level`, `climate.set_temperature`, `climate.set_mode`, `cover.set_position`) ist `decision` `null`, denn ein Code gilt dort nur für einen konkreten Wert: Die erlaubten Werte stehen in `capability`, den Code je Wert liefert `simulate` aus Teilplan 2; `fences` sind ausschließlich `index.fences(ctx, resource_id, action)` als JSON, nie `ctx.fences` (enthält die Unit-Fences aller Units); `capability` ist `effective_capability` oder `null`. Ressource außerhalb des Scopes → 404 `NOT_FOUND` wie in Teilplan 2.
 
 - [ ] **Step 1 – Tests (rot):** Fence einer anderen Unit fehlt in der Erklärung; Grant-IDs der Treffer; Deny → `denied: true` und `DENIED_BY_RULE`; Ressource außerhalb → 404; Vorschau eines anderen Admins → abgelehnt wie in Teilplan 2. Lauf: `uv run pytest tests/integration/test_admin_explain.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
@@ -479,13 +484,14 @@ Verhalten: `GET /api/v1/admin/preview/{preview_id}/explain?resource_id=` (`requi
 **Files:**
 - Create: `myha_gateway/events/admin_hub.py`, `myha_gateway/events/admin_ws.py`
 - Modify: `myha_gateway/auth/admin.py` (`csrf_ok` prüft auch einen übergebenen Token), `myha_gateway/deps.py` (`admin_hub`), `myha_gateway/app.py` (Route, Hub-Task im Lifespan)
-- Test: `tests/acceptance/test_matrix_admin.py`, `tests/integration/test_admin_ws.py`
+- Test: `tests/acceptance/test_matrix_admin.py` (A04 und Routen-Audit), `tests/integration/test_admin_ws.py`
 
 Verhalten:
+- Routen-Audit: `test_every_admin_api_route_requires_the_guard` erlaubt ab hier genau eine WebSocket-Route, `/api/v1/admin/events` mit dem Endpunkt aus `events/admin_ws.py`; jede andere Route bleibt ein `APIRoute`.
 - `WS /api/v1/admin/events`: Die `PeerGuardMiddleware` weist fremde Peers wie heute vor dem Handshake ab. Danach genau ein `X-Remote-User-Id`, `accept()`, erste Nachricht innerhalb 5 s `{"type": "auth", "csrf": "<token>"}`, sonst Close 4401. Prüfung: `guard.identity(websocket, fresh=True)` und CSRF-Token von heute oder gestern für diesen Benutzer und den `X-Ingress-Path` des Handshakes; `Sec-Fetch-Site` muss, falls vorhanden, `same-origin` sein. Fehlschlag → Close 4403. Erfolg → `{"type": "ready"}`. Danach alle 5 s `identity(fresh=True)`; jeder Fehlschlag → `{"type": "admin.revoked"}` und Close 4403. Weitere Client-Nachrichten → Close 1008; Frames ≤ 4 KiB.
-- `AdminHub`: Solange mindestens ein Admin verbunden ist, liest ein Task alle 2 s in einer kurzen Lesesession `max(audit_event.id)`, `instance.policy_version` und die Zahl offener Pairing-Anfragen sowie die mtime von `state_dir/backup-status.json` (fehlt die Datei, zählt das als unverändert). Änderungen → `audit.appended {last_id}`, `policy.changed {policy_version}`, `pairings.changed {pending}`, `backup.status {}`. Die UI lädt daraufhin neu; der Hub braucht keine Aufrufe aus anderen Diensten. Je Verbindung eine begrenzte Queue (64), Überlauf → Close 1013. Keine Lesesession bleibt über eine Schleifenrunde offen. Im Restore-Modus liest der Hub nichts.
+- `AdminHub`: Solange mindestens ein Admin verbunden ist, liest ein Task alle 2 s in einer kurzen Lesesession `max(audit_event.id)`, `instance.policy_version` und einen Hash über die IDs der offenen Pairing-Anfragen (eine Anfrage, die abläuft, während eine neue kommt, ändert die Zahl nicht, den Hash schon) sowie die mtime von `state_dir/backup-status.json` (fehlt die Datei, zählt das als unverändert). Änderungen → `audit.appended {last_id}`, `policy.changed {policy_version}`, `pairings.changed {}`, `backup.status {}`. Die UI lädt daraufhin neu; der Hub braucht keine Aufrufe aus anderen Diensten. Je Verbindung eine begrenzte Queue (64), Überlauf → Close 1013. Keine Lesesession bleibt über eine Schleifenrunde offen. Im Restore-Modus liest der Hub nichts.
 
-- [ ] **Step 1 – Tests (rot):** ohne Auth-Nachricht → 4401 nach 5 s (Uhr injiziert); falscher CSRF → 4403; `test_a04_admin_ws_closes_after_demotion` (Besitzer über `_sim/auth/users` herabgestuft → `admin.revoked` und Close 4403 innerhalb 5 s plus Toleranz); neue Audit-Zeile → `audit.appended` innerhalb 2 s; neue Pairing-Anfrage → `pairings.changed`; fremder Peer → Handshake abgelehnt. Lauf: `uv run pytest tests/integration/test_admin_ws.py tests/acceptance/test_matrix_admin.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** ohne Auth-Nachricht → 4401 nach 5 s (Uhr injiziert); falscher CSRF → 4403; `test_a04_admin_ws_closes_after_demotion` (Besitzer über `_sim/auth/users` herabgestuft → `admin.revoked` und Close 4403 innerhalb 5 s plus Toleranz); neue Audit-Zeile → `audit.appended` innerhalb 2 s; neue Pairing-Anfrage → `pairings.changed`, auch wenn gleichzeitig eine andere abläuft; fremder Peer → Handshake abgelehnt; der Routen-Audit kennt die WS-Route. Lauf: `uv run pytest tests/integration/test_admin_ws.py tests/acceptance/test_matrix_admin.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(admin): admin event socket with first-message auth and 5 s role checks (A04)`.
@@ -502,7 +508,7 @@ Verhalten:
 
 Verhalten:
 - `HashRouter` mit `#/rooms`, `#/people`, `#/roles/:id?`, `#/preview`, `#/stays`, `#/sessions`, `#/setup`, `#/audit`, `#/publish/:id?`, `#/restore`; Start `#/setup` bei `setup_state == "fresh"`, `#/restore` bei `restore_pending`, sonst `#/rooms`.
-- Basis-URL = `location.origin + location.pathname` mit garantiertem `/` am Ende: Das ist der Ingress-Prefix, nie hart codiert. Alle API-Pfade relativ (`api/v1/admin/…`).
+- Basis-URL = `new URL(".", document.baseURI)`; Sonderfall: endet `location.pathname` nicht auf `/` (Ingress-Eintrag ohne Slash), wird zuerst `/` angehängt, sonst fiele das letzte Pfadsegment weg. Das ist der Ingress-Prefix, nie hart codiert. Alle API-Pfade relativ (`api/v1/admin/…`).
 - `client.ts` – `request(method, path, body?)`: JSON, `credentials: "same-origin"`, `redirect: "error"`; Header `X-MyHA-CSRF` bei jeder Anfrage aus der Session im Speicher (nie Storage). 403 → Session genau einmal neu laden (ein gemeinsames Promise für gleichzeitige Fehlschläge) und die Anfrage genau einmal wiederholen; zweites 403 → Zustand `denied` („Kein Admin-Zugang mehr“). 503 nach `details.reason`: `supervisor_version` → sperrender Hinweis mit Ist- und Mindestversion; `supervisor_unreachable` → Banner, neuer Versuch nach 5 s; `restore_pending` → `#/restore`; `ha_unavailable` → Banner. 409 → `ConflictError` mit `current_version` („neu laden und erneut versuchen“). Sonstige Fehler → Hinweis mit der Servermeldung.
 
 ```ts
@@ -524,7 +530,7 @@ async function request<T>(method: string, path: string, body?: unknown, retried 
 - `events.ts`: Admin-WS (`wss:` oder `ws:` nach Seitenprotokoll, Pfad relativ zur Basis), erste Nachricht `{"type": "auth", "csrf"}`, Reconnect mit Backoff 1–10 s; 4403 → Session einmal neu laden und neu verbinden, zweites 4403 → `denied`; `subscribe(type, handler)`.
 - Shell: Navigation aus dem Mockup (Icons aus `@tabler/icons-react`), `aria-current="page"`, Skip-Link, DE/EN über `useI18n` aus Teilplan 2 mit eigenen Admin-Tabellen (Admin-Texte landen nie im Gast-Bundle), `ThemeProvider` aus Teilplan 2.
 
-- [ ] **Step 1 – Client-Tests (rot):** `client.test.ts`: Basis-URL mit und ohne `/` am Ende; CSRF-Header bei GET und POST; 403 → genau ein Session-Reload und eine Wiederholung; zwei parallele 403 → ein Reload; jeder 503-Grund führt in seinen Zustand; 409 liefert `current_version`; Storage wird nie beschrieben. Lauf: `cd myha/web && pnpm test src/admin/api/client` → FAIL.
+- [ ] **Step 1 – Client-Tests (rot):** `client.test.ts`: Basis-URL für `/api/hassio_ingress/abc/`, `/api/hassio_ingress/abc` und `/admin.html`; CSRF-Header bei GET und POST; 403 → genau ein Session-Reload und eine Wiederholung; zwei parallele 403 → ein Reload; jeder 503-Grund führt in seinen Zustand, `supervisor_version` zeigt den sperrenden Hinweis mit Ist- und Mindestversion (A03 in der UI); 409 liefert `current_version`; Storage wird nie beschrieben. Lauf: `cd myha/web && pnpm test src/admin/api/client` → FAIL.
 - [ ] **Step 2 – `client.ts` und `session.tsx` implementieren;** Lauf wie Step 1 → PASS.
 - [ ] **Step 3 – Event-Tests (rot):** `events.test.ts`: sendet zuerst `auth`, verbindet mit Backoff neu, zweimal 4403 → `denied`. Lauf: `pnpm test src/admin/api/events` → FAIL.
 - [ ] **Step 4 – `events.ts` implementieren;** Lauf wie Step 3 → PASS.
@@ -551,9 +557,9 @@ Verhalten (Mockup „Rooms & devices“, E10): Raumliste mit Zählern und Hinwei
 - Create: `web/src/admin/screens/People.tsx`, `web/src/admin/screens/PairingDialog.tsx`
 - Test: `web/src/admin/screens/People.test.tsx`
 
-Verhalten (E11): Bewohner (Name, Benutzername, Status, aktive Sessions; anlegen mit Passwort ab 10 Zeichen; Dialog „Passwort zurücksetzen“, der nichts zurückzeigt; deaktivieren und aktivieren); Gruppen (anlegen, umbenennen, löschen; Mitgliedereditor mit Gültigkeitsdaten in der Instanzzeitzone, gesendet als UTC); Displays (gepaarte Displays mit Scope und Ablauf aus ihren Sessions, „Gerät widerrufen“; offene Pairing-Anfragen aus `GET pairings`, aktualisiert über `pairings.changed`; Bestätigen-Dialog verlangt den am Tablet abgelesenen Code, neuen oder bestehenden Display-Namen und mindestens eine Unit, ohne Unit bleibt „Bestätigen“ deaktiviert; Ablehnen). Zuweisungen eines Principals oder einer Gruppe nur lesend mit Link zu „Roles & rights“.
+Verhalten (E11): Bewohner (Name, Benutzername, Status, aktive Sessions; anlegen mit Passwort ab 10 Zeichen; Dialog „Passwort zurücksetzen“, der nichts zurückzeigt und bei Bewohnern ohne Credential (nach einem Restore) zusätzlich den Benutzernamen verlangt; deaktivieren und aktivieren); Gruppen (anlegen, umbenennen, löschen; Mitgliedereditor mit Gültigkeitsdaten in der Instanzzeitzone, gesendet als UTC); Displays (gepaarte Displays mit Scope und Ablauf aus ihren Sessions, „Gerät widerrufen“; offene Pairing-Anfragen aus `GET pairings`, aktualisiert über `pairings.changed`; Bestätigen-Dialog verlangt den am Tablet abgelesenen Code, neuen oder bestehenden Display-Namen und mindestens eine Unit, ohne Unit bleibt „Bestätigen“ deaktiviert; Ablehnen). Zuweisungen eines Principals oder einer Gruppe nur lesend mit Link zu „Roles & rights“.
 
-- [ ] **Step 1 – Tests (rot):** Bestätigen ohne Unit deaktiviert; Code wird gesendet und ein falscher Code zeigt den Fehler; nach dem Reset erscheint kein Passwort; Gültigkeit geht als UTC-ISO raus; Pairing-Liste lädt nach `pairings.changed` neu. Lauf: `pnpm test src/admin/screens/People` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Bestätigen ohne Unit deaktiviert; Code wird gesendet und ein falscher Code zeigt den Fehler; nach dem Reset erscheint kein Passwort; ohne Credential ist das Namensfeld Pflicht, ein 409 zeigt „Name vergeben“; Gültigkeit geht als UTC-ISO raus; Pairing-Liste lädt nach `pairings.changed` neu. Lauf: `pnpm test src/admin/screens/People` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Web-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(web): people, groups and display pairing approval`.
@@ -615,7 +621,7 @@ Verhalten: `POST /api/v1/admin/stays/{id}/checkout {expected_version}` in einer 
 
 - [ ] **Step 1 – Tests (rot):**
   - `test_a25_checkout_ends_sessions_refresh_families_and_invites`: Browser-Session mit offener WS-Verbindung, native Familie und eine offene Einladung → Checkout → WS geschlossen innerhalb 5 s, `/me` 401 für beide, Refresh 401, Redeem der offenen Einladung 401.
-  - `test_a26_no_static_room_qr`: Einladungen entstehen nur über `stays/{id}/invites`, `sessions/{id}/replace` und `setup/guest-test` (Routen-Audit über `iter_route_contexts`); es gibt keinen wiederverwendbaren Unit-Code; Redeem ohne Secret im Body (leer oder nur als Query `?i=`) erzeugt keine Session (4xx, kein `Set-Cookie`); eingelöste und offene Einladung nach dem Checkout → 401.
+  - `test_a26_no_static_room_qr`: Einladungen entstehen nur über `stays/{id}/invites`, `stays/{id}/move`, `sessions/{id}/replace` und `setup/guest-test` (Routen-Audit über `iter_route_contexts`); es gibt keinen wiederverwendbaren Unit-Code; Redeem ohne Secret im Body (leer oder nur als Query `?i=`) erzeugt keine Session (4xx, kein `Set-Cookie`); eingelöste und offene Einladung nach dem Checkout → 401.
   - `test_a27_next_stay_sees_nothing_of_previous_stay`: Gast von Aufenthalt A erzeugt Befehle; Checkout; Gast von Aufenthalt B in derselben Unit: `GET /api/v1/commands/{id aus A}` → 404, Dashboard ohne Historienfelder, keine öffentliche Route liefert Audit oder Befehle von A.
   Lauf: `uv run pytest tests/acceptance/test_matrix_stays.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
@@ -639,18 +645,19 @@ Verhalten: `POST /api/v1/admin/stays/{id}/extend {ends_at, extend_sessions, expe
 
 **Files:**
 - Create: `myha_gateway/db/migrations/versions/NNNN_stay_move.py`
-- Modify: `myha_gateway/db/models.py` (`Stay.moved_from_id: str | None`, FK `stay.id`), `myha_gateway/services/stays.py`, `myha_gateway/api/admin/stays.py`
+- Modify: `myha_gateway/db/models.py` (`Stay.moved_from_id: str | None`, FK `stay.id`), `myha_gateway/services/stays.py`, `myha_gateway/api/admin/stays.py`, `myha_gateway/api/admin/invites.py` (409 für verschobene Entwürfe)
 - Test: `tests/acceptance/test_matrix_stays.py`, `tests/unit/test_db.py`
 
-Verhalten (Spez §8.6, Design §6 „Zimmerwechsel erzeugt neuen `draft`“):
-- `POST /api/v1/admin/stays/{id}/move {unit_id, expected_version}` für bestätigte, nicht beendete Aufenthalte mit anderer Ziel-Unit → neuer **Entwurf** in der Ziel-Unit mit `starts_at = max(now, alt.starts_at)`, `ends_at = alt.ends_at`, gleicher Rollenvorlage und -version, gleichen Geräteplätzen und gleicher externer Referenz, `moved_from_id = alt.id`. Der alte Aufenthalt bleibt bis zur Bestätigung unverändert; der Entwurf ist in der Vorschau prüfbar (A50-Pfad). Audit `stay.move`.
-- `POST /api/v1/admin/stays/{neu}/confirm {expected_version, carry_over_sessions}` für einen verschobenen Entwurf, in einer Transaktion: neuer Aufenthalt `confirmed`; alter `checked_out` (`checked_out_at = now`), seine offenen Einladungen widerrufen. `carry_over_sessions = true` → jede aktive Session des alten Aufenthalts erhält `stay_id = neu.id`, **`unit_ids = [neu.unit_id]`**, `not_after = min(not_after, neu.ends_at)`, ihr Gast-Principal `stay_id = neu.id`. `false` (Default) → diese Sessions samt Familien widerrufen (Grund `room_change`), die Gäste brauchen neue Einladungen. Policy-Bump; nach dem Commit `PolicyChanged` (übernommene Verbindungen erhalten einen Snapshot nur mit dem neuen Raum) und `SessionRevoked` für die widerrufenen. Antwort mit Zählern; Audit `stay.move_confirm`.
-- Die Rechte am alten Raum enden in beiden Fällen mit der Bestätigung. Die Übernahme ist eine ausdrückliche, protokollierte Entscheidung des Betreibers und geschieht nie automatisch (offener Punkt 2).
+Verhalten (Spez §8.6 „neu zu prüfender Zielaufenthalt samt Einladung“, Design §6 „Zimmerwechsel erzeugt neuen `draft`“; entschieden, siehe Entscheidung 2):
+- `POST /api/v1/admin/stays/{id}/move {unit_id, redeem_minutes, expected_version}` (`require_csrf`) für bestätigte, nicht beendete Aufenthalte mit anderer Ziel-Unit → in einer Transaktion ein neuer **Entwurf** in der Ziel-Unit (`starts_at = max(now, alt.starts_at)`, `ends_at = alt.ends_at`, gleiche Rollenvorlage und -version, gleiche Geräteplätze und externe Referenz, `moved_from_id = alt.id`) **und** je Geräteplatz eine Einladung über die Einladungslogik aus Teilplan 2 (`redeem_until = min(now + redeem_minutes, ends_at)`, Default 15, höchstens 1440). Antwort genau einmal `{stay, invites: [{invite_id, device_slot, join_url, qr_svg, redeem_until, usable_until}]}`. Einlösen gelingt erst nach der Bestätigung, weil Redeem (Teilplan 2) einen bestätigten Aufenthalt verlangt. Der alte Aufenthalt bleibt bis dahin unverändert; der Entwurf ist in der Vorschau prüfbar (A50-Pfad). Audit `stay.move` ohne Secrets.
+- `POST /api/v1/admin/stays/{id}/invites` (Teilplan 2) auf einen Entwurf mit `moved_from_id` → 409: Diese Route bestätigt Entwürfe und würde die Bestätigung des Zimmerwechsels umgehen. Nach der Bestätigung gilt sie wieder normal (abgelaufene Move-Einladungen ersetzt der Admin dann darüber).
+- `POST /api/v1/admin/stays/{neu}/confirm {expected_version, carry_over_sessions}` für einen verschobenen Entwurf: 409, wenn der alte Aufenthalt nicht mehr `confirmed` oder schon beendet ist (ausgecheckt, storniert, abgelaufen). Sonst in einer Transaktion: neuer Aufenthalt `confirmed`; alter `checked_out` (`checked_out_at = now`), seine offenen Einladungen widerrufen. `carry_over_sessions = true` → jede aktive Session des alten Aufenthalts erhält `stay_id = neu.id`, **`unit_ids = [neu.unit_id]`**, `not_after = min(not_after, neu.ends_at)`, ihr Gast-Principal `stay_id = neu.id`. `false` (Default) → diese Sessions samt Familien widerrufen (Grund `room_change`); die Gäste lösen die Move-Einladungen ein. Policy-Bump; nach dem Commit `PolicyChanged` (übernommene Verbindungen erhalten einen Snapshot nur mit dem neuen Raum) und `SessionRevoked` für die widerrufenen. Antwort mit Zählern; Audit `stay.move_confirm`.
+- Die Rechte am alten Raum enden in beiden Fällen mit der Bestätigung. Die Übernahme ist eine ausdrückliche, protokollierte Entscheidung des Betreibers und geschieht nie automatisch.
 
-- [ ] **Step 1 – Tests (rot):** Migration legt `moved_from_id` an; `test_a51_room_change_with_carry_over` (offene WS-Verbindung erhält einen Snapshot nur mit dem neuen Raum; Aktion auf eine Ressource des alten Raums → `NOT_FOUND`; `session.unit_ids == [neu.unit_id]`); `test_a51_room_change_without_carry_over` (Sessions widerrufen; alte eingelöste Einladungen bleiben verbraucht; neue Einladungen für den neuen Aufenthalt funktionieren); `test_move_draft_is_previewable_and_changes_nothing_before_confirm`. Lauf: `uv run pytest tests/acceptance/test_matrix_stays.py tests/unit/test_db.py -q -k "move or room_change or migrat"` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Migration legt `moved_from_id` an; die Move-Antwort enthält je Geräteplatz genau eine Einladung, ein zweiter Abruf liefert keine Secrets; `test_a51_moved_draft_cannot_bypass_confirm` (Invites-Route auf den Entwurf → 409; Redeem einer Move-Einladung vor der Bestätigung → 401 ohne Session; Bestätigen nach dem Checkout des alten Aufenthalts → 409); `test_a51_room_change_with_carry_over` (offene WS-Verbindung erhält einen Snapshot nur mit dem neuen Raum; Aktion auf eine Ressource des alten Raums → `NOT_FOUND`; `session.unit_ids == [neu.unit_id]`); `test_a51_room_change_without_carry_over` (Sessions widerrufen; alte eingelöste Einladungen bleiben verbraucht; Move-Einladungen funktionieren nach der Bestätigung); `test_move_draft_is_previewable_and_changes_nothing_before_confirm`. Lauf: `uv run pytest tests/acceptance/test_matrix_stays.py tests/unit/test_db.py -q -k "move or room_change or migrat"` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
-- [ ] **Step 4 – Commit:** `feat(stays): room change into a reviewed draft with optional carry-over (A51)`.
+- [ ] **Step 4 – Commit:** `feat(stays): room change into a reviewed draft with invites and optional carry-over (A51)`.
 
 ### Task 10.5: Gerätezugang ersetzen (A51)
 
@@ -685,9 +692,9 @@ Verhalten (Design §4.1): `POST /api/v1/admin/roles/{id}/publish {expected_versi
 - Modify: `myha_gateway/app.py` (Hintergrundtask im Admin-Lifespan)
 - Test: `tests/integration/test_housekeeping.py`
 
-Verhalten: `run_housekeeping(engine, now, retention_days) -> dict[str, int]` in einer Schreibtransaktion löscht `audit_event` mit `ts < now − audit_retention_days`; `ws_ticket` mit `expires_at < now − 1 h`; `pairing_request` mit `expires_at < now − 24 h`; `invite` mit `redeem_until < now − Aufbewahrung`; Sessions mit `not_after < now − Aufbewahrung` oder `revoked_at < now − Aufbewahrung` (widerrufene Displays laufen sonst ein Jahr weiter) samt ihren `refresh_token`-, `ws_ticket`- und `command`-Zeilen (in Fremdschlüssel-Reihenfolge). Gast-Principals und Aufenthalte bleiben (klein). Erster Lauf 60 s nach dem Start, dann stündlich; Ergebnis als Zählerzeile im Log; Fehler werden geloggt und beenden nichts; im Restore-Modus übersprungen.
+Verhalten: `run_housekeeping(engine, now, retention_days) -> dict[str, int]` in einer Schreibtransaktion löscht `audit_event` mit `ts < now − audit_retention_days`; `ws_ticket` mit `expires_at < now − 1 h`; `pairing_request` mit `expires_at < now − 24 h`; `invite` mit `redeem_until < now − Aufbewahrung`, aber nur von Aufenthalten, die beendet, ausgecheckt oder storniert sind (Testeinladungen ohne Aufenthalt nach Ablauf), damit die Übersicht eines laufenden Aufenthalts vollständig bleibt; Sessions mit `not_after < now − Aufbewahrung` oder `revoked_at < now − Aufbewahrung` (widerrufene Displays laufen sonst ein Jahr weiter) samt ihren `refresh_token`-, `ws_ticket`- und `command`-Zeilen (in Fremdschlüssel-Reihenfolge). Gast-Principals und Aufenthalte bleiben (klein). Erster Lauf 60 s nach dem Start, dann stündlich; Ergebnis als Zählerzeile im Log; Fehler werden geloggt und beenden nichts; im Restore-Modus übersprungen.
 
-- [ ] **Step 1 – Tests (rot):** jede Kategorie wird an der Grenze gelöscht und knapp davor behalten; Löschreihenfolge funktioniert mit `foreign_keys=ON`; Restore-Modus überspringt; nach dem Löschen aller Audit-Zeilen wiederholt sich keine ID (AUTOINCREMENT). Lauf: `uv run pytest tests/integration/test_housekeeping.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** jede Kategorie wird an der Grenze gelöscht und knapp davor behalten; abgelaufene Einladungen eines laufenden Aufenthalts bleiben; Löschreihenfolge funktioniert mit `foreign_keys=ON`; Restore-Modus überspringt; nach dem Löschen aller Audit-Zeilen wiederholt sich keine ID (AUTOINCREMENT). Lauf: `uv run pytest tests/integration/test_housekeeping.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(gateway): hourly housekeeping with audit retention`.
@@ -705,7 +712,7 @@ Abnahme: A44 (Serverteil, real in 13.6); Serverteil von A37 (Pin-Wechsel im Trus
 - Modify: `myha_gateway/__main__.py` (`_serve` nutzt `PublicListener`, Signatur `_serve(settings, public_server=...)` bleibt), `myha_gateway/deps.py`, `myha_gateway/api/admin/session.py`
 - Test: `tests/integration/test_public_listener.py`, `tests/integration/test_startup.py` (bestehende Public-Tests bleiben grün)
 
-`deps.py`: `refresh_public()` wird geteilt in die reine Prüfung `decide_public() -> PublicDecision(ready, origin, tls, reason)` (dieselben Prüfungen wie heute) und `refresh_public()`, das das Ergebnis zuweist und den Grund zurückgibt. Neu: `AppContext.public_listener: PublicListener | None` (setzt `_serve`; in Unit-Tests `None`) und `apply_public(ctx, *, force=False) -> str | None` = `refresh_public()` plus `public_listener.reload(force=force)`.
+`deps.py`: `refresh_public()` wird geteilt in die reine Prüfung `decide_public() -> PublicDecision(ready, origin, tls, reason)` (dieselben Prüfungen wie heute) und `refresh_public()`, das das Ergebnis zuweist und den Grund zurückgibt. Neu: `AppContext.public_listener: PublicListener | None` (setzt `_serve`; in Unit-Tests `None`) und `apply_public(ctx) -> str | None` = `refresh_public()` plus `public_listener.reload()`.
 
 ```python
 class PublicListener:
@@ -717,18 +724,21 @@ class PublicListener:
         """Wait for the admin server, then loop: serve (origin, tls) as ctx decided; wait for the
         server to exit, reload() or stop; a failing server restarts with backoff 5 s → 60 s."""
 
-    def reload(self, *, force: bool = False) -> None:
+    def reload(self) -> None:
         """Wake the loop: stop the running server when public_ready, public_origin or public_tls
-        differ from what it serves, or always with ``force`` (certificate files changed in
-        place under the same paths), then start a new one if public_ready."""
+        differ from what it serves, then start a new one if public_ready."""
+
+    def reload_certificate(self) -> bool:
+        """E28 (Task 11.3): load_cert_chain on the running server's SSL context; open HTTPS and
+        WSS connections stay up. False when no server runs in tls mode."""
 
     @property
     def running(self) -> bool: ...
 ```
 
-`create_public_app(ctx)` entsteht je Start neu, damit CSP (`ws:` nur bei `http://`) und Proxy-Middleware (Task 11.2) den aktuellen Stand sehen. `GET /api/v1/admin/session` liefert zusätzlich `public_ready` und `public_reason`.
+`create_public_app(ctx)` entsteht je Start neu, damit die origin-gebundene CSP (`connect-src 'self' wss://<host>`, wie heute in `app.py`) und die Proxy-Middleware (Task 11.2) den aktuellen Stand sehen. `GET /api/v1/admin/session` liefert zusätzlich `public_ready` und `public_reason`.
 
-- [ ] **Step 1 – Tests (rot)** mit injizierter Factory und Fake-Servern wie in Task 4.2: aus beim Start → Origin und Proxy setzen, `apply_public` → Server startet; Origin-Wechsel → alter Server `should_exit`, neuer mit neuer CSP; Listener aus (Restore) → Server stoppt ohne Neustart; `reload(force=True)` startet auch bei unverändertem Setup neu, `reload()` dann nicht; Fehler → Backoff wie bisher; `stop` → kein Neustart; SIGTERM-Reihenfolge (bestehender Test) bleibt grün. Lauf: `uv run pytest tests/integration/test_public_listener.py tests/integration/test_startup.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot)** mit injizierter Factory und Fake-Servern wie in Task 4.2: aus beim Start → Origin und Proxy setzen, `apply_public` → Server startet; Origin-Wechsel → alter Server `should_exit`, neuer mit neuer CSP; Listener aus (Restore) → Server stoppt ohne Neustart; `reload()` bei unverändertem Setup startet nichts neu; Fehler → Backoff wie bisher; `stop` → kein Neustart; SIGTERM-Reihenfolge (bestehender Test) bleibt grün. Lauf: `uv run pytest tests/integration/test_public_listener.py tests/integration/test_startup.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(gateway): start, stop and restart the public listener at runtime`.
@@ -736,21 +746,27 @@ class PublicListener:
 ### Task 11.2: Proxy-Modus durchsetzen
 
 **Files:**
-- Create: `myha_gateway/proxy.py`
-- Modify: `myha_gateway/app.py` (`create_public_app`), `myha_gateway/deps.py` (`decide_public()` parst die CIDRs; der `shortcut:`-Kommentar zur reinen Vorhandenseinsprüfung entfällt)
-- Test: `tests/integration/test_proxy_mode.py`, `tests/integration/test_startup.py`
+- Create: `myha_gateway/proxy.py` (`ProxyPeerFilter`)
+- Modify: `myha_gateway/net.py` (aus Task 5b.7; `parse_proxy_cidrs`), `myha_gateway/app.py` (`create_public_app`), `myha_gateway/deps.py`
+- Test: `tests/unit/test_net.py`, `tests/integration/test_proxy_mode.py`, `tests/integration/test_startup.py`
 
-Verhalten: Bei `instance.tls_mode == "proxy"` (nicht beim Dev-Override) ist `ProxyPeerFilter(cidrs)` die äußerste Schicht: HTTP von einem Peer außerhalb `proxy_cidrs` → 403 JSON `UNAUTHENTICATED` mit Safety-Headern, WebSocket → Close 1008 vor dem Handshake. Darin setzt uvicorns `ProxyHeadersMiddleware(trusted_hosts=cidrs)` `scope["client"]` aus `X-Forwarded-For` und das Schema aus `X-Forwarded-Proto`, nur für vertrauenswürdige Peers. So sehen Rate-Limits, Audit-IP-Klassen und der Gastgerätetest den echten Client, ohne dass ein Dienst sich darum kümmern muss. `X-Forwarded-Host` wird nie verwendet; Origin-Prüfungen vergleichen weiter mit `ctx.public_origin`. Im Modus `tls` und im Dev-Override gilt kein Weiterleitungsheader (wie heute). `decide_public()` prüft die CIDRs jetzt mit `ipaddress.ip_network(strict=False)`; ein ungültiger Eintrag, `0.0.0.0/0` oder `::/0` halten den Listener mit Grund aus.
+Verhalten:
+- Heute hält `decide_public()` den Modus `proxy` mit dem Grund „proxy mode is not available yet“ zu; ein `shortcut:`-Kommentar verweist auf diesen Task. Der Task öffnet den Modus; Kommentar und Grund entfallen.
+- `parse_proxy_cidrs(raw: list[str]) -> tuple[IPv4Network | IPv6Network, ...]` in `net.py`: je Eintrag `ipaddress.ip_network(entry, strict=False)` (Host-Bits werden genullt, `10.0.0.5/24` → `10.0.0.0/24`), 1–16 Einträge, nie `0.0.0.0/0` oder `::/0`, kein Netz, das `172.30.32.0/23` (HAOS-hassio-Netz) oder `172.17.0.0/16` (Docker-Bridge) schneidet: Sonst würden der Supervisor oder der Docker-Gateway als Proxy vertraut. Fehler → `ValueError` mit Grund. `decide_public()`, `ProxyPeerFilter` und `ProxyHeadersMiddleware` nutzen dieselbe normalisierte Liste; ein Fehler hält den Listener mit Grund aus.
+- Bei `instance.tls_mode == "proxy"` (nicht beim Dev-Override) ist `ProxyPeerFilter(networks)` die äußerste Schicht: HTTP von einem Peer außerhalb → 403 JSON `UNAUTHENTICATED` mit Safety-Headern, WebSocket → Close 1008 vor dem Handshake. Darin setzt uvicorns `ProxyHeadersMiddleware(trusted_hosts=[str(n) for n in networks])` `scope["client"]` aus `X-Forwarded-For` und das Schema aus `X-Forwarded-Proto`, nur für vertrauenswürdige Peers. So sehen Rate-Limits, Audit-IP-Klassen und der Gastgerätetest den echten Client, ohne dass ein Dienst sich darum kümmern muss.
+- `X-Forwarded-Host` wird nie verwendet; Origin-Prüfungen und die origin-gebundene CSP (`connect-src 'self' wss://<host>`) bleiben an `ctx.public_origin`. Im Modus `tls` und im Dev-Override gilt kein Weiterleitungsheader (wie heute).
 
-- [ ] **Step 1 – Tests (rot):** Peer außerhalb → 403 bzw. 1008; Peer innerhalb mit `X-Forwarded-For: 198.51.100.7` → `GET /healthz` meldet `client_ip == "198.51.100.7"`; derselbe Header von außerhalb erreicht nie die App; Modus `tls` ignoriert den Header; Instanz mit CIDR `10.0.0.0/33` oder `0.0.0.0/0` → `decide_public()` liefert einen Grund, der Listener bleibt aus. Lauf: `uv run pytest tests/integration/test_proxy_mode.py tests/integration/test_startup.py -q` → FAIL.
-- [ ] **Step 2 – Implementieren** (Middleware-Reihenfolge wie beim Admin-Listener: zuletzt hinzugefügt ist außen).
-- [ ] **Step 3 – Grün:** Gateway-Prüfung.
-- [ ] **Step 4 – Commit:** `feat(gateway): proxy mode accepts only trusted proxy peers and their forwarded client`.
+- [ ] **Step 1 – Unit-Tests (rot):** `tests/unit/test_net.py`: `10.0.0.5/24` → `10.0.0.0/24`; `0.0.0.0/0`, `::/0`, `172.30.0.0/16`, `172.17.5.0/24`, `10.0.0.0/33`, leere Liste und 17 Einträge → `ValueError`. Lauf: `uv run pytest tests/unit/test_net.py -q` → FAIL.
+- [ ] **Step 2 – `parse_proxy_cidrs` implementieren;** Lauf wie Step 1 → PASS.
+- [ ] **Step 3 – Integrationstests (rot):** Peer außerhalb → 403 bzw. 1008; Peer innerhalb mit `X-Forwarded-For: 198.51.100.7` → `GET /healthz` meldet `client_ip == "198.51.100.7"`; derselbe Header von außerhalb erreicht nie die App; Instanz mit `10.0.0.5/24` lässt Peer `10.0.0.9` durch (Filter und Middleware nutzen dieselbe normalisierte Liste); Modus `tls` ignoriert den Header; ungültige CIDR-Liste → `decide_public()` liefert einen Grund, der Listener bleibt aus; gültige Proxy-Instanz → `public_ready`. Lauf: `uv run pytest tests/integration/test_proxy_mode.py tests/integration/test_startup.py -q` → FAIL.
+- [ ] **Step 4 – Filter, Middleware-Kette und `decide_public()` umsetzen** (zuletzt hinzugefügte Middleware ist außen, wie beim Admin-Listener); Lauf wie Step 3 → PASS.
+- [ ] **Step 5 – Grün:** Gateway-Prüfung.
+- [ ] **Step 6 – Commit:** `feat(gateway): proxy mode accepts only trusted proxy peers and their forwarded client`.
 
 ### Task 11.3: Zertifikate und Leaf-Pins; Zertifikatswechsel (E28)
 
 **Files:**
-- Modify: `myha_gateway/auth/trust.py` (DER-Leser, Kette, ausgelieferte Kette), `myha_gateway/public_listener.py` (Zertifikatswächter), `myha_gateway/settings.py` (`ssl_dir: Path = Path("/ssl")`, nur über `MYHA_SSL_DIR`, nie über App-Optionen)
+- Modify: `myha_gateway/auth/trust.py` (DER-Leser, Kette, ausgelieferte Kette), `myha_gateway/public_listener.py` (Zertifikatswächter, `reload_certificate()`), `myha_gateway/settings.py` (`ssl_dir: Path = Path("/ssl")`, nur über `MYHA_SSL_DIR`, nie über App-Optionen)
 - Test: `tests/unit/test_trust_der.py`, `tests/integration/test_cert_reload.py`
 
 Der DER-Leser ist klein, aber sicherheitsrelevant; er ersetzt eine neue Abhängigkeit (`cryptography`):
@@ -828,11 +844,11 @@ def cert_facts(der: bytes) -> CertFacts:
 
 Dazu `pem_chain(text) -> list[bytes]` (alle `BEGIN/END CERTIFICATE`-Blöcke über `ssl.PEM_cert_to_DER_cert`, Leaf zuerst wie in `fullchain.pem`) und `served_chain(origin, timeout=5) -> tuple[list[bytes], bool]` (blockierend, über `asyncio.to_thread`): zuerst Handshake mit `ssl.create_default_context()` (Ergebnis „vom System vertraut“), bei `SSLCertVerificationError` erneut mit `CERT_NONE` nur zum Auslesen; Kette über `SSLSocket.get_unverified_chain()` (Python 3.13). Die Kette ohne Prüfung dient nur der Pin-Berechnung, nie einer Vertrauensentscheidung.
 
-Zertifikatswächter (E28) in `PublicListener`: alle 60 s (injizierbar) im Modus `tls` `os.stat` von Zertifikat und Schlüssel (`st_mtime_ns`, `st_size`, `st_ino`). Bei einer Änderung `decide_public()`: ungültig → Warnung, der laufende Server behält das geladene Zertifikat, neuer Versuch im nächsten Takt; gültig → primären Pin aus dem Leaf neu berechnen und in einer Schreibsession `instance.trust_pins` schreiben (alter `primary` ersetzt mit `valid_from = now`, ein Ersatzpin gleich dem neuen Primärpin entfällt), `ctx.instance` ersetzen, `apply_public(ctx, force=True)` (erzwungener Neustart, weil sich bei gleichen Pfaden nur der Inhalt änderte), Audit `tls.reloaded` mit dem Pin.
+Zertifikatswechsel (E28) wörtlich nach Design, ohne Neustart: Der Wächter in `PublicListener` prüft alle 60 s (injizierbar) im Modus `tls` `os.stat` von Zertifikat und Schlüssel (`st_mtime_ns`, `st_size`, `st_ino`). Bei einer Änderung lädt er beide zuerst in einen frischen `SSLContext` (`load_cert_chain` mit der Passwort-Abwehr aus `deps.py`). Fehler → Warnung, der laufende Server behält sein Zertifikat, neuer Versuch im nächsten Takt. Sonst ruft `reload_certificate()` `load_cert_chain` auf dem `SSLContext` des laufenden Servers (`server.config.ssl`): Neue Handshakes sehen das neue Zertifikat, offene HTTPS- und WSS-Verbindungen bleiben bestehen (`shortcut:`-Kommentar: ändert sich eine Datei zwischen Prüfung und Laden, prüft der nächste Takt erneut). Danach wird der primäre Pin aus dem Leaf neu berechnet und in einer Schreibsession in `instance.trust_pins` geschrieben (alter `primary` ersetzt mit `valid_from = now`, ein Ersatzpin gleich dem neuen Primärpin entfällt); `ctx.instance` wird ersetzt, Audit `tls.reloaded` mit dem Pin. Das gilt unter beiden Policies: Auch `pin_optional` veröffentlicht den berechneten Primärpin.
 
 - [ ] **Step 1 – DER-Tests (rot):** `tests/unit/test_trust_der.py`: Pins gleich `openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64` für EC-P-256- und RSA-2048-Zertifikate sowie für eine Kette aus Leaf und Zwischen-CA (erzeugt mit der `openssl`-CLI wie `self_signed` in `test_startup.py`, Skip ohne `openssl`); `not_after` gleich `openssl x509 -enddate`; abgeschnittenes oder zufälliges DER → `ValueError`; GeneralizedTime (Jahr ≥ 2050) wird gelesen. Lauf: `uv run pytest tests/unit/test_trust_der.py -q` → FAIL.
 - [ ] **Step 2 – `cert_facts`, `pem_chain` und `served_chain` implementieren** (Code oben); Lauf wie Step 1 → PASS.
-- [ ] **Step 3 – Wächter-Tests (rot):** `tests/integration/test_cert_reload.py`: Zertifikat und Schlüssel durch ein neues Paar ersetzen → innerhalb eines Takts neuer Server (Fake-Zähler), `/me/trust` zeigt den neuen Primärpin, der alte fehlt; kaputter Schlüssel → Server läuft weiter, Warnung, kein Pin-Wechsel; gleicher Schlüssel mit neuem Zertifikat → Pin unverändert, Server neu gestartet. Lauf: `uv run pytest tests/integration/test_cert_reload.py -q` → FAIL.
+- [ ] **Step 3 – Wächter-Tests (rot):** `tests/integration/test_cert_reload.py` mit einem echten uvicorn-Server im Modus `tls` auf Port 0 (Zertifikate per `openssl` wie in `test_startup.py`): Zertifikat und Schlüssel durch ein neues Paar ersetzen → innerhalb eines Takts zeigt ein neuer TLS-Handshake das neue Leaf, eine vorher geöffnete WSS-Verbindung bleibt offen, kein Serverneustart, `/me/trust` zeigt den neuen Primärpin und der alte fehlt; kaputter Schlüssel → Handshake zeigt weiter das alte Leaf, Warnung, kein Pin-Wechsel; gleicher Schlüssel mit neuem Zertifikat → Pin unverändert, neues Leaf im Handshake; unter `pin_optional` steht der Primärpin ebenfalls im Profil. Lauf: `uv run pytest tests/integration/test_cert_reload.py -q` → FAIL.
 - [ ] **Step 4 – Zertifikatswächter in `PublicListener` implementieren;** Lauf wie Step 3 → PASS.
 - [ ] **Step 5 – Grün:** Gateway-Prüfung; Coverage `myha_gateway/auth/*` ≥ 85 %.
 - [ ] **Step 6 – Commit:** `feat(gateway): leaf pins from certificates and reload on certificate change (E28)`.
@@ -844,18 +860,18 @@ Zertifikatswächter (E28) in `PublicListener`: alle 60 s (injizierbar) im Modus 
 - Modify: `myha_gateway/app.py`
 - Test: `tests/integration/test_admin_setup.py`
 
-Verhalten (alle `require_csrf`, alle ersetzen `ctx.instance` nach dem Commit und rufen danach `apply_public(ctx)`; `setup/tls` mit `force=True`, damit auch neue Dateien unter den alten Pfaden geladen werden):
-- `PUT /api/v1/admin/setup/origin {public_origin, confirm_revoke_all, expected_version}`: kanonisch wie Browser ihn senden, geprüft mit `_origin_problem(origin, allow_http=False)` aus `deps.py` (Kleinbuchstaben, kein Standardport, nichts nach dem Host, kein `@`, kein IPv4-mapped IPv6); die Antwort nennt den Grund, nie einen Origin mit `@`. Wechsel eines bestehenden Origins verlangt `confirm_revoke_all = true` und widerruft alle Zugangs-Sessions, Refresh-Familien und offenen Einladungen, weil Zugangsdaten an den Origin gebunden sind und ein Host- oder Portwechsel neues Enrollment verlangt (Spez §8.4). Ohne Bestätigung → 409 mit den Zählern. Antwort `{public_ready, reason}`.
-- `PUT /api/v1/admin/setup/tls {tls_mode, cert_path?, key_path?, proxy_cidrs?, expected_version}`: `tls` → beide Pfade lösen (Symlinks aufgelöst) innerhalb von `settings.ssl_dir` auf, sind reguläre lesbare Dateien, `load_cert_chain` gelingt mit derselben Passwort-Abwehr wie `decide_public()` (ein verschlüsselter Schlüssel wird mit Grund abgelehnt), das Leaf ist nicht abgelaufen; `proxy` → 1–16 Netze per `ipaddress.ip_network(strict=False)`, nie `0.0.0.0/0` oder `::/0`. Primärpin neu (Modus `tls` aus der Datei; Modus `proxy` aus der ausgelieferten Kette, falls erreichbar, sonst leer bis „Neu berechnen“). `setup_state` wechselt von `fresh` auf `configured`, sobald `public_ready`. Audit.
+Verhalten (alle `require_csrf`; Änderungen an der Instanz schreiben in die DB, ersetzen danach `ctx.instance` und rufen `apply_public(ctx)`; liegen neue Dateien unter den alten Pfaden, lädt `setup/tls` sie über `reload_certificate()` aus Task 11.3):
+- `PUT /api/v1/admin/setup/origin {public_origin, confirm_revoke_all, expected_version}`: kanonisch, wie Browser ihn senden, geprüft mit `_origin_problem(origin, allow_http=False)` aus `deps.py` (Kleinbuchstaben, kein Standardport, nichts nach dem Host, kein `@`, kein IPv4-mapped IPv6); die Antwort nennt den Grund, nie einen Origin mit `@`. Der Wechsel eines bestehenden Origins verlangt `confirm_revoke_all = true` und widerruft alle Zugangs-Sessions, Refresh-Familien, offenen Einladungen und offenen Pairing-Anfragen (`status = rejected`), weil Zugangsdaten an den Origin gebunden sind und ein Host- oder Portwechsel neues Enrollment verlangt (Spez §8.4). Ohne Bestätigung → 409 mit den Zählern. Antwort `{public_ready, reason}`.
+- `PUT /api/v1/admin/setup/tls {tls_mode, cert_path?, key_path?, proxy_cidrs?, expected_version}`: `tls` → beide Pfade lösen (Symlinks aufgelöst) innerhalb von `settings.ssl_dir` auf, sind reguläre lesbare Dateien, `load_cert_chain` gelingt mit derselben Passwort-Abwehr wie `decide_public()` (ein verschlüsselter Schlüssel wird mit Grund abgelehnt), das Leaf ist nicht abgelaufen; der Primärpin kommt aus dem Leaf der Datei. `proxy` → `parse_proxy_cidrs` aus Task 11.2 (gespeichert wird die normalisierte Liste); der Primärpin kommt nur aus einem Handshake mit dem Origin, dem das System vertraut (`served_chain(...)[1]`); ist die Kette nicht vertrauenswürdig oder der Origin vom Gateway aus nicht erreichbar, bleibt der Primärpin leer und die Kette wird nur angezeigt. `setup_state` wechselt per DB-Update von `fresh` auf `configured`, sobald `public_ready`. Audit.
 - `PUT /api/v1/admin/setup/instance {name, operator_contact, timezone, session_limits, audit_retention_days, expected_version}`: Zeitzone über `zoneinfo.ZoneInfo`; Grenzen `guest_browser_days`, `resident_browser_days`, `resident_refresh_days` je 1–365, `display_days` 1–3650, `native_access_minutes` 5–60, Aufbewahrung 1–365. Gilt für neue Sessions; bestehende werden nie verlängert.
-- `GET /api/v1/admin/setup/trust` → `{policy, pins, computed_primary, chain: [{pin, not_after, role: "leaf"|"ca"}], warnings}`.
-- `PUT /api/v1/admin/setup/trust {policy, backup_pins, expected_version}`: je Ersatzpin Format (Base64 von 32 Byte), ungleich dem Primärpin, nicht der Pin eines CA-Zertifikats der aktuellen Kette (Datei im Modus `tls`, ausgelieferte Kette im Modus `proxy`) → sonst 400 „Pins müssen zu einem Leaf-Schlüssel gehören“; höchstens 2. `pin_required` ohne Ersatzpin → 200 mit Warnung (E28: eine Let's-Encrypt-Erneuerung mit neuem Schlüssel sperrt native Clients aus; Empfehlung `pin_optional` oder vorab erzeugter Ersatzschlüssel). Audit `trust.update`.
-- `POST /api/v1/admin/setup/trust/recompute` → Primärpin aus der aktuellen Kette (Modus `proxy`: was der Proxy jetzt ausliefert).
+- `GET /api/v1/admin/setup/trust` → `{policy, pins, computed_primary, chain: [{pin, not_after, role: "leaf"|"ca"}], system_trusted, warnings}`.
+- `PUT /api/v1/admin/setup/trust {policy, backup_pins, expected_version}`: je Ersatzpin Format (Base64 von 32 Byte), ungleich dem Primärpin, nicht der Pin eines CA-Zertifikats der aktuellen Kette (Datei im Modus `tls`, ausgelieferte Kette im Modus `proxy`) → sonst 400 „Pins müssen zu einem Leaf-Schlüssel gehören“; höchstens 2. Warnung (kein Fehler) unter **beiden** Policies, sobald die Pinliste nicht leer ist und keinen Ersatzpin hat (E28: eine Let's-Encrypt-Erneuerung mit neuem Schlüssel sperrt native Clients mit Pins aus; Empfehlung: vorab erzeugter Ersatzschlüssel). `pin_optional` veröffentlicht den berechneten Primärpin trotzdem. Audit `trust.update`.
+- `POST /api/v1/admin/setup/trust/recompute` → Primärpin aus der aktuellen Kette nach denselben Regeln (Modus `proxy`: nur aus einem systemvertrauten Handshake).
 - `setup_state`-Werte: `fresh`, `configured`, `verified` (Task 5b.7), `restore_pending` (abgeleitet im Restore-Modus).
 
-- [ ] **Step 1 – Tests für Origin und TLS (rot):** Origin mit Pfad, Slash am Ende, Großbuchstaben, Port 443 oder `http` → 400; Origin mit `@` → 400 ohne Echo; Origin-Wechsel ohne Bestätigung → 409 mit Zählern, mit Bestätigung → Sessions widerrufen und Public-Listener mit neuem Origin neu gestartet (Fake); Zertifikatspfad außerhalb `ssl_dir` (`../etc/passwd`, Symlink nach außen) → 400; verschlüsselter Schlüssel → 400 mit Grund, keine Rückfrage auf dem Terminal; Proxy `0.0.0.0/0` → 400; gültige Konfiguration setzt `setup_state` auf `configured`. Lauf: `uv run pytest tests/integration/test_admin_setup.py -q` → FAIL.
+- [ ] **Step 1 – Tests für Origin und TLS (rot):** Origin mit Pfad, Slash am Ende, Großbuchstaben, Port 443 oder `http` → 400; Origin mit `@` → 400 ohne Echo; Origin-Wechsel ohne Bestätigung → 409 mit Zählern, mit Bestätigung → Sessions widerrufen, offene Pairing-Anfrage `rejected`, Public-Listener mit neuem Origin neu gestartet (Fake); Zertifikatspfad außerhalb `ssl_dir` (`../etc/passwd`, Symlink nach außen) → 400; verschlüsselter Schlüssel → 400 mit Grund, keine Rückfrage auf dem Terminal; Proxy mit `172.30.32.0/24` oder `0.0.0.0/0` → 400; Proxy-CIDR `10.0.0.5/24` wird als `10.0.0.0/24` gespeichert; gültige Konfiguration setzt `setup_state` in der DB auf `configured`. Lauf: `uv run pytest tests/integration/test_admin_setup.py -q` → FAIL.
 - [ ] **Step 2 – `setup/origin` und `setup/tls` implementieren;** Lauf wie Step 1 → PASS.
-- [ ] **Step 3 – Tests für Instanz und Trustprofil (rot):** ungültige Zeitzone → 400; `native_access_minutes = 90` → 400; Ersatzpin gleich dem Pin der Zwischen-CA → 400; `pin_required` ohne Ersatzpin → 200 mit Warnung; das Profil erscheint über `/me/trust`; `trust/recompute` im Proxy-Modus nimmt die ausgelieferte Kette (Fake für `served_chain`). → FAIL.
+- [ ] **Step 3 – Tests für Instanz und Trustprofil (rot):** ungültige Zeitzone → 400; `native_access_minutes = 90` → 400; Ersatzpin gleich dem Pin der Zwischen-CA → 400; Pinliste ohne Ersatzpin → 200 mit Warnung unter `pin_required` **und** `pin_optional`; das Profil erscheint über `/me/trust`, unter `pin_optional` mit Primärpin; `trust/recompute` im Proxy-Modus nimmt den Pin aus einer systemvertrauten Kette und lässt ihn bei nicht vertrauter Kette leer (Fake für `served_chain`). → FAIL.
 - [ ] **Step 4 – `setup/instance`, `setup/trust` und `setup/trust/recompute` implementieren;** Lauf wie Step 3 → PASS.
 - [ ] **Step 5 – Grün:** Gateway-Prüfung.
 - [ ] **Step 6 – Commit:** `feat(admin): setup api for origin, tls, proxy, instance and trust profile`.
@@ -866,7 +882,7 @@ Verhalten (alle `require_csrf`, alle ersetzen `ctx.instance` nach dem Commit und
 - Modify: `myha_gateway/services/setup.py`, `myha_gateway/api/admin/setup.py`
 - Test: `tests/integration/test_setup_checks.py`
 
-`GET /api/v1/admin/setup/checks` → `[{name, status: ok|warn|fail|todo, detail, hint}]`; `POST /api/v1/admin/setup/checks/{name}/run` führt eine aktive Prüfung erneut aus. Aktive Prüfungen (`tls` im Proxy-Modus, `websocket`) bauen Verbindungen auf und laufen nur über `run`; `GET` zeigt ihr letztes Ergebnis aus dem Speicher, alle anderen berechnet es bei jedem Aufruf:
+`GET /api/v1/admin/setup/checks` → `[{name, status: ok|warn|fail|todo, detail, hint}]`; `POST /api/v1/admin/setup/checks/{name}/run` führt eine aktive Prüfung erneut aus. Aktive Prüfungen (`tls`, `websocket`) bauen Verbindungen auf und laufen nur über `run`; `GET` zeigt ihr letztes Ergebnis aus dem Speicher, alle anderen berechnet es bei jedem Aufruf:
 
 | name | Prüfung |
 |---|---|
@@ -874,14 +890,15 @@ Verhalten (alle `require_csrf`, alle ersetzen `ctx.instance` nach dem Commit und
 | `home_assistant` | `ha.connected`, Temperatureinheit °C, Core- und Supervisor-Version, Mindestversion erfüllt |
 | `admin_identity` | aufrufender Admin hat eine frische Prüfung bestanden; zeigt den Namen |
 | `public_origin` | Origin gesetzt, Modus gültig, `ctx.public_ready`, Listener läuft, sonst Grund aus `decide_public()` |
-| `tls` | `tls`: Leaf nicht abgelaufen (Warnung unter 21 Tagen), Schlüssel passt; `proxy`: Handshake mit dem Origin vom Gateway aus (`served_chain`), vom System vertraut ja/nein (Warnung: private CA funktioniert nur auf Geräten, die sie kennen). Hinweis: Ein Test vom Server beweist nichts für das Gast-WLAN. |
+| `tls` | in beiden Modi Handshake mit dem Origin vom Gateway aus (`served_chain`): vom System vertraut ja/nein (nein → Warnung: eine private CA funktioniert nur auf Geräten, die sie kennen), Leaf nicht abgelaufen (Warnung unter 21 Tagen); `tls` zusätzlich: Schlüssel passt zur Datei; `proxy` zusätzlich: die gespeicherten CIDRs bestehen `parse_proxy_cidrs`, sonst `fail`. Hinweis: Ein Test vom Server beweist nichts für das Gast-WLAN. |
+| `time` | `{trusted, host_info: ok\|not_permitted\|error, dt_synchronized}`: `trusted` aus `instance.time_trusted` (DB), `host_info` aus `supervisor.host_info()` (`None` → `not_permitted`, Ausnahme → `error`); nicht vertraut → `fail`, `not_permitted` → `ok` mit dem Hinweis, dass nur die Hochwassermarke (E26) wirkt |
 | `websocket` | `websockets.connect(wss://…/api/v1/events, origin=public_origin)` wird nach dem Auth-Timeout mit 4401 geschlossen → Upgrade-Pfad funktioniert; nicht erreichbar vom Gateway selbst → Warnung, der Gastgerätetest entscheidet |
 | `guest_device` | letztes Audit `setup.guest_test`: `ok` mit Zeit und IP-Klasse, sonst `todo` |
 | `client_ip` | IP-Klasse des letzten Gastgerätetests: `docker` → Warnung (Rate-Limits je IP sehen nur eine Adresse; Proxy-Modus empfohlen), sonst `ok` |
 
 `POST /api/v1/admin/setup/guest-test` → Einladung `purpose = guest_test`, ohne Aufenthalt, `device_slot = 0`, `redeem_until = now + 10 min`; Antwort genau einmal `{invite_id, join_url, qr_svg, redeem_until}`; ohne `public_ready` → 409. Den Fortschritt erfährt die UI über `audit.appended` (Admin-WS) und lädt die Prüfungen neu.
 
-- [ ] **Step 1 – Tests der Prüfungen (rot):** jede Prüfung gegen den Simulator: frische Instanz → `todo` oder `fail` mit Gründen; mit Proxy-Konfiguration und Fake-Listener → `ok`; `websocket` ohne Erreichbarkeit → `warn`. Lauf: `uv run pytest tests/integration/test_setup_checks.py -q` → FAIL.
+- [ ] **Step 1 – Tests der Prüfungen (rot):** jede Prüfung gegen den Simulator: frische Instanz → `todo` oder `fail` mit Gründen; mit Proxy-Konfiguration und Fake-Listener → `ok`; `websocket` ohne Erreichbarkeit → `warn`; `time` mit `_sim/host-info-mode forbidden` → `host_info == "not_permitted"`, mit `ok` → `dt_synchronized == true`; `tls` mit nicht vertrauter Kette (Fake) → `warn` in beiden Modi. Lauf: `uv run pytest tests/integration/test_setup_checks.py -q` → FAIL.
 - [ ] **Step 2 – Prüfungen implementieren;** Lauf wie Step 1 → PASS.
 - [ ] **Step 3 – Tests des Gastgerätetests (rot):** anlegen → einlösen → WS-Snapshot → `guest_device` `ok`; `client_ip` `ok` bzw. `warn` bei Peer `172.30.32.1`; die Testeinladung ist nur einmal lösbar; ohne `public_ready` → 409. → FAIL.
 - [ ] **Step 4 – `setup/guest-test` implementieren;** Lauf wie Step 3 → PASS.
@@ -891,37 +908,37 @@ Verhalten (alle `require_csrf`, alle ersetzen `ctx.instance` nach dem Commit und
 ### Task 11.6: Routen-Audit – sensible GETs, Restore-Sperre, Admin-WS
 
 **Files:**
-- Modify: `tests/acceptance/test_matrix_admin.py`; Admin-Routen, deren Dependencies der Audit als falsch meldet
+- Modify: `tests/acceptance/test_matrix_admin.py`; Admin-Routen, deren Dependencies der Audit als falsch meldet; `tests/e2e/helpers/gateway.ts` (Admin-Aufrufe über den Ingress-Proxy senden bei sensiblen GETs den CSRF-Header aus `GET session`, sonst scheitert die E2E-Suite aus Teilplan 2)
 
 Verhalten: `test_every_admin_api_route_requires_the_guard` wird erweitert:
-- `SENSITIVE_GETS` (E5: Audit, Sessions, Diagnose, Restore, Vorschau-Dashboards; Einladungs-Secrets stehen nur in POST-Antworten) = `/api/v1/admin/audit`, `/api/v1/admin/sessions`, `/api/v1/admin/stays/{stay_id}`, `/api/v1/admin/preview/{preview_id}/dashboard`, `/api/v1/admin/preview/{preview_id}/explain`. Task 12.3 ergänzt `/api/v1/admin/restore/review`, Task 9b.1 `/api/v1/admin/diagnostics` und `/api/v1/admin/diagnostics/export`. Jeder Eintrag muss existieren und an `require_csrf` hängen. Pfadparameter heißen so, wie Teilplan 2 sie umgesetzt hat; der Test vergleicht die Pfade wörtlich.
+- `SENSITIVE_GETS` (E5: Audit, Sessions, Diagnose, Restore, Vorschau-Dashboards; Einladungs-Secrets stehen nur in POST-Antworten) = `/api/v1/admin/audit`, `/api/v1/admin/sessions`, `/api/v1/admin/pairings`, `/api/v1/admin/stays/{stay_id}`, `/api/v1/admin/preview/{preview_id}/dashboard`, `/api/v1/admin/preview/{preview_id}/explain`. Task 12.3 ergänzt `/api/v1/admin/restore/review`, Task 9b.1 `/api/v1/admin/diagnostics` und `/api/v1/admin/diagnostics/export`. Jeder Eintrag muss existieren und an `require_csrf` hängen. Pfadparameter heißen so, wie Teilplan 2 sie umgesetzt hat; der Test vergleicht die Pfade wörtlich.
 - Jede Admin-API-Route außer `session`, `session/check` und den Restore-Routen hängt an `not_in_restore`.
-- Die einzige WebSocket-Route ist `/api/v1/admin/events` mit dem Endpunkt aus `events/admin_ws.py`; sonst gibt es nur `APIRoute`s.
+- Die Ausnahme für die einzige WebSocket-Route kommt aus Task 9a.7 und bleibt.
 - Mutationen hängen wie bisher an `require_csrf`; die Prüfung läuft nie über eine leere Schleife.
 
 - [ ] **Step 1 – Test erweitern (rot, solange eine Route abweicht):** `uv run pytest tests/acceptance/test_matrix_admin.py -q -k guard`.
 - [ ] **Step 2 – Abweichende Routen korrigieren** (Dependency tauschen, nie die Liste kürzen).
-- [ ] **Step 3 – Grün:** Gateway-Prüfung.
+- [ ] **Step 3 – Grün:** Gateway-Prüfung und E2E-Prüfung.
 - [ ] **Step 4 – Commit:** `test(admin): route audit for sensitive reads, restore gate and the admin socket`.
 
 ---
 
 ## WP12 – Backup und Restore
 
-Abnahme: A39, A40, A47, A48 (Design §4.6, E22, Spez §15.3).
+Abnahme: A39, A40, A47, A48 (Design §4.6, E22, Spez §15.3). Die Restore-Routen tragen kein `not_in_restore`.
 
 ### Task 12.1: Bereinigter Export (A47, A48)
 
 **Files:**
 - Create: `myha_gateway/backup/__init__.py`, `myha_gateway/backup/export.py`, `myha_gateway/backup/status.py`
-- Modify: `myha_gateway/__main__.py` (Subcommand `backup export|cleanup`; Logging über `setup_logging`)
+- Modify: `myha_gateway/__main__.py` (Subcommand `backup export|cleanup`; Logging über `setup_logging`), `myha_gateway/app.py` (Lifespan leert `state_dir/tmp/`)
 - Test: `tests/unit/test_backup_allowlist.py`, `tests/acceptance/test_matrix_backup.py`
 
-Positivliste (E22) als Tabelle → Spalten, Zeilenfilter und Überschreibung in `backup/export.py` (`EXPORTED`); alles andere steht ausdrücklich in `NOT_EXPORTED`:
+Positivliste (E22) in `backup/export.py`: `EXPORTED` (kopierte Spalten und Zeilenfilter), `OVERRIDDEN` (Spalten mit festem Platzhalter) und `NOT_EXPORTED` (alles andere, ausdrücklich):
 
 | Tabelle | Spalten | Filter / Überschreibung |
 |---|---|---|
-| `instance` | `id, short_id, name, public_origin, tls_mode, tls_cert_path, tls_key_path, proxy_cidrs, trust_policy, timezone, policy_version, security_generation, setup_state, operator_contact, session_limits, audit_retention_days, version` | nicht: `server_secret`, `trust_pins`, `time_trusted`, `last_seen_clock` |
+| `instance` | kopiert: `id, short_id, name, public_origin, tls_mode, tls_cert_path, tls_key_path, proxy_cidrs, trust_policy, timezone, policy_version, security_generation, setup_state, operator_contact, session_limits, audit_retention_days, version` | überschrieben (`OVERRIDDEN`, Platzhalter für NOT-NULL-Spalten; Task 12.4 setzt echte Werte): `server_secret = ''`, `trust_pins = '[]'`, `time_trusted = 0`, `last_seen_clock = exported_at` |
 | `unit`, `resource_binding`, `dashboard`, `role_template`, `role_version`, `group` | alle | — |
 | `assignment` | alle | `status := 'disabled_pending_review'` |
 | `principal` | `id, type, status, display_name, locale, theme, created_at, version` | `type IN ('resident', 'display')` |
@@ -931,19 +948,19 @@ Positivliste (E22) als Tabelle → Spalten, Zeilenfilter und Überschreibung in 
 Nicht exportiert: `credential`, `session`, `refresh_token`, `ws_ticket`, `pairing_request`, `invite`, `stay`, `command`, `audit_event`.
 
 `export(settings) -> ExportResult`, aufgerufen von `myha-gateway backup export` (Exit 0 nur bei Erfolg):
-1. `fcntl.flock(LOCK_EX | LOCK_NB)` auf `state_dir/tmp/export.lock`; belegt → Exit 1 „export already running“. Der Lock fällt mit dem Prozess.
-2. Liegt `backup_dir/restore.sqlite` schon da: eigener Rest (seine `export_generation` gleich `status.last_export_generation` und gleiche Instanz-ID) → löschen; sonst wartet ein wiederhergestellter Export auf die Prüfung → Exit 1 „restore pending“, kein Export.
+1. `fcntl.flock(LOCK_EX | LOCK_NB)` auf `state_dir/tmp/export.lock`; belegt → Exit 1 „export already running“. Der Lock fällt mit dem Prozess. Danach alles in `state_dir/tmp/` außer dem Lock löschen (Reste eines abgebrochenen Laufs; auch der Admin-Lifespan leert `tmp/` beim Start, außer im Restore-Modus die Arbeitskopie aus Task 12.3).
+2. Liegt `backup_dir/restore.sqlite` schon da: eigener Rest (seine `export_generation` gleich `status.last_export_generation` oder `status.pending_export_generation` und gleiche Instanz-ID) → löschen; sonst wartet ein wiederhergestellter Export auf die Prüfung → Exit 1 „restore pending“, kein Export.
 3. Online-Backup der Live-DB über `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True).backup(...)` nach `state_dir/tmp/snapshot.sqlite`.
-4. Neue leere DB `state_dir/tmp/export.sqlite` mit der Standardbibliothek: `PRAGMA journal_mode=DELETE` (keine WAL- und SHM-Dateien), Schema über `Base.metadata.create_all` auf einer synchronen Engine ohne die Live-Pragmas, `alembic_version` = Head der Live-DB, `ATTACH` des Snapshots, je Tabelle `INSERT INTO main.t (spalten) SELECT spalten FROM snap.t WHERE filter` plus Überschreibungen, Tabelle `export_meta(key, value)` mit `export_generation`, `exported_at`, `schema_version`, `requires_admin_review = '1'`, `instance_id`.
+4. Neue leere DB `state_dir/tmp/export.sqlite` mit der Standardbibliothek: `PRAGMA journal_mode=DELETE` (keine WAL- und SHM-Dateien), Schema über `Base.metadata.create_all` auf einer synchronen Engine ohne die Live-Pragmas, `alembic_version` = Head der Live-DB, `ATTACH` des Snapshots, je Tabelle `INSERT INTO main.t (spalten) SELECT spalten FROM snap.t WHERE filter` plus Überschreibungen, Tabelle `export_meta(key, value)` mit `export_generation = new_id("exp")`, `exported_at`, `schema_version`, `requires_admin_review = '1'`, `instance_id`.
 5. `PRAGMA integrity_check` ist `ok`, `PRAGMA foreign_key_check` leer; schließen; `os.fsync` der Datei.
-6. `os.replace` nach `backup_dir/restore.sqlite`, `fsync` des Verzeichnisses, Snapshot löschen; `backup/status.py` schreibt `state_dir/backup-status.json` atomar (`last_export_generation`, `last_export_at`, `last_export_ok`, `last_error`, `last_cleanup_at`, `last_cleanup_ok`).
+6. Vor dem Umbenennen schreibt `backup/status.py` `pending_export_generation` atomar in `state_dir/backup-status.json`; dann `os.replace` nach `backup_dir/restore.sqlite`, `fsync` des Verzeichnisses, Snapshot löschen; danach `last_export_generation`, `last_export_at`, `last_export_ok`, `last_error` setzen und `pending_export_generation` leeren (dazu `last_cleanup_at`, `last_cleanup_ok` aus Task 12.2). Ein Absturz zwischen Umbenennen und Statuszeile hinterlässt so einen Export, den Task 12.3 als eigenen Rest erkennt.
 7. Jeder Fehler: Temporärdateien entfernt, kein `restore.sqlite`, Status `last_export_ok = false` mit Fehlertyp, Exit 1. Kein Rückfall auf irgendeine Kopie der Live-Daten.
 
-- [ ] **Step 1 – Positivlisten-Test (rot):** `tests/unit/test_backup_allowlist.py`: Jede Spalte jeder Tabelle in `Base.metadata` steht genau einmal in `EXPORTED` oder `NOT_EXPORTED`; eine neue Spalte ohne Einordnung lässt den Test scheitern. Lauf: `uv run pytest tests/unit/test_backup_allowlist.py -q` → FAIL.
-- [ ] **Step 2 – `EXPORTED` und `NOT_EXPORTED` anlegen;** Lauf wie Step 1 → PASS.
+- [ ] **Step 1 – Positivlisten-Test (rot):** `tests/unit/test_backup_allowlist.py`: Jede Spalte jeder Tabelle in `Base.metadata` steht genau einmal in `EXPORTED`, `OVERRIDDEN` oder `NOT_EXPORTED`; jede NOT-NULL-Spalte ohne Server-Default einer exportierten Tabelle ist kopiert oder überschrieben; eine neue Spalte ohne Einordnung lässt den Test scheitern. Lauf: `uv run pytest tests/unit/test_backup_allowlist.py -q` → FAIL.
+- [ ] **Step 2 – `EXPORTED`, `OVERRIDDEN` und `NOT_EXPORTED` anlegen;** Lauf wie Step 1 → PASS.
 - [ ] **Step 3 – Exporttests (rot):** `tests/acceptance/test_matrix_backup.py`:
-  - `test_a47_export_holds_no_live_state_or_secrets`: Seed mit Bewohner samt Passwort, Browser- und nativen Sessions, Refresh-Token, eingelöster und offener Einladung, Aufenthalt, Befehlen, Audit, Stay- und Session-Fence und Gast-Principal; Export; `restore.sqlite` hat `journal_mode = delete`, daneben liegen keine `-wal`/`-shm`; die nicht exportierten Tabellen sind leer; kein `server_secret`, keine Pins, keine Gäste, keine Stay- oder Session-Fences; alle Zuweisungen `disabled_pending_review`; `requires_admin_review == "1"`; ein Byte-Scan der Datei findet weder Passwort noch irgendeinen Token- oder Secret-Wert noch das `server_secret` (das deckt auch Reste in freien Seiten ab).
-  - `test_a48_export_failure_leaves_no_export` (Exception nach dem Snapshot injiziert → kein `restore.sqlite`, `tmp/` leer, Status mit Fehler, Exit 1), `test_parallel_export_refused`, `test_pending_restore_blocks_export`, `test_own_leftover_export_is_replaced`.
+  - `test_a47_export_holds_no_live_state_or_secrets`: Seed mit Bewohner samt Passwort, Browser- und nativen Sessions, Refresh-Token, eingelöster und offener Einladung, Aufenthalt, Befehlen, Audit, Stay- und Session-Fence und Gast-Principal; Export; `restore.sqlite` hat `journal_mode = delete`, daneben liegen keine `-wal`/`-shm`; die nicht exportierten Tabellen sind leer; `server_secret` leer, `trust_pins` leer, keine Gäste, keine Stay- oder Session-Fences; alle Zuweisungen `disabled_pending_review`; `requires_admin_review == "1"`; ein Byte-Scan der Datei findet weder Passwort noch irgendeinen Token- oder Secret-Wert noch das `server_secret` (das deckt auch Reste in freien Seiten ab).
+  - `test_a48_export_failure_leaves_no_export` (Exception nach dem Snapshot injiziert → kein `restore.sqlite`, `tmp/` leer, Status mit Fehler, Exit 1), `test_parallel_export_refused`, `test_pending_restore_blocks_export`, `test_own_leftover_export_is_replaced`, `test_crash_after_replace_counts_as_own_leftover` (`pending_export_generation` gesetzt, Statuszeile fehlt), `test_tmp_leftovers_are_removed`.
   Lauf: `uv run pytest tests/acceptance/test_matrix_backup.py -q` → FAIL.
 - [ ] **Step 4 – `export()`, `backup/status.py` und das CLI-Subcommand implementieren;** Lauf wie Step 3 → PASS.
 - [ ] **Step 5 – Grün:** Gateway-Prüfung.
@@ -952,11 +969,11 @@ Nicht exportiert: `credential`, `session`, `refresh_token`, `ws_ticket`, `pairin
 ### Task 12.2: Cleanup-Hook, echte Hook-Skripte, Backup-Status
 
 **Files:**
-- Modify: `myha_gateway/backup/export.py` (`cleanup`), `myha/rootfs/opt/myha/backup-export`, `myha/rootfs/opt/myha/backup-cleanup`, `myha/DOCS.md` (Abschnitt „Backups“)
+- Modify: `myha_gateway/backup/export.py` (`cleanup`), `myha/rootfs/opt/myha/backup-export`, `myha/rootfs/opt/myha/backup-cleanup`, `myha/DOCS.md` (Abschnitt „Backups“), `scripts/build-image.sh` (Hook-Smoke)
 - Create: `myha_gateway/api/admin/backup.py`
 - Test: `tests/acceptance/test_matrix_backup.py`, `tests/integration/test_backup_status.py`
 
-Verhalten: `myha-gateway backup cleanup` löscht `backup_dir/restore.sqlite` nur, wenn es der eigene Export ist (Generation stimmt), und schreibt `last_cleanup_at` und `last_cleanup_ok`; ein Fehler endet mit Exit 1 und bleibt im Status sichtbar. Ein übrig gebliebener Export löst beim nächsten Start vorsichtshalber den Restore-Modus aus (Spez §15.3 Punkt 4); Task 12.3 bietet dafür „Verwerfen“. Die Hook-Skripte:
+Verhalten: `myha-gateway backup cleanup` löscht `backup_dir/restore.sqlite` nur, wenn es der eigene Export ist (Generation stimmt), und schreibt `last_cleanup_at` und `last_cleanup_ok`; ein Fehler endet mit Exit 1 und bleibt im Status sichtbar. Ein übrig gebliebener Export löst beim nächsten Start vorsichtshalber den Restore-Modus aus (Spez §15.3 Punkt 4); Task 12.4 bietet dafür „Verwerfen“ (Task 12.3 erkennt den eigenen Rest). Die Hook-Skripte:
 
 ```bash
 #!/command/with-contenv bashio
@@ -968,38 +985,56 @@ exec /opt/myha/venv/bin/myha-gateway backup export
 
 `backup-cleanup` entsprechend mit `backup cleanup`. `GET /api/v1/admin/backup/status` (`fresh=False`) → Inhalt der Statusdatei plus `export_present`; der Admin-Hub (Task 9a.7) meldet Änderungen als `backup.status`.
 
-- [ ] **Step 1 – Tests (rot):** Cleanup löscht den eigenen Export und lässt einen fremden liegen; schreibgeschütztes Backup-Verzeichnis → `last_cleanup_ok = false` und Exit 1; `test_a48_cleanup_failure_is_visible` über `GET backup/status`; Hook-Skripte enthalten `exec` auf die CLI (Shellcheck in CI, falls vorhanden). Lauf: `uv run pytest tests/acceptance/test_matrix_backup.py tests/integration/test_backup_status.py -q` → FAIL.
-- [ ] **Step 2 – Implementieren.**
-- [ ] **Step 3 – Grün:** Gateway-Prüfung.
-- [ ] **Step 4 – Commit:** `feat(backup): cleanup hook, real hook scripts and backup status`.
+Hook-Smoke in `scripts/build-image.sh`, s6-Phase (die Hook-Skripte brauchen `with-contenv`): nach dem Start `docker exec "$s6" /opt/myha/backup-export` → Exit 0; `docker exec "$s6" test -f /data/backup/restore.sqlite`; `docker exec "$s6" sh -c 'test ! -e /data/backup/restore.sqlite-wal'`; dann `/opt/myha/backup-cleanup` → Datei weg. Fehler → `fail` mit Logs.
 
-### Task 12.3: Restore-Modus – Prüfen, Anwenden, Verwerfen (A39, A40, A48)
+- [ ] **Step 1 – Tests (rot):** Cleanup löscht den eigenen Export und lässt einen fremden liegen; schreibgeschütztes Backup-Verzeichnis → `last_cleanup_ok = false` und Exit 1; `test_a48_cleanup_failure_is_visible` über `GET backup/status`. Lauf: `uv run pytest tests/acceptance/test_matrix_backup.py tests/integration/test_backup_status.py -q` → FAIL.
+- [ ] **Step 2 – Cleanup, Status-Route und Hook-Skripte implementieren;** Lauf wie Step 1 → PASS.
+- [ ] **Step 3 – Hook-Smoke (rot, dann grün):** Smoke erweitern und zuerst gegen ein Image vom Stand vor Step 2 laufen lassen (`git stash` der Hook-Skripte, `bash scripts/build-image.sh`): Mit den S0-Dummies entsteht kein `restore.sqlite` → FAIL. Dann mit den echten Hooks `bash scripts/build-image.sh` → PASS; CI nutzt weiter `scripts/build-image.sh --smoke-only`.
+- [ ] **Step 4 – Grün:** Gateway-Prüfung.
+- [ ] **Step 5 – Commit:** `feat(backup): cleanup hook, real hook scripts, backup status and hook smoke test`.
+### Task 12.3: Restore-Modus – Prüfen (A48)
 
 **Files:**
-- Create: `myha_gateway/backup/restore.py`, `myha_gateway/api/admin/restore.py`, `myha_gateway/db/migrations/versions/NNNN_instance_singleton.py`
-- Modify: `myha_gateway/app.py`, `myha_gateway/deps.py`, `myha_gateway/db/models.py` (Kommentar zum Trigger), `myha_gateway/db/migrations/env.py` (Kommentar), `tests/acceptance/test_matrix_admin.py` (`SENSITIVE_GETS` += `/api/v1/admin/restore/review`)
-- Test: `tests/acceptance/test_matrix_backup.py`, `tests/integration/test_restore.py`
+- Create: `myha_gateway/backup/restore.py` (Prüfteil), `myha_gateway/api/admin/restore.py` (`GET review`), `myha_gateway/db/migrations/versions/NNNN_instance_singleton.py`
+- Modify: `myha_gateway/app.py`, `myha_gateway/deps.py`, `myha_gateway/services/timeguard.py` und `myha_gateway/policy/drift.py` (im Restore-Modus keine Schreibzugriffe), `myha_gateway/db/models.py` (Kommentar zum Trigger), `myha_gateway/db/migrations/env.py` (Kommentar), `tests/acceptance/test_matrix_admin.py` (`SENSITIVE_GETS` += `/api/v1/admin/restore/review`)
+- Test: `tests/unit/test_db.py`, `tests/integration/test_restore.py`, `tests/acceptance/test_matrix_backup.py`
 
 Verhalten:
 - Migration: `CREATE TRIGGER instance_singleton BEFORE INSERT ON instance WHEN (SELECT COUNT(*) FROM instance) >= 1 BEGIN SELECT RAISE(ABORT, 'instance is a singleton'); END` (Downgrade löscht ihn). Ein Batch-Rebuild von `instance` verliert ihn und muss ihn neu anlegen (Kommentar an beiden Stellen).
-- `GET /api/v1/admin/restore/review` (`require_csrf`; außerhalb des Restore-Modus 409) prüft `restore.sqlite`: Integrität, `export_meta` vorhanden, `requires_admin_review == "1"`, `schema_version` nicht neuer als der eigene Head (sonst ungültig: „Export einer neueren myHA-Version“). Eine Arbeitskopie `state_dir/tmp/restore-work.sqlite` wird auf Head migriert. Antwort: `{valid, problem, exported_at, export_generation, instance, units, bindings: [{id, label, kind, entity_id, proposed: "confirmed"|"needs_review"|"missing"}], roles, groups, members, fences, principals: [{id, type, display_name, note}], assignments, live_instance_present}`; `proposed` vergleicht mit der aktuellen HA-Registry und dem Fähigkeits-Fingerprint; `note` ist „braucht ein neues Passwort“ bzw. „muss neu gepaart werden“.
-- `POST /api/v1/admin/restore/apply {bindings: {id: "confirm"|"review"}, assignments: {id: "activate"|"keep_disabled"}, export_generation}` (`require_csrf`; ungültiger Export oder eine `export_generation`, die nicht zur Datei passt → 409): baut eine frische Live-DB `state_dir/tmp/live-new.sqlite` (Migrationen auf Head, positiv gelistete Zeilen aus der Arbeitskopie). Bindungen werden nur `confirmed`, wenn der Admin bestätigt **und** HA noch übereinstimmt, sonst `needs_review`; `blocked` bleibt `blocked`; Zuweisungen nur bei `activate` aktiv. Instanz: exportierte Einstellungen, neues `server_secret`, `security_generation + 1`, `policy_version + 1`, `trust_pins = []`, `time_trusted = true`, `last_seen_clock = now`, `setup_state = "configured"` bei gesetztem Origin, sonst `fresh`. Danach Checkpoint und `dispose` der neuen Engine, dann der Tausch: `ctx.engine.dispose()`, Live-`myha.sqlite` mit `-wal` und `-shm` löschen, `os.replace(live-new, db_path)`, `fsync` des Verzeichnisses, `restore.sqlite` und Arbeitskopie löschen. `ctx.instance` neu laden, `ctx.restore_mode = False`, `ctx.policy.invalidate()`, `apply_public(ctx)`, Audit `restore.apply` in der neuen DB. Bewohner existieren danach ohne Credential, Displays ohne Sessions.
-- `POST /api/v1/admin/restore/discard {confirm: true}` (`require_csrf`): `restore.sqlite` löschen; mit Live-Instanz geht es mit den Live-Daten weiter, ohne Live-Instanz legt `ensure_instance` eine frische Einrichtung an. Danach `restore_mode = False`, `apply_public(ctx)`, Audit. Beide Wege sind sicher: Der Export enthält nie Sicherheitsdaten, und die Live-DB ist der neueste Stand.
-- Im Restore-Modus überspringen Aufräumjob, Zeitwächter-Schreibzugriffe, Drift-Schreibzugriffe und Admin-Hub ihre DB-Arbeit, damit der Dateitausch keine offene Verbindung trifft. Nach `apply` und `discard` gilt ein neues CSRF-Secret; die UI lädt die Session neu (Task 9a.8).
+- `GET /api/v1/admin/restore/review` (`require_csrf`; außerhalb des Restore-Modus 409) prüft `restore.sqlite`: Integrität, `export_meta` vorhanden, `requires_admin_review == "1"`, `schema_version` nicht neuer als der eigene Head (sonst ungültig: „Export einer neueren myHA-Version“). Eine Arbeitskopie `state_dir/tmp/restore-work.sqlite` wird auf Head migriert. Antwort: `{valid, problem, own_leftover, exported_at, export_generation, instance, units, bindings: [{id, label, kind, entity_id, proposed: "confirmed"|"needs_review"|"blocked"|"missing"}], roles, groups, members, fences, principals: [{id, type, display_name, note}], assignments, live_instance_present}`.
+- `own_leftover`: Die `export_generation` des Exports ist die `last_export_generation` oder `pending_export_generation` der Statusdatei und die Instanz-ID gleich der Live-Instanz. Dann blieb nur ein eigener Export nach einem gescheiterten Cleanup liegen; die UI empfiehlt „Verwerfen“ (Task 9b.8).
+- `proposed` nutzt dieselbe Vergleichsfunktion wie die Bindungsprüfung aus Task 9a.2 (`policy/drift.py`); Task 13.2 macht sie versionsbewusst, beide Stellen erben das. `note` ist „braucht Benutzername und Passwort“ bzw. „muss neu gepaart werden“.
+- Im Restore-Modus schreiben Zeitwächter (`services/timeguard.py`), Drift-Erkennung (`policy/drift.py`), Aufräumjob und Admin-Hub nichts in die DB, damit der Dateitausch in Task 12.4 keine offene Verbindung trifft.
 
 - [ ] **Step 1 – Singleton-Trigger:** Test „zweite Instanzzeile → `IntegrityError`“ in `tests/unit/test_db.py` (rot); Migration anlegen; `test_migrated_schema_matches_models` bleibt grün → PASS.
-- [ ] **Step 2 – Review-Tests (rot):** `tests/integration/test_restore.py`: gültiger Export → Review mit Vorschlag je Bindung; außerhalb des Restore-Modus → 409; `test_a48_invalid_export_keeps_restore_locked` (kaputte Datei, fehlende Metadaten, `requires_admin_review = 0`, neueres Schema → `valid = false`). Lauf: `uv run pytest tests/integration/test_restore.py -q` → FAIL.
-- [ ] **Step 3 – `restore/review` implementieren;** Lauf wie Step 2 → PASS.
-- [ ] **Step 4 – Apply-Tests (rot):** `tests/acceptance/test_matrix_backup.py`:
-  - `test_a39_restore_does_not_reactivate_codes_sessions_or_passwords`: vor dem Export Bewohner mit Passwort, Browser-Session und nativer Familie, Gast mit eingelöster Einladung und Session, zweite Einladung offen; Export; danach ein Session-Widerruf; App mit `restore.sqlite` neu starten (echter Lifespan) → Restore-Modus, Public-Listener aus, `GET /units` 503 `restore_pending`; `apply` → altes Cookie 401, alter Bearer 401, alter Refresh 401, beide Einladungs-Secrets 401, Bewohner-Login 401 (kein Credential); `security_generation` um 1 höher, `server_secret` anders; nach einem neuen Passwort klappt der Login.
+- [ ] **Step 2 – Review-Tests (rot):** `tests/integration/test_restore.py`: gültiger Export → Review mit Vorschlag je Bindung; außerhalb des Restore-Modus → 409; eigener übrig gebliebener Export → `own_leftover == true`; fremder (andere Instanz-ID) → `false`; `test_restore_mode_writes_nothing` (Restore-Modus: ein `state_changed` mit Fähigkeitsänderung und ein Zeitwächter-Takt ändern keine Zeile). In `tests/acceptance/test_matrix_backup.py`: `test_a48_invalid_export_keeps_restore_locked` (kaputte Datei, fehlende Metadaten, `requires_admin_review = 0`, neueres Schema → `valid = false`, Public-Listener aus). Lauf: `uv run pytest tests/integration/test_restore.py tests/acceptance/test_matrix_backup.py -q` → FAIL.
+- [ ] **Step 3 – `restore/review` und die Schreibsperren implementieren;** Lauf wie Step 2 → PASS.
+- [ ] **Step 4 – Grün:** Gateway-Prüfung.
+- [ ] **Step 5 – Commit:** `feat(backup): restore review with leftover detection and a write freeze in restore mode (A48)`.
+
+### Task 12.4: Restore-Modus – Anwenden und Verwerfen (A39, A40, A48)
+
+**Files:**
+- Modify: `myha_gateway/backup/restore.py`, `myha_gateway/api/admin/restore.py`, `myha_gateway/app.py`
+- Test: `tests/acceptance/test_matrix_backup.py`, `tests/integration/test_restore.py`
+
+Verhalten:
+- `POST /api/v1/admin/restore/apply {bindings: {id: "confirm"|"review"}, assignments: {id: "activate"|"keep_disabled"}, export_generation}` (`require_csrf`; ungültiger Export oder eine `export_generation`, die nicht zur Datei passt → 409) baut eine frische Live-DB `state_dir/tmp/live-new.sqlite`: Migrationen auf Head, positiv gelistete Zeilen aus der Arbeitskopie. Bindungen werden nur `confirmed`, wenn der Admin bestätigt **und** HA noch übereinstimmt, sonst `needs_review`; `blocked` bleibt `blocked`; Zuweisungen nur bei `activate` aktiv. HA-Zustand und Fähigkeiten werden vor der Schreibsession gelesen (Vorgabe aus Teilplan 2).
+- Instanz: exportierte Einstellungen; neues `server_secret`; `security_generation = max(Live, Export) + 1` und `policy_version = max(Live, Export) + 1` (ohne Live-Instanz zählt der Export allein), damit keine alte Clientgeneration wiederkehrt; `time_trusted = true`, `last_seen_clock = now`; `trust_pins`: im Modus `tls` der aus dem Zertifikat neu berechnete Primärpin, sonst leer bis zum Setup; `setup_state = "configured"` bei gesetztem Origin, sonst `fresh`.
+- Danach Checkpoint und `dispose` der neuen Engine, dann der Tausch: `ctx.engine.dispose()`, Live-`myha.sqlite` mit `-wal` und `-shm` löschen, `os.replace(live-new, db_path)`, `fsync` des Verzeichnisses, `restore.sqlite` und Arbeitskopie löschen. `ctx.instance` neu laden, `ctx.restore_mode = False`, `ctx.policy.invalidate()`, `apply_public(ctx)`, Audit `restore.apply` in der neuen DB. Bewohner existieren danach ohne Credential (Benutzername und Passwort setzt der Admin über Task 5b.2), Displays ohne Sessions.
+- `POST /api/v1/admin/restore/discard {confirm: true}` (`require_csrf`): `restore.sqlite` löschen; mit Live-Instanz geht es mit den Live-Daten weiter, ohne Live-Instanz legt `ensure_instance` eine frische Einrichtung an. Danach `restore_mode = False`, `apply_public(ctx)`, Audit. Beide Wege sind sicher: Der Export enthält nie Sicherheitsdaten, und die Live-DB ist der neueste Stand.
+- Nach `apply` und `discard` gilt ein anderes CSRF-Secret; die UI lädt die Session neu (Task 9a.8).
+
+- [ ] **Step 1 – Apply-Tests (rot):** `tests/acceptance/test_matrix_backup.py`:
+  - `test_a39_restore_does_not_reactivate_codes_sessions_or_passwords`: vor dem Export Bewohner mit Benutzername und Passwort, Browser-Session und nativer Familie, Gast mit eingelöster Einladung und Session, zweite Einladung offen; Export; danach ein Session-Widerruf; App mit `restore.sqlite` neu starten (echter Lifespan) → Restore-Modus, Public-Listener aus, `GET /units` 503 `restore_pending`; `apply` → altes Cookie 401, alter Bearer 401, alter Refresh 401, beide Einladungs-Secrets 401, Login mit altem Namen und Passwort 401 (kein Credential); `security_generation` und `policy_version` größer als Live und Export, `server_secret` anders; nach `PUT principals/{id}/credential {username, password}` klappt der Login.
   - `test_a40_backup_without_restore_keeps_live_state`: Export und Cleanup bei aktiven Sessions → Sessions gültig, `policy_version` unverändert, kein Restore-Modus nach Neustart.
-  - `test_a40_restore_never_widens`: Zuweisungen bleiben ohne `activate` deaktiviert; eine Bindung mit geändertem Fingerprint wird `needs_review`.
-  - `apply` mit ungültigem Export oder abweichender `export_generation` → 409, Public-Listener bleibt aus.
+  - `test_a40_restore_never_widens`: Zuweisungen bleiben ohne `activate` deaktiviert; eine Bindung mit geändertem Fingerprint wird `needs_review`; `blocked` bleibt `blocked`.
+  - `apply` mit ungültigem Export oder abweichender `export_generation` → 409, Public-Listener bleibt aus; im Modus `tls` steht nach `apply` der Primärpin des Zertifikats im Profil.
   Lauf: `uv run pytest tests/acceptance/test_matrix_backup.py -q` → FAIL.
-- [ ] **Step 5 – `restore/apply` implementieren** (Neubau, Dateitausch, Kontext zurücksetzen); Lauf wie Step 4 → PASS.
-- [ ] **Step 6 – Verwerfen und flüchtiges CSRF-Secret:** Tests (rot): `discard` ohne Live-Daten → frische Instanz ohne Rollen; ohne Export und ohne Live-DB startet die App im Einrichtungszustand ohne Rollen; `test_restore_without_live_db_uses_ephemeral_csrf` (`GET /session` 200 im Restore-Modus ohne Instanz, `apply` gelingt mit diesem Token, danach wird es mit 403 abgelehnt). Dann `restore/discard` implementieren → PASS.
-- [ ] **Step 7 – Grün:** Gateway-Prüfung.
-- [ ] **Step 8 – Commit:** `feat(backup): restore review, apply and discard with a fresh security generation (A39, A40, A48)`.
+- [ ] **Step 2 – `restore/apply` implementieren** (Neubau, Dateitausch, Kontext zurücksetzen); Lauf wie Step 1 → PASS.
+- [ ] **Step 3 – Verwerfen und flüchtiges CSRF-Secret:** Tests (rot): `discard` ohne Live-Daten → frische Instanz ohne Rollen; `discard` eines eigenen Rests → Live-Daten unverändert, Sessions gültig; ohne Export und ohne Live-DB startet die App im Einrichtungszustand ohne Rollen; `test_restore_without_live_db_uses_ephemeral_csrf` (`GET /session` 200 im Restore-Modus ohne Instanz, `apply` gelingt mit diesem Token, danach wird es mit 403 abgelehnt). Dann `restore/discard` implementieren → PASS.
+- [ ] **Step 4 – Grün:** Gateway-Prüfung.
+- [ ] **Step 5 – Commit:** `feat(backup): restore apply and discard with a fresh security generation (A39, A40, A48)`.
 
 ---
 
@@ -1016,11 +1051,11 @@ Abnahme: manuelle Abnahme aller Screens und Tastaturpfad (Vitest hier, E2E in 14
 
 Verhalten:
 - `services/metrics.py`: `DecisionTimer` mit einem Ringpuffer der letzten 1000 Dauern von `decide`; `p95_ms()`.
-- `GET /api/v1/admin/diagnostics` (`require_csrf`) → `{gateway: {version, arch}, home_assistant: {core, supervisor, minimum_met, connected, temperature_unit, adapter_locked}, public: {ready, reason, mode, origin}, time_trusted, policy: {version, decide_p95_ms, live_clients, displays_online}, argon2_ms, backup, database: {size_bytes, schema_version}}`. `argon2_ms` ist ein Hash mit den konfigurierten Parametern, einmal beim Start in einem Thread gemessen. Keine IP-Adressen, keine Token.
+- `GET /api/v1/admin/diagnostics` (`require_csrf`) → `{gateway: {version, arch}, home_assistant: {core, supervisor, minimum_met, connected, temperature_unit, adapter_locked}, public: {ready, reason, mode, origin}, time: {trusted, host_info: ok|not_permitted|error, dt_synchronized}, policy: {version, decide_p95_ms, live_clients, displays_online}, argon2_ms, backup, database: {size_bytes, schema_version}}`. `argon2_ms` ist ein Hash mit den konfigurierten Parametern, einmal beim Start in einem Thread gemessen. Keine IP-Adressen, keine Token.
 - `GET /api/v1/admin/diagnostics/export` (`require_csrf`) → dasselbe JSON mit `<host>` statt des Hostnamens im Origin und `Content-Disposition: attachment; filename="myha-diagnostics.json"`; die UI zeigt es vor dem Download (Spez §15.2).
 - `POST /api/v1/admin/diagnostics/argon2-benchmark` (`require_csrf`) → `measure_argon2()` in einem Thread (etwa 10 s), ein Lauf zur Zeit (sonst 409); Ergebnis als Tabelle für `docs/security.md`. Das ersetzt das Argon2-Startlog der entfernten S0-Probe.
 
-- [ ] **Step 1 – Tests (rot):** Felder vorhanden; weder Antwort noch Export enthalten IPv4-Adressen, `Bearer`, 43-stellige base64url-Werte oder das `server_secret`; Export mit `Content-Disposition` und `<host>`; p95 aus erfassten Werten; Benchmark läuft im Thread (`/healthz` antwortet währenddessen) und ein zweiter gleichzeitiger Aufruf → 409. Lauf: `uv run pytest tests/integration/test_diagnostics.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Felder vorhanden; weder Antwort noch Export enthalten IPv4-Adressen, `Bearer`, 43-stellige base64url-Werte oder das `server_secret`; Export mit `Content-Disposition` und `<host>`; p95 aus erfassten Werten; `time.host_info` folgt `_sim/host-info-mode` (`forbidden` → `not_permitted`, `ok` → `ok`); Benchmark läuft im Thread (`/healthz` antwortet währenddessen) und ein zweiter gleichzeitiger Aufruf → 409. Lauf: `uv run pytest tests/integration/test_diagnostics.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(admin): redacted diagnostics, decision p95 and argon2 benchmark`.
@@ -1070,9 +1105,9 @@ Verhalten (Mockup „Sessions & checkout“): je Aufenthalt Geräte (Sessions) u
 - Create: `web/src/admin/screens/Setup.tsx`, `web/src/admin/screens/TrustProfile.tsx`, `web/src/admin/screens/GuestTest.tsx`
 - Test: `web/src/admin/screens/Setup.test.tsx`
 
-Verhalten (Mockup „Setup assistant“): Prüfliste mit Statussymbol und Text (nie nur Farbe), Detail und „Ausführen“; Formular Public Origin mit Bestätigungsdialog „Ein neuer Origin beendet alle Zugänge“ samt Zählern aus der 409-Antwort; TLS-Modus (eigenes HTTPS: Zertifikats- und Schlüsselpfad unter `/ssl`; Reverse Proxy: CIDR-Liste); Instanz-Einstellungen (Name, Kontakt, Zeitzone, Session-Grenzen, Aufbewahrung); Trustprofil (Policy, berechneter Primärpin nur lesbar mit Kette und Ablauf, Ersatzpins mit Fehlermeldungen, die E28-Warnung gut sichtbar bei `pin_required` ohne Ersatzpin, „Neu berechnen“); Gastgerätetest: Start → QR-Dialog → wartet auf `audit.appended` → lädt die Prüfungen neu → bestanden mit IP-Klasse oder Warnung. Eine frische Instanz öffnet hier.
+Verhalten (Mockup „Setup assistant“): Prüfliste mit Statussymbol und Text (nie nur Farbe), Detail und „Ausführen“; Formular Public Origin mit Bestätigungsdialog „Ein neuer Origin beendet alle Zugänge“ samt Zählern aus der 409-Antwort; TLS-Modus (eigenes HTTPS: Zertifikats- und Schlüsselpfad unter `/ssl`; Reverse Proxy: CIDR-Liste); Instanz-Einstellungen (Name, Kontakt, Zeitzone, Session-Grenzen, Aufbewahrung); Trustprofil (Policy, berechneter Primärpin nur lesbar mit Kette und Ablauf, Ersatzpins mit Fehlermeldungen, die E28-Warnung gut sichtbar bei jeder nicht leeren Pinliste ohne Ersatzpin, unter beiden Policies, „Neu berechnen“); Gastgerätetest: Start → QR-Dialog → wartet auf `audit.appended` → lädt die Prüfungen neu → bestanden mit IP-Klasse oder Warnung. Eine frische Instanz öffnet hier.
 
-- [ ] **Step 1 – Tests (rot):** Warnung bei `pin_required` ohne Ersatzpin; Fehler bei einem CA-Pin; Origin-Wechsel zeigt die Zähler; Gastgerätetest mit simuliertem WS-Ereignis. Lauf: `pnpm test src/admin/screens/Setup` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Warnung bei einer Pinliste ohne Ersatzpin unter `pin_required` und `pin_optional`; Prüfung `time` mit `not_permitted` zeigt den Hinweis auf die Hochwassermarke; Fehler bei einem CA-Pin; Origin-Wechsel zeigt die Zähler; Gastgerätetest mit simuliertem WS-Ereignis. Lauf: `pnpm test src/admin/screens/Setup` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Web-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(web): setup assistant with tls, trust profile and guest device test`.
@@ -1109,13 +1144,13 @@ Verhalten (Mockup „Review changes“): Diff-Liste mit Typ-Chips (hinzugefügt,
 - Create: `web/src/admin/screens/Restore.tsx`
 - Test: `web/src/admin/screens/Restore.test.tsx`
 
-Verhalten: nur erreichbar bei `setup_state == "restore_pending"` (sonst Umleitung); zeigt die Prüfdaten, je Bindung „bestätigen“/„prüfen“ (Vorgabe aus `proposed`), je Zuweisung „aktivieren“/„deaktiviert lassen“ (Vorgabe deaktiviert), Hinweise je Principal; „Anwenden“ mit Bestätigungsdialog („Sitzungen, Einladungen und Passwörter der alten Installation bleiben ungültig…“); „Verwerfen“ erst nach Bestätigung, Text je nachdem, ob Live-Daten vorhanden sind; ungültiger Export → Erklärung und nur „Verwerfen“; nach „Anwenden“ einmal die Session neu laden (neues CSRF) → `#/setup`.
+Verhalten: nur erreichbar bei `setup_state == "restore_pending"` (sonst Umleitung); zeigt die Prüfdaten, je Bindung „bestätigen“/„prüfen“ (Vorgabe aus `proposed`), je Zuweisung „aktivieren“/„deaktiviert lassen“ (Vorgabe deaktiviert), Hinweise je Principal; „Anwenden“ mit Bestätigungsdialog („Sitzungen, Einladungen und Passwörter der alten Installation bleiben ungültig…“); „Verwerfen“ erst nach Bestätigung, Text je nachdem, ob Live-Daten vorhanden sind; ungültiger Export → Erklärung und nur „Verwerfen“; `own_leftover` → Hinweis „übrig gebliebener eigener Export nach einem gescheiterten Cleanup“ und „Verwerfen“ als empfohlene Aktion; nach „Anwenden“ einmal die Session neu laden (neues CSRF) → `#/setup`.
 
-- [ ] **Step 1 – Tests (rot):** Vorgaben; Payload von „Anwenden“; ungültiger Export blendet „Anwenden“ aus; nach „Anwenden“ genau ein Session-Reload. Lauf: `pnpm test src/admin/screens/Restore` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Vorgaben; Payload von „Anwenden“; `own_leftover` empfiehlt „Verwerfen“; ungültiger Export blendet „Anwenden“ aus; nach „Anwenden“ genau ein Session-Reload. Lauf: `pnpm test src/admin/screens/Restore` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Web-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(web): restore review and apply`.
-- [ ] **Step 5 – Manuelle Abnahme im Dev-Stack (Fable):** `scripts/dev.sh`, Admin-UI unter `http://localhost:5174/admin.html` mit dem Ingress-Proxy aus Teilplan 2; jeden Screen nur mit der Tastatur durchgehen (Tab, Shift+Tab, Enter, Leertaste, Escape in Dialogen), DE/EN und alle drei Themes; Befunde als Fix-up-Tasks an den Implementierer. Der Nachweis im echten HA folgt in Task 13.6.
+- [ ] **Step 5 – Manuelle Abnahme im Dev-Stack (Fable):** `scripts/dev.sh` und `node tests/e2e/ingress-proxy.mjs` (setzt `X-Remote-User-Id` und `X-Ingress-Path`); Admin-UI über den Proxy unter `http://localhost:18098/api/hassio_ingress/e2e/`; jeden Screen nur mit der Tastatur durchgehen (Tab, Shift+Tab, Enter, Leertaste, Escape in Dialogen), DE/EN und alle drei Themes; Befunde als Fix-up-Tasks an den Implementierer. Der Nachweis im echten HA folgt in Task 13.6.
 
 ---
 
@@ -1128,8 +1163,8 @@ Abnahme (Gate): App installiert, Admin-SSO real, Licht und Klima im Wohnzimmer r
 Ändert ein Update den Inhalt des Fingerprints, darf das nicht jede Bindung in die Prüfung schicken. Echte Abweichungen müssen weiterhin auffallen.
 
 **Files:**
-- Modify: `myha_gateway/adapters/base.py`, `myha_gateway/policy/drift.py`
-- Test: `tests/unit/test_adapters.py`, `tests/acceptance/test_matrix_drift.py`
+- Modify: `myha_gateway/adapters/base.py`, `myha_gateway/policy/drift.py`, `myha_gateway/backup/restore.py` (nutzt die Vergleichsfunktion aus `drift.py`)
+- Test: `tests/unit/test_adapters.py`, `tests/acceptance/test_matrix_drift.py`, `tests/integration/test_restore.py`
 
 ```python
 FINGERPRINT_VERSION = 1
@@ -1144,23 +1179,16 @@ def fingerprint(capabilities: DeviceCapabilities, attributes: Mapping[str, Any],
     """Version 1 stays bare hex, so every stored v1 value keeps matching; later ones carry a prefix."""
 ```
 
-Regel im Modul-Docstring: Eine Änderung am Payload fügt `_payload_v<n+1>` hinzu und erhöht `FINGERPRINT_VERSION`; `_payload_v<n>` bleibt, solange gespeicherte Zeilen ihn tragen können. Drift für eine Bindung mit gespeicherter Version k kleiner als die aktuelle: `fingerprint(caps, attrs, k)` berechnen. Gleich → in derselben Transaktion den aktuellen Fingerprint eintragen, Status unverändert, kein Policy-Bump, Audit `binding.fingerprint_upgraded`. Ungleich → `needs_review` wie bisher. `blocked` wird nie angefasst; Zustände mit `availability == "offline"` und unbekannte Temperatureinheit werden übersprungen wie in Teilplan 2.
+Dieselbe versionsbewusste Vergleichsfunktion nutzen die Drift-Erkennung, die Bindungsprüfung (Task 9a.2) und das Restore-Review (Task 12.3). Regel im Modul-Docstring: Eine Änderung am Payload fügt `_payload_v<n+1>` hinzu und erhöht `FINGERPRINT_VERSION`; `_payload_v<n>` bleibt, solange gespeicherte Zeilen ihn tragen können. Drift für eine Bindung mit gespeicherter Version k kleiner als die aktuelle: `fingerprint(caps, attrs, k)` berechnen. Gleich → in derselben Transaktion den aktuellen Fingerprint eintragen, Status unverändert, kein Policy-Bump, Audit `binding.fingerprint_upgraded`. Ungleich → `needs_review` wie bisher. `blocked` wird nie angefasst; Zustände mit `availability == "offline"` und unbekannte Temperatureinheit werden übersprungen wie in Teilplan 2.
 
-- [ ] **Step 1 – Tests (rot):** Golden-Fingerprint v1 unverändert (Wert aus dem bestehenden Test); mit einem nur im Test registrierten Payload v2 (Monkeypatch von `_PAYLOADS` und `FINGERPRINT_VERSION = 2`): unverändertes Gerät → Fingerprint `2:<hex>`, Status bleibt `confirmed`, `policy_version` unverändert; verändertes Gerät → `needs_review`; `blocked` bleibt unberührt; offline übersprungen; `test_a40_fingerprint_upgrade_neither_widens_nor_flags`. Lauf: `uv run pytest tests/unit/test_adapters.py tests/acceptance/test_matrix_drift.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Golden-Fingerprint v1 unverändert (Wert aus dem bestehenden Test); mit einem nur im Test registrierten Payload v2 (Monkeypatch von `_PAYLOADS` und `FINGERPRINT_VERSION = 2`): unverändertes Gerät → Fingerprint `2:<hex>`, Status bleibt `confirmed`, `policy_version` unverändert; verändertes Gerät → `needs_review`; `blocked` bleibt unberührt; offline übersprungen; `test_a40_fingerprint_upgrade_neither_widens_nor_flags`; das Restore-Review schlägt für eine unveränderte Bindung mit v1-Fingerprint unter v2 `confirmed` vor. Lauf: `uv run pytest tests/unit/test_adapters.py tests/acceptance/test_matrix_drift.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
 - [ ] **Step 4 – Commit:** `feat(adapters): versioned capability fingerprints with in-place upgrade (A40)`.
 
-### Task 13.3: Image-Smoke für die Backup-Hooks
+### Task 13.3: entfällt
 
-**Files:**
-- Modify: `scripts/build-image.sh`
-
-Verhalten: In der s6-Phase (die Hook-Skripte brauchen `with-contenv`) nach dem Start: `docker exec "$s6" /opt/myha/backup-export` → Exit 0; `docker exec "$s6" test -f /data/backup/restore.sqlite`; `docker exec "$s6" sh -c 'test ! -e /data/backup/restore.sqlite-wal'`; dann `/opt/myha/backup-cleanup` → Datei weg. Fehler → `fail` mit Logs.
-
-- [ ] **Step 1 – Smoke erweitern.** Gegen ein Image mit den S0-Dummies (Stand vor Task 12.2) schlägt er fehl, weil kein `restore.sqlite` entsteht; das ist die Rot-Probe.
-- [ ] **Step 2 – Grün:** `bash scripts/build-image.sh`; CI nutzt weiter `scripts/build-image.sh --smoke-only`.
-- [ ] **Step 3 – Commit:** `test(addon): smoke-test the backup hooks in the image`.
+Der Hook-Smoke steht in Task 12.2 (dort erst rot gegen die S0-Dummies, dann grün). Die Nummer bleibt frei, damit die Verweise auf 13.4–13.7 stabil bleiben.
 
 ### Task 13.4: Entwicklerskript – Deinstallieren, Repository entfernen, Ingress-Aufrufe
 
@@ -1171,8 +1199,9 @@ Neue Subcommands (mutierende fragen ohne `--yes` nach; Token und Cookies erschei
 - `uninstall` → `POST /addons/<slug>/uninstall`.
 - `remove-repo --repo URL` → Repository-Slug per `GET /store/repositories` über die URL suchen, `DELETE /store/repositories/<slug>`.
 - `ingress-call METHOD PATH [JSON]` → Ingress-Session wie `ingress-get`; bei anderen Methoden als GET zuerst `GET api/v1/admin/session` und dessen `csrf_token` als `X-MyHA-CSRF` mitsenden; Ausgabe: Status und JSON. So kann Fable die Referenzinstallation über dieselbe Admin-API einrichten wie die UI.
+- `ingress-get` und `ingress-call` maskieren in jeder Ausgabe `csrf_token` und die HA-`user.id` aus `GET session` (`<masked>`), wie heute schon das Token.
 
-- [ ] **Step 1 – Tests (rot):** Argumente; CSRF-Header bei POST, keiner bei GET; `remove-repo` findet den Slug über die URL und meldet „nicht gefunden“ sauber; Token wird in Fehlermeldungen maskiert. Lauf: `cd myha/gateway && uv run pytest tests/unit/test_install_script.py -q` → FAIL.
+- [ ] **Step 1 – Tests (rot):** Argumente; CSRF-Header bei POST, keiner bei GET; `csrf_token` und `user.id` erscheinen maskiert; `remove-repo` findet den Slug über die URL und meldet „nicht gefunden“ sauber; Token wird in Fehlermeldungen maskiert. Lauf: `cd myha/gateway && uv run pytest tests/unit/test_install_script.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** `uv run pytest tests/unit/test_install_script.py -q`, `uv run ruff check ../../scripts`, `uv run mypy --strict ../../scripts/install-on-ha.py`.
 - [ ] **Step 4 – Commit:** `chore: uninstall, repository removal and ingress calls in the install script`.
@@ -1181,22 +1210,25 @@ Neue Subcommands (mutierende fragen ohne `--yes` nach; Token und Cookies erschei
 
 - [ ] **Step 1 – S0-Stand klären:** Welche der Schritte Task 1.2 Step 4, 1.3 und 1.4 Step 2 aus Teilplan 1 liefen bereits vom Branch `s0-probe`? Ergebnisse stehen in `docs/s0-report.md`. Noch offene Zeilen weist Task 13.6 mit der echten App nach.
 - [ ] **Step 2 – Probe-App entfernen** (nur falls installiert): `set -a; source .dev/ha.env; set +a`; `uv run scripts/install-on-ha.py --yes stop`, `uninstall`, `remove-repo --repo 'https://github.com/LL0rd/myha#s0-probe'`; danach `git push origin --delete s0-probe` und lokal `git branch -D s0-probe`.
-- [ ] **Step 3 – Installieren:** `add-repo` (Default `https://github.com/LL0rd/myha`), `reload`, `install`, `network <Host-Port nach Dimitris Wahl>`, `start`, jeden Schritt einzeln mit Ergebnisprüfung. `logs --lines 200`: Migrationen, Zeile „Supervisor … (minimum 2026.10.3)“, „public listener off: no public origin configured“, kein Traceback, keine Frame-Size-Fehler beim realen `get_states` (S0-Notiz zur 16-MiB-Grenze) und eine stabile Verbindung des HAClient hinter dem Supervisor-Proxy.
-- [ ] **Step 4 – Admin-SSO real:** `ingress-get api/v1/admin/session` → 200 mit dem Besitzer des Tokens als Benutzer; Dimitri öffnet myHA in der HA-Seitenleiste: Die Admin-UI lädt unter dem Ingress-Prefix, der Setup-Assistent zeigt die Prüfungen, der Admin-WS verbindet (Pairing-Liste aktualisiert sich live).
+- [ ] **Step 3 – Installieren (braucht den Betreiber: Host-Port für 8443):** `add-repo` (Default `https://github.com/LL0rd/myha`), `reload`, `install`, `network <Host-Port>`, `start`, jeden Schritt einzeln mit Ergebnisprüfung. `logs --lines 200`: Migrationen, Zeile „Supervisor … (minimum 2026.10.3)“, „public listener off: no public origin configured“, kein Traceback, keine Frame-Size-Fehler beim realen `get_states` (S0-Notiz zur 16-MiB-Grenze) und eine stabile Verbindung des HAClient hinter dem Supervisor-Proxy.
+- [ ] **Step 4 – Admin-SSO real (A01–A05 über den echten Ingress):** `ingress-get api/v1/admin/session` → 200 mit dem Besitzer des Tokens als Benutzer (in der Ausgabe maskiert); Dimitri öffnet myHA in der HA-Seitenleiste: Die Admin-UI lädt unter dem Ingress-Prefix, der Setup-Assistent zeigt die Prüfungen, der Admin-WS verbindet (Pairing-Liste aktualisiert sich live). Optional A04 real (braucht den Betreiber): ein Testbenutzer verliert die Admin-Gruppe → nächste Mutation 403, Admin-WS schließt.
 - [ ] **Step 5 – Bericht:** `docs/s0-report.md` Zeilen 4 (Supervisor- und Core-Version aus `/info`) und 5 (echtes Build-Log) ergänzen; Commit `docs: myHA installed on the reference installation` (Fable-Trailer).
 
-### Task 13.6: Realer vertikaler Pfad und Nachweise (Fable, nach Zustimmung; Telefon und Tablet: Dimitri)
+### Task 13.6: Realer vertikaler Pfad und Nachweise (Fable, nach Zustimmung)
 
-- [ ] **Step 1 – Public Listener:** TLS-Modus und Zertifikat nach Dimitris Entscheidung (offener Punkt 1) über `ingress-call PUT api/v1/admin/setup/tls …` und `…/setup/origin …`; Prüfungen ausführen. A01 real: `curl -H 'X-Remote-User-Id: x' <origin>/api/v1/admin/session` → 404.
-- [ ] **Step 2 – Wohnzimmer:** Unit „Living room“; Bindungen für das Govee-Licht und eine Klimaanlage (bestätigte Modi aus `hvac_modes ∩ {off, cool, heat}`); Rolle mit `light.on/off/set_level` sowie `climate.set_temperature` 19–24 °C in 1-°C-Schritten und `climate.set_mode` {off, cool, heat}; Bewohner (Dimitri) mit Zuweisung. Login auf Dimitris Telefon: Licht an, aus, Helligkeit → jeweils `confirmed` und in HA sichtbar; Klima-Sollwert im Bereich → `confirmed`, außerhalb → abgelehnt; Moduswechsel cool ↔ heat mit Beobachtung, ob der Sollwert bleibt oder springt (E7; die Nachprüfung setzt bei einem Wert außerhalb `needs_review`) → S0-Zeile 14. Am Ende Modus und Sollwert wiederherstellen.
-- [ ] **Step 3 – Gastpfad und Gast-WLAN (A44):** Aufenthalt und Einladung; Einlösen mit einem Telefon im Gast-WLAN; Gastgerätetest aus dem Setup-Assistenten → Prüfungen `guest_device` und `client_ip` (IP-Klasse → S0-Zeile 11); Checkout → Seite „Zugang beendet“.
-- [ ] **Step 4 – Backup (A47 real):** `backup-new`; `logs` mit den Zeilen von Export und Cleanup; `backup-download <slug> <Scratchpad>/myha-backup.tar` (außerhalb des Repos); das innere App-Archiv enthält `backup/restore.sqlite`, kein `state/`, keine `-wal`/`-shm`; `sqlite3` auf der exportierten Datei: Sicherheitstabellen leer; `GET backup/status` meldet Erfolg, und nach dem Post-Hook liegt kein Export mehr in `/data/backup` → S0-Zeile 12. Optional mit eigener Zustimmung: diese Teilsicherung wiederherstellen → Restore-Modus → Prüfen → Anwenden (A39 real); dabei festhalten, ob der Supervisor `/data/state` beim Restore leert (offener Punkt 8) und wie er auf einen fehlschlagenden `backup_pre` reagiert (offener Punkt 9).
-- [ ] **Step 5 – Zeitquelle (E26):** Prüfungen und Diagnose zeigen, ob `/host/info` mit `dt_synchronized` ohne `hassio_api` lesbar ist → S0-Zeile 13. Wenn nicht und Dimitri zustimmt: `hassio_api: true` und `hassio_role: default` in `config.yaml` (eigener Commit, `rebuild`), dann erneut prüfen.
-- [ ] **Step 6 – Argon2:** `argon2_ms` aus der Diagnose und die Tabelle aus `POST diagnostics/argon2-benchmark` → `docs/security.md` und S0-Zeile 15. Liegen die vorläufigen Parameter deutlich neben ≈ 250 ms, passt ein Subagent `HASHER` in `auth/passwords.py` an; bestehende Hashes werden beim nächsten Login neu erstellt.
-- [ ] **Step 7 – Manuelle Abnahme der Admin-UI im echten HA** (Dimitri mit Fable): alle Screens, Tastaturpfad, DE/EN, drei Themes, ein Screenreader (VoiceOver oder TalkBack auf dem Telefon für Login und Dashboard) → Ergebnis in `docs/acceptance.md` (Gate WP9a/9b, A42 manueller Teil).
-- [ ] **Step 8 – Bericht:** `docs/s0-report.md` Zeilen 11–15 ergänzen, `docs/acceptance.md` (Status-Spalte und Nachweis) mit A44, A47 real und den Gate-Nachweisen; keine LAN-IPs, Token, User-IDs oder Entity-IDs der Referenzinstallation. Commit `docs: real vertical path on the reference installation` (Fable-Trailer).
+Steps 1–3 und 8 brauchen den Betreiber (offener Punkt 1, Telefon, Tablet, Zustimmung zum Schalten der Klimaanlage). Steps 4–7 laufen ohne offenen Punkt 1 und dürfen vorher stattfinden.
 
-### Task 13.7: Veröffentlichte Images (optional; Fable, nach Zustimmung)
+- [ ] **Step 1 – Public Listener (braucht den Betreiber: offener Punkt 1):** TLS-Modus und Zertifikat nach Dimitris Entscheidung über `ingress-call PUT api/v1/admin/setup/tls …` und `…/setup/origin …`; Prüfungen ausführen. A01 real: `curl -H 'X-Remote-User-Id: x' <origin>/api/v1/admin/session` → 404.
+- [ ] **Step 2 – Wohnzimmer (braucht den Betreiber):** Unit „Living room“; Bindungen für das Govee-Licht und eine Klimaanlage (bestätigte Modi aus `hvac_modes ∩ {off, cool, heat}`); Rolle mit `light.on/off/set_level` sowie `climate.set_temperature` 19–24 °C in 1-°C-Schritten und `climate.set_mode` {off, cool, heat}; ein Bewohner-Konto des Betreibers mit Zuweisung. Login auf dem Telefon des Betreibers: Licht an, aus, Helligkeit → jeweils `confirmed` und in HA sichtbar; Klima-Sollwert im Bereich → `confirmed`, außerhalb → abgelehnt; Moduswechsel cool ↔ heat mit Beobachtung, ob der Sollwert bleibt oder springt (E7; die Nachprüfung setzt bei einem Wert außerhalb `needs_review`) → S0-Zeile 14. A18 real: liegt der gemeldete Sollwert außerhalb 19–24 °C (nötigenfalls mit Zustimmung in HA auf 26 °C gestellt), lehnt myHA `cool` und `heat` ab. Am Ende Modus und Sollwert wiederherstellen.
+- [ ] **Step 3 – Gastpfad und Gast-WLAN (A44; braucht den Betreiber):** Aufenthalt und Einladung; Einlösen mit einem Telefon im Gast-WLAN; Gastgerätetest aus dem Setup-Assistenten → Prüfungen `guest_device` und `client_ip` (IP-Klasse → S0-Zeile 11); Checkout → Seite „Zugang beendet“.
+- [ ] **Step 4 – Backup (A47, A48 real):** `backup-new`; `logs` mit den Zeilen von Export und Cleanup; `backup-download <slug> <Scratchpad>/myha-backup.tar` (außerhalb des Repos); das innere App-Archiv enthält `backup/restore.sqlite`, kein `state/`, keine `-wal`/`-shm`; `sqlite3` auf der exportierten Datei: Sicherheitstabellen leer, `server_secret` leer; `GET backup/status` meldet Erfolg, und nach dem Post-Hook liegt kein Export mehr in `/data/backup` → S0-Zeile 12. „Gestoppte App“ (A48): `stop`, `backup-new`, Archiv ohne `restore.sqlite` und ohne `state/`, keine Hook-Zeilen im Log; `start` → kein Restore-Modus. Optional mit eigener Zustimmung: die erste Teilsicherung wiederherstellen → Restore-Modus → Prüfen → Anwenden (A39 real); dabei festhalten, ob der Supervisor `/data/state` beim Restore leert (offener Punkt 8) und wie er auf einen fehlschlagenden `backup_pre` reagiert (offener Punkt 9).
+- [ ] **Step 5 – Zeitquelle (E26):** Die Prüfung `time` und das Diagnosefeld `time` zeigen `host_info`. Bei `not_permitted` bleibt es bei `hassio_api: false` (Entscheidung 7: nur die Hochwassermarke); `hassio_api: true` mit `hassio_role: default` nur mit Dimitris Zustimmung (eigener Commit, `rebuild`, erneut prüfen) → S0-Zeile 13.
+- [ ] **Step 6 – Update ohne Rechteaufweitung (A40 real):** Status aller Bindungen und die Vorschau eines Aufenthalts notieren; einen neueren Commit von `main` per `update` bzw. `rebuild` einspielen; danach keine `binding.needs_review`-Welle im Audit, kein Restore-Modus, Vorschau unverändert, Sessions weiter gültig.
+- [ ] **Step 7 – Argon2:** `argon2_ms` aus der Diagnose und die Tabelle aus `POST diagnostics/argon2-benchmark` → `docs/security.md` und S0-Zeile 15. Liegen die vorläufigen Parameter deutlich neben ≈ 250 ms, passt ein Subagent die Parameter in `auth/passwords.py` an; bestehende Hashes werden beim nächsten Login neu erstellt.
+- [ ] **Step 8 – Manuelle Abnahme der Admin-UI im echten HA (braucht den Betreiber):** alle Screens, Tastaturpfad, DE/EN, drei Themes; Screenreader (VoiceOver oder TalkBack) für Login, Dashboard, Rechteeditor und Vorschau → Ergebnis in `docs/acceptance.md` (Gate WP9a/9b, A42 manueller Teil).
+- [ ] **Step 9 – Bericht:** `docs/s0-report.md` Zeilen 11–15 ergänzen, `docs/acceptance.md` (Status-Spalte und Nachweis) mit A01–A05, A18, A40, A44, A47, A48 real und den Gate-Nachweisen; keine LAN-IPs, Token, User-IDs oder Entity-IDs der Referenzinstallation. Commit `docs: real vertical path on the reference installation` (Fable-Trailer).
+
+### Task 13.7: Veröffentlichte Images (optional; Fable, nach Zustimmung; braucht den Betreiber)
 
 Nicht Gate-relevant (E16: erst lauffähig, dann bequem).
 
@@ -1216,8 +1248,8 @@ Abnahme: A41, A42, A45 und A46 dokumentiert; Regression A19–A35, A50, A52 im B
 - Create: `tests/e2e/admin.spec.ts`, `tests/e2e/resident.spec.ts`
 
 Specs:
-- `admin.spec.ts`: `http://localhost:18098/api/hassio_ingress/e2e/` öffnet den Setup-Assistenten (frische Instanz; der Public-Listener läuft über den Dev-Override); „Rooms & devices“: Raum „Room 205“, `light.room_203_ceiling` und `climate.room_203_trv` (Modi off/heat) binden; „Roles & rights“: Rolle „Guest“ mit Licht ein/aus und Temperatur 19–24/0,5, Entwurf speichern, „Review & publish“ → v1; „Stays & invites“: Aufenthalt heute bis morgen, „Zuerst prüfen“ zeigt das Banner, „QR ausgeben“ für zwei Geräte, Join-URL nur im Test aus dem Dialog-DOM lesen, „Fertig“; zweiter Browserkontext öffnet die URL → Dashboard „Room 205“ → Licht aus → bestätigt; „Sessions & checkout“: Checkout → Gastseite „Zugang beendet“ innerhalb 5 s; „Audit & diagnostics“ zeigt Redeem und Checkout; Gastgerätetest: Start → dritter Kontext löst ein → Prüfung `guest_device` ok.
-- `resident.spec.ts`: Bewohner über „People & groups“ anlegen → `/login` im Gastkontext → Dashboard; falsches Passwort zeigt die einheitliche Meldung; Display-Pairing: Tablet-Kontext `/pair` → Code → Admin bestätigt mit dem abgelesenen Code und einer Unit → Tablet zeigt das Wand-Dashboard.
+- `admin.spec.ts`: `http://localhost:18098/api/hassio_ingress/e2e/` öffnet den Setup-Assistenten (frische Instanz; der Public-Listener läuft über den Dev-Override); „Rooms & devices“: Raum „Room 205“, `light.room_203_ceiling` und `climate.room_203_trv` (Modi off/heat) binden; „Roles & rights“: Rolle „Guest“ mit Licht ein/aus und Temperatur 19–24/0,5, Entwurf speichern, „Review & publish“ → v1; „Stays & invites“: Aufenthalt heute bis morgen, „Zuerst prüfen“ zeigt das Banner, „QR ausgeben“ für zwei Geräte; die Join-URL liest der Test über `page.waitForResponse` auf `POST …/stays/{id}/invites` aus der Antwort (der Dialog zeigt den Link nur maskiert), dann „Fertig“; zweiter Browserkontext öffnet die URL → Dashboard „Room 205“ → Licht aus → bestätigt; „Sessions & checkout“: Checkout → Gastseite „Zugang beendet“ innerhalb 5 s; „Audit & diagnostics“ zeigt Redeem und Checkout; Gastgerätetest: Start → dritter Kontext löst ein → Prüfung `guest_device` ok.
+- `resident.spec.ts`: Bewohner über „People & groups“ anlegen → `/login` im Gastkontext → Dashboard; falsches Passwort zeigt die einheitliche Meldung; Display-Pairing: Der Admin legt zuerst einen Display-Principal mit einer Zuweisung der Rolle auf die Unit an (ohne Zuweisung sähe das Tablet ein leeres Dashboard); Tablet-Kontext `/pair` → Code → Admin bestätigt für diesen Display mit dem abgelesenen Code und der Unit → Tablet zeigt das Wand-Dashboard.
 
 - [ ] **Step 1 – Specs schreiben, rot gegen den Stand ohne Proxy-Erweiterung:** `cd tests/e2e && pnpm exec playwright test admin.spec.ts resident.spec.ts` → FAIL.
 - [ ] **Step 2 – Proxy und Helfer erweitern.**
@@ -1230,7 +1262,7 @@ Specs:
 - Create: `tests/e2e/a11y.spec.ts`
 - Modify: `tests/e2e/package.json` (`@axe-core/playwright`)
 
-Für Gast-Dashboard, Login, Admin-Rolleneditor und Admin-Vorschau bei 320×640, 768×1024, 1024×768, 1180×820, 2560×1440 und „200 % Zoom“ (halbe CSS-Breite bei `deviceScaleFactor: 2`, entspricht Browser-Zoom 200 %): kein horizontales Scrollen (`scrollWidth <= clientWidth`), jede Hauptaktion nach Scrollen sichtbar und mindestens 44 px groß (Wandmodus 64 px). Tastatur: Tab erreicht Login-Felder und Absenden, Dashboard-Aktionen, Matrixzellen und die Zielauswahl der Vorschau in sinnvoller Reihenfolge; Dialoge halten den Fokus und schließen mit Escape. axe: keine Verstöße der Stufen `serious` oder `critical`. Die Screenreader-Prüfung bleibt manuell (Task 13.6 Step 7).
+Für Gast-Dashboard, Login, Admin-Rolleneditor und Admin-Vorschau bei 320×640, 768×1024, 1024×768, 1180×820 und 2560×1440 sowie mit 200 % Textgröße (Root-Schriftgröße per `page.addStyleTag` auf 200 %) bei 320 und 768 px Breite; Voraussetzung: Schrift- und Abstandsgrößen in `rem`, was der Test damit mitprüft: kein horizontales Scrollen (`scrollWidth <= clientWidth`), jede Hauptaktion nach Scrollen sichtbar und mindestens 44 px groß (Wandmodus 64 px). Tastatur: Tab erreicht Login-Felder und Absenden, Dashboard-Aktionen, Matrixzellen und die Zielauswahl der Vorschau in sinnvoller Reihenfolge; Dialoge halten den Fokus und schließen mit Escape. axe: keine Verstöße der Stufen `serious` oder `critical`. Die Screenreader-Prüfung für Login, Dashboard, Rechteeditor und Vorschau bleibt manuell (Task 13.6 Step 8).
 
 - [ ] **Step 1 – Spec schreiben (rot, solange Layoutfehler bestehen):** `pnpm exec playwright test a11y.spec.ts`.
 - [ ] **Step 2 – Gefundene Layout- und Fokusfehler in `web/src` beheben** (je Befund ein kleiner Commit `fix(web): …`).
@@ -1256,7 +1288,7 @@ Für Gast-Dashboard, Login, Admin-Rolleneditor und Admin-Vorschau bei 320×640, 
 - Modify: `myha/gateway/myha_simulator/fixtures.py`, `myha/gateway/myha_simulator/__main__.py` (`--synthetic N`: N zusätzliche Lichter und Sensoren im Bereich `area_load`), `myha/gateway/myha_gateway/devseed.py` (`dev-seed load`: Unit mit 100 Bindungen aus `area_load`, Rolle, Aufenthalt, 20 Einladungen; Join-URLs nur auf stdout und nur mit `MYHA_PUBLIC_ENABLED=1`, wie `dev-seed room203`)
 - Test: `myha/gateway/tests/integration/test_devseed.py`, `myha/gateway/tests/integration/test_simulator.py`
 
-Verhalten: Gegen einen laufenden Dev-Stack (Simulator mit `--synthetic 485`, also 500 Entities; Gateway; `dev-seed load`) löst das Skript 20 Einladungen nativ ein, öffnet 20 WS-Verbindungen und ändert 10 min lang jede Sekunde über `_sim/state` zufällige gebundene Entities. Es misst Ereignislatenz (Änderung im Simulator bis `resource.updated` beim Client, p50/p95), die Rundlaufzeit von `POST /actions` (p95), `decide_p95_ms` aus der Diagnose und den Speicher des Gateways am Anfang und Ende (`/proc/<pid>/status`, lokal). Ausgabe als JSON. Ergebnis mit Hardwareangabe in `docs/acceptance.md` (A46). Der 72-Stunden-Wandbetrieb läuft nur, wenn ein Wandtablet an der Referenzinstallation verfügbar ist (Fable, nach Zustimmung); sonst steht er mit Ziel und begründeter Grenze als offen in der Matrix.
+Verhalten: Gegen einen laufenden Dev-Stack (Simulator mit `--synthetic 485`, also 500 Entities; Gateway; `dev-seed load`) löst das Skript 20 Einladungen nativ ein, öffnet 20 WS-Verbindungen und ändert 10 min lang jede Sekunde über `_sim/state` zufällige gebundene Entities. Es misst Ereignislatenz (Änderung im Simulator bis `resource.updated` beim Client, p50/p95), die Rundlaufzeit von `POST /actions` (p95), `decide_p95_ms` aus der Diagnose und den Speicher des Gateways am Anfang und Ende (`/proc/<pid>/status`, lokal). Ausgabe als JSON. Ergebnis mit Hardwareangabe in `docs/acceptance.md` (A46). Der 72-Stunden-Wandbetrieb (braucht den Betreiber) läuft nur, wenn ein Wandtablet an der Referenzinstallation verfügbar ist (Fable, nach Zustimmung); sonst steht er mit Ziel und begründeter Grenze als offen in der Matrix.
 
 - [ ] **Step 1 – Tests (rot):** `--synthetic 485` liefert 500 Entities; `dev-seed load` ist idempotent und gibt 20 URLs aus. Lauf: `uv run pytest tests/integration/test_devseed.py tests/integration/test_simulator.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren;** Skript einmal lokal laufen lassen.
@@ -1271,7 +1303,7 @@ Verhalten: Gegen einen laufenden Dev-Stack (Simulator mit `--synthetic 485`, als
 
 Inhalt (englisch, für Betreiber, nichts Betreiberspezifisches):
 - `setup.md`: Installation, Rundgang durch den Setup-Assistenten, Verbindungsmodi mit Proxy-CIDRs und Zertifikatswechsel, Bewohner, Display-Pairing, Aufenthalte (Einladungen, Verlängerung, Zimmerwechsel, Ersatz, Checkout), Trustprofil für native Apps mit der E28-Warnung, Anforderungen an das Gast-WLAN (nur DNS und der Gateway-Port).
-- `security.md`: Punkte aus „Decided, not implemented yet“ nach „Implemented today“ (Trustprofil, Leaf-Pins, native Token mit Rotation, Login-Rate-Limits und einheitliche Fehler, Pairing, Proxy-Modus, Backup und Restore); Argon2-Tabelle mit den gewählten Parametern; A45-Zusammenfassung; Meldeweg für Schwachstellen (die Repo-Einstellung muss Dimitri aktivieren, offener Punkt 11).
+- `security.md`: Punkte aus „Decided, not implemented yet“ nach „Implemented today“ (Trustprofil, Leaf-Pins, native Token mit Rotation, Login-Rate-Limits und einheitliche Fehler, Pairing, Proxy-Modus, Backup und Restore); Argon2-Tabelle mit den gewählten Parametern; A45-Zusammenfassung; Meldeweg für Schwachstellen (braucht den Betreiber: die private Meldung aktiviert nur Dimitri, offener Punkt 11). Bis dahin ersetzt der Abschnitt den Verweis auf „Report a vulnerability“ durch: „Open an issue titled ‚Security contact‘ without any details; the maintainer replies with a private channel.“
 - `restore.md`: Inhalt eines Backups (E22-Liste), Hooks und Status, Prüfen, Anwenden und Verwerfen, was verloren geht (Sessions, Einladungen, Passwörter, Pins), Verhalten bei Fehlern (A48), normale Backups und Updates (A40) samt Fingerprint-Upgrade.
 - `device-matrix.md`: getestete Browser (Playwright-Chromium-Version, Dimitris Telefonbrowser aus Task 13.6), Mindest-WebView (zod 4 braucht `globalThis`, Chrome ≥ 71); native Zeilen folgen in Teilplan 4.
 - `DOCS.md`: Option `log_level`, Ports, echtes Backup-Verhalten, Hinweis Pilotstatus. `README.md`: Status „pilot“.
@@ -1282,12 +1314,12 @@ Inhalt (englisch, für Betreiber, nichts Betreiberspezifisches):
 ### Task 14.6: Teilplan-3-Abschluss
 
 - [ ] **Step 1:** Gateway-, Web- und E2E-Prüfung grün, CI grün; Coverage `policy` und `auth` ≥ 85 %.
-- [ ] **Step 2:** `CHANGELOG.md` mit Abschnitt `[0.2.0]` (Added, Changed, Security); Version 0.2.0 in `myha/config.yaml`, `myha/gateway/pyproject.toml` und `myha_gateway/__init__.py` (plus `tests/unit/test_version.py`); `docs/acceptance.md` mit dem Stand A01–A52, die Zeilen nennen statt der Arbeitspakete die Tasks und Tests dieses Plans; Design §14 auf den Ist-Stand bringen und Design §6 um die zusätzlichen Routen aus offenem Punkt 12 ergänzen.
+- [ ] **Step 2:** `CHANGELOG.md` mit Abschnitt `[0.2.0]` (Added, Changed, Security); Version 0.2.0 in `myha/config.yaml`, `myha/gateway/pyproject.toml` und `myha_gateway/__init__.py` (plus `tests/unit/test_version.py`); `docs/acceptance.md` mit dem Stand A01–A52, die Zeilen nennen statt der Arbeitspakete die Tasks und Tests dieses Plans; im Design §6 die Routenliste aus Entscheidung 12 nachtragen, §5 um die neuen Spalten (`session.access_expires_at`, `instance.trust_policy`, die Pairing-Felder aus Task 5b.1, `stay.moved_from_id`, Singleton-Trigger) ergänzen, §7 auf „Radix nur Dialog und Tabs“ setzen, §10 um Login-Brute-Force (Rate Limits, einheitliche Fehler, Argon2id), Display-Pairing (Code nur am Gerät, nie leerer Scope) und Proxy-Spoofing (nur Proxy-CIDRs, keine HAOS- oder Docker-Netze) ergänzen und §14 auf den Ist-Stand bringen.
 - [ ] **Step 3 – Commit:** `docs: plan 3 wrap-up`. Fable: Review (`superpowers:requesting-code-review`), danach Gate.
 
 ### Task 14.7: Privates Repo – Submodule `vendor/myha`
 
-**Files (in `/home/dimitri/Projekte/myha-apps`):** `.gitmodules`, `vendor/myha`, `README.md`
+**Files (im privaten Repo `LL0rd/myha-apps`, lokaler Klon neben diesem Repo):** `.gitmodules`, `vendor/myha`, `README.md`
 
 - [ ] **Step 1:** `git submodule add https://github.com/LL0rd/myha vendor/myha`; `git -C vendor/myha checkout <Commit von main nach Task 14.6>`.
 - [ ] **Step 2:** README-Hinweis: Die Web-UI wird ab Teilplan 4 aus `vendor/myha` gebaut (`vite build --mode native`).
@@ -1300,25 +1332,29 @@ Inhalt (englisch, für Betreiber, nichts Betreiberspezifisches):
 | Bedingung | Nachweis |
 |---|---|
 | Add-on auf Dimitris HA installiert | Task 13.5 |
-| Admin-SSO real | Task 13.5 Step 4, Task 13.6 Step 7 |
-| Licht und Klima im Wohnzimmer real bedient | Task 13.6 Step 2 |
-| Restliche M2-Abnahmefälle grün oder dokumentiert | A01–A32, A34, A35, A39–A42, A44, A45, A47–A52 in `docs/acceptance.md`; A33 entfällt (E21); A46 dokumentiert |
+| Admin-SSO real | Task 13.5 Step 4, Task 13.6 Step 8 |
+| Licht und Klima im Wohnzimmer real bedient | Task 13.6 Step 2; hängt am offenen Punkt 1 (Zertifikat oder Reverse Proxy) und an Dimitris Telefon |
+| Restliche M2-Abnahmefälle grün oder dokumentiert | A01–A32, A34, A35, A39–A42, A44, A45, A47–A52 in `docs/acceptance.md`; A33 entfällt (E21); A46 dokumentiert, der 72-Stunden-Lauf hängt am offenen Punkt 14 |
 
 ---
 
-## Offene Punkte (vor oder während der Umsetzung mit Dimitri bzw. Fable klären)
+## Entscheidungen (Plan-Review, Revision 2)
 
-1. **TLS auf der Referenzinstallation:** Liegt ein Zertifikat für einen Hostnamen in `/ssl`, oder steht ein Reverse Proxy davor? Ohne diese Entscheidung (E8) kann Task 13.6 keinen Public-Listener einrichten.
-2. **Zimmerwechsel:** Spez §8.6 verlangt einen neu zu prüfenden Zielaufenthalt „samt Einladung“; der Hinweis aus der Index-Prüfung verlangt, dass `session.unit_ids` beim Zimmerwechsel nachgezogen wird. Task 10.4 erfüllt beides: neuer Entwurf, alte Raumrechte enden, und bestehende Geräte zieht der Betreiber nur ausdrücklich beim Bestätigen mit um (Default aus). Bestätigen, dass diese Übernahme gewollt ist.
-3. **Argon2-Parameter:** S0-Zeile 15 ist offen. Der Plan startet mit `t=3, m=64 MiB, p=1` und erneuert Hashes beim Login. Eine Kalibrierung je Installation ist nicht geplant; auf langsamer aarch64-Hardware kann ein Login über eine Sekunde dauern.
-4. **Bewohner-Passwörter:** Der Admin setzt sie; eine Selbständerung durch den Bewohner und die Durchsetzung von `must_reset` sind nicht geplant. Reicht das für den Pilot?
-5. **Mockup-Dateien:** Im Repo liegen nur `ha-access-ui.dc.html`, `guest-panel.dc.html` und `support.js`; `ios-frame.jsx` und ein Login-Design fehlen. `/login` und `/pair` folgen deshalb der Einladungsseite des Mockups.
-6. **Origin-Wechsel:** Task 11.4 widerruft nach Bestätigung alle Zugänge, weil Spez §8.4 Zugangsdaten an den Origin bindet und keinen Migrationsablauf vorsieht. Für Betreiber ist das hart; bestätigen.
-7. **`hassio_api` für `/host/info` (E26):** Ob die zweite Zeitquelle eine zusätzliche Supervisor-Berechtigung braucht, zeigt erst Task 13.6 Step 5; die Freigabe entscheidet Dimitri.
-8. **Restore-Verhalten des Supervisors:** Ob ein App-Restore `/data/state` leert oder die ausgeschlossenen Pfade stehen lässt, ist nicht belegt. Task 12.3 funktioniert in beiden Fällen; Task 13.6 Step 4 hält das reale Verhalten fest.
-9. **Fehlschlagender `backup_pre`:** Ob der Supervisor das Backup dann abbricht oder ohne Export fortsetzt, ist nicht belegt. In beiden Fällen gibt es keinen Rückfall auf Live-Daten (`state/` ist immer ausgeschlossen); Task 13.6 Step 4 hält es fest.
+2. **Zimmerwechsel:** `stays/{id}/move` erzeugt den Zielentwurf und je Geräteplatz eine Einladung (QR genau einmal); Einlösen gelingt erst nach der Bestätigung; die Bestätigung übernimmt bestehende Sessions nur auf ausdrücklichen Wunsch (Default aus) und setzt dann `session.unit_ids` auf die neue Unit. Die Invites-Route lehnt verschobene Entwürfe ab, und die Bestätigung scheitert, wenn der alte Aufenthalt nicht mehr läuft (Task 10.4).
+3. **Argon2-Parameter:** vorläufig `t=3, m=64 MiB, p=1` mit Rehash beim Login; die Messung auf der Referenzinstallation (Task 13.6 Step 7) kann sie anpassen. Keine Kalibrierung je Installation.
+4. **Bewohner-Passwörter:** Der Admin setzt Benutzername und Passwort; keine Selbständerung; `must_reset` bleibt `false` und wird nicht durchgesetzt.
+5. **Login- und Pairing-Seiten** folgen der Einladungsseite des Mockups; `ios-frame.jsx` und ein eigenes Login-Design liegen nicht im Repo.
+6. **Origin-Wechsel** widerruft nach Bestätigung alle Zugänge, offenen Einladungen und offenen Pairing-Anfragen (Spez §8.4).
+7. **`hassio_api`:** bleibt `false`; ohne `/host/info` wirkt nur die Hochwassermarke (E26). Die Prüfung und das Diagnosefeld `time` zeigen den Stand; eine zusätzliche Supervisor-Berechtigung gibt es nur mit Dimitris Zustimmung (Task 13.6 Step 5).
+12. **Routen über Design §6 hinaus**, nachgetragen in Task 14.6: `preview/{id}/explain`; `GET roles/{id}`, `GET roles/{id}/versions/{n}`, `DELETE roles/{id}/draft`; `PATCH`/`DELETE` `units/{id}` und `bindings/{id}`, `GET bindings/{id}/review`; `stays/{id}/move` mit Einladungen, `carry_over_sessions` beim Bestätigen, `stays/{id}` (`GET`, `PATCH`), `stays/{id}/cancel`; Filter `principal_id` und `principal_type` auf `sessions`; die neuen Felder von `GET session` (`policy_version`, `public_ready`, `public_reason`); `me/trust`, `ws-ticket` und `logout` für Testsessions; `restore/discard`; `setup/instance`, `setup/trust/recompute`; `diagnostics/argon2-benchmark`.
+13. **Radix:** nur Dialog und Tabs; Select, Checkbox, Switch und Tooltip bleiben native Elemente, solange sie den Tastaturtest bestehen. Task 14.6 passt Design §7 an.
+
+## Offene Punkte (braucht den Betreiber oder reale Beobachtung)
+
+1. **TLS auf der Referenzinstallation:** Liegt ein Zertifikat für einen Hostnamen in `/ssl`, oder steht ein Reverse Proxy davor (E8)? Davon hängen Task 13.6 Steps 1–3 und die Gate-Zeile „Licht und Klima“ ab; Steps 4–7 laufen ohne.
+8. **Restore-Verhalten des Supervisors:** Ob ein App-Restore `/data/state` leert oder die ausgeschlossenen Pfade stehen lässt, ist nicht belegt. Tasks 12.3 und 12.4 funktionieren in beiden Fällen; Task 13.6 Step 4 hält das reale Verhalten fest.
+9. **Fehlschlagender `backup_pre`:** Ob der Supervisor das Backup abbricht oder ohne Export fortsetzt, ist nicht belegt. Es gibt in beiden Fällen keinen Rückfall auf Live-Daten (`state/` ist immer ausgeschlossen); Task 13.6 Step 4 hält es fest.
 10. **Veröffentlichte Images (E16):** ghcr-Pakete öffentlich stellen und ein Release-Tag setzen braucht Dimitris Zustimmung; Task 13.7 ist optional.
-11. **Schwachstellenmeldung:** Die private Meldung ist im GitHub-Repo deaktiviert; `docs/security.md` verweist darauf. Die Einstellung kann nur Dimitri aktivieren.
-12. **Ergänzungen über die Routenliste aus Design §6 hinaus:** `restore/discard`, `setup/instance`, `setup/trust/recompute`, `diagnostics/argon2-benchmark`, `stays/{id}` (GET, PATCH), `stays/{id}/cancel`. Alle folgen aus Spez-Anforderungen (Restore ohne gültigen Export, Instanzeinstellungen, Pin-Neuberechnung im Proxy-Modus, Argon2-Messung ohne S0-Probe, Entwurfspflege); Design §6 wird in Task 14.6 nachgezogen.
-13. **Radix:** Nur Dialog und Tabs kommen hinzu; Select, Checkbox, Switch und Tooltip bleiben native Elemente, solange sie den Tastaturtest bestehen. Design §7 nennt alle sechs Primitive.
+11. **Schwachstellenmeldung:** Die private Meldung ist im GitHub-Repo deaktiviert; nur Dimitri kann sie aktivieren. Bis dahin nennt `docs/security.md` einen Ersatzweg (Task 14.5).
 14. **72-Stunden-Wandbetrieb (A46):** braucht ein Wandtablet an der Referenzinstallation; ohne Gerät bleibt der Fall dokumentiert offen.
+
