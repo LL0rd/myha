@@ -316,22 +316,26 @@ def test_device_limits_refuse_values_a_grant_allows() -> None:
     )
 
 
-def test_the_step_comes_from_the_grant_interval_alone() -> None:
-    """A rule's step stands although the device steps in whole degrees; no rule: device steps."""
-    rule = interval("19", "24", "0.5")
-    finer = room203_index(grants=[grant("res_lr_ac", "climate.set_temperature", target_c=rule)])
-    halves = run(finer, "res_lr_ac", "climate.set_temperature", {"target_c": "21.5"})
-    assert halves.code is Code.GRANTED
-    index = room203_index(grants=[grant("res_lr_ac", "climate.set_temperature")])  # step 1, 8-30
+def test_a_value_must_lie_on_the_grant_device_and_schema_grids_at_once() -> None:
+    """The step is the least common multiple of the grant's, the device's and the schema's."""
 
-    def set_to(value: str) -> Code:
-        return run(index, "res_lr_ac", "climate.set_temperature", {"target_c": value}).code
+    def set_to(index: PolicyIndex, resource: str, value: str) -> Code:
+        return run(index, resource, "climate.set_temperature", {"target_c": value}).code
 
-    assert (set_to("21"), set_to("21.5"), set_to("31")) == (
-        Code.GRANTED,
-        Code.PARAM_STEP,
-        Code.PARAM_OUT_OF_RANGE,
-    )
+    halves = interval("19", "24", "0.5")
+    ac = room203_index(grants=[grant("res_lr_ac", "climate.set_temperature", target_c=halves)])
+    assert set_to(ac, "res_lr_ac", "21.5") is Code.PARAM_STEP  # the AC steps in whole degrees
+    assert set_to(ac, "res_lr_ac", "21") is Code.GRANTED
+    thirds = interval("19", "24", "0.3")  # meets the radiator's 0.5 only every 1.5 degrees
+    trv = room203_index(grants=[grant("res_203_trv", "climate.set_temperature", target_c=thirds)])
+    assert set_to(trv, "res_203_trv", "21.3") is Code.PARAM_STEP
+    assert set_to(trv, "res_203_trv", "21") is Code.GRANTED
+    no_rule = room203_index(grants=[grant("res_lr_ac", "climate.set_temperature")])  # 8-30
+    assert (
+        set_to(no_rule, "res_lr_ac", "21"),
+        set_to(no_rule, "res_lr_ac", "21.5"),
+        set_to(no_rule, "res_lr_ac", "31"),
+    ) == (Code.GRANTED, Code.PARAM_STEP, Code.PARAM_OUT_OF_RANGE)
 
 
 def test_a_failing_step_computation_is_a_param_step(monkeypatch: pytest.MonkeyPatch) -> None:

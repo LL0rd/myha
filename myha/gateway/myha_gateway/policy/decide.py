@@ -40,7 +40,6 @@ _MESSAGES: Mapping[PublicError | None, str] = {
     PublicError.ACCESS_EXPIRED: "The access is not active at this time.",
     PublicError.UPSTREAM_UNAVAILABLE: "The device cannot be used right now.",
 }
-_NOTHING = (Decimal(1), Decimal(0))  # an empty check range: low > high, no target lies inside
 
 
 @dataclass(frozen=True)
@@ -121,7 +120,7 @@ def decide(
         return _denial(DecisionCode.RESOURCE_NEEDS_REVIEW, normalized)
     check_range = None
     if act is Action.CLIMATE_SET_MODE and value != "off":
-        check_range = _check_range(ctx, index, resource_id, capabilities)
+        check_range = index.check_range(ctx, resource_id)  # low > high: no target passes
         if check_range is not None and (
             state_view is None  # an unknown target counts as outside
             or Expectation(target_c_range=check_range).violated_range(state_view)
@@ -200,7 +199,7 @@ def _mode_code(
 def _number_code(
     name: str, value: Decimal, cuts: Mapping[str, tuple[Interval, ...]], fences: list[Fence]
 ) -> tuple[DecisionCode | None, tuple[str, ...]]:
-    """A value in a grant interval cut to the device, on its step, then inside every fence.
+    """A value in a grant's settable interval, on that interval's step, then inside every fence.
 
     ``cuts`` are the intervals the effective capability starts from, so decide refuses nothing
     it offers and allows nothing it does not.
@@ -224,33 +223,6 @@ def _on_step(interval: Interval, value: Decimal) -> bool:
         return interval.on_step(value)
     except DecimalException:  # a step the exact context cannot resolve is no step (PARAM_STEP)
         return False
-
-
-def _check_range(
-    ctx: EffectiveContext, index: PolicyIndex, resource_id: str, capabilities: DeviceCapabilities
-) -> tuple[Decimal, Decimal] | None:
-    """The range the reported target must lie in for cool or heat (E7); ``None``: no check.
-
-    With set_temperature granted, the hull of its effective range; otherwise its fences cut to
-    the device range.
-    """
-    action = Action.CLIMATE_SET_TEMPERATURE
-    capability = index.effective_capability(ctx, resource_id, action)
-    if capability is not None:
-        if not capability.intervals:
-            return _NOTHING
-        intervals = capability.intervals
-        return min(iv.min for iv in intervals), max(iv.max for iv in intervals)
-    fences = index.fences(ctx, resource_id, action)
-    bounds = [b for fence in fences if (b := fence.parameters.target_c) is not None]
-    if not bounds:
-        return None
-    low, high = max(b.min for b in bounds), min(b.max for b in bounds)
-    if capabilities.target_c_min is not None:  # raw limits: they only narrow the fences' range
-        low = max(low, capabilities.target_c_min)
-    if capabilities.target_c_max is not None:
-        high = min(high, capabilities.target_c_max)
-    return low, high
 
 
 def _canonical(value: Decimal) -> str:
