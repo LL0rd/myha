@@ -5,7 +5,7 @@ Rows that do not belong together raise ``ValueError`` instead of producing some 
 """
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -170,7 +170,7 @@ def _member_context(
     session_id = None if session is None else session.id
     return EffectiveContext(
         principal_ref=ref,
-        role_bindings=tuple(dict.fromkeys(bindings)),  # identical assignments: one binding
+        role_bindings=_capped(bindings, session),
         fences=_fences(fences, principal=principal_id, session=session_id),
         not_before=None if session is None else session.not_before,
         not_after=None if session is None else session.not_after,
@@ -196,7 +196,7 @@ def _guest_context(
     session_id = None if session is None else session.id
     return EffectiveContext(
         principal_ref=ref,
-        role_bindings=(binding,),
+        role_bindings=_capped((binding,), session),
         fences=_fences(fences, principal=principal_id, stay=stay.id, session=session_id),
         not_before=stay.starts_at,
         not_after=stay.ends_at if session is None else min(stay.ends_at, session.not_after),
@@ -207,6 +207,16 @@ def _guest_context(
         and (session is None or session.revoked_at is None),
         time_trusted=instance.time_trusted,
     )
+
+
+def _capped(bindings: Iterable[RoleBinding], session: db.Session | None) -> tuple[RoleBinding, ...]:
+    """Distinct bindings, cut to the session's units when it names any (an empty list: no cap).
+
+    A binding left without units binds nothing and is dropped.
+    """
+    cap = frozenset(session.unit_ids) if session is not None and session.unit_ids else None
+    cut = (b if cap is None else replace(b, unit_ids=b.unit_ids & cap) for b in bindings)
+    return tuple(dict.fromkeys(b for b in cut if b.unit_ids))
 
 
 def _fences(rows: Iterable[db.Fence], **own: str | None) -> tuple[Fence, ...]:

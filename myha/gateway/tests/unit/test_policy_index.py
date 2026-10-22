@@ -46,12 +46,18 @@ def session(
         "not_before": None,
         "not_after": NOW + 30 * DAY,
         "revoked_at": None,
+        "unit_ids": [],
     }
     return db.Session(**(base | fields))
 
 
 def guest_session(session_id: str = "ses_guest", **fields: Any) -> db.Session:
-    window = {"stay_id": "stay_203", "not_before": NOW - DAY, "not_after": NOW + DAY}
+    window = {
+        "stay_id": "stay_203",
+        "unit_ids": ["unit_203"],
+        "not_before": NOW - DAY,
+        "not_after": NOW + DAY,
+    }
     return session(session_id, "prn_guest", **(window | fields))
 
 
@@ -196,6 +202,32 @@ def test_identical_assignments_give_one_binding() -> None:
         session(), principal(), assignments=assignments, memberships=[membership("grp_family")]
     )
     assert ctx.role_bindings == (RoleBinding("family", 1, frozenset({"unit_203"})),)
+
+
+def test_session_units_cap_every_binding_and_an_empty_list_sets_no_cap() -> None:
+    assignments = [
+        assignment("prn_res", "family", ["unit_203", "unit_lr"]),
+        assignment("grp_family", "family", ["unit_203"], group=True),
+        assignment("prn_res", "living", ["unit_lr"], version=3),
+    ]
+    rows: dict[str, Any] = {"assignments": assignments, "memberships": [membership("grp_family")]}
+    capped = for_session(session(unit_ids=["unit_203"]), principal(), **rows)
+    assert capped.role_bindings == (RoleBinding("family", 1, frozenset({"unit_203"})),)
+    assert INDEX.in_scope(capped, "res_203_trv")
+    assert not INDEX.in_scope(capped, "res_lr_ac")
+    uncapped = for_session(session(), principal(), **rows)
+    assert INDEX.in_scope(uncapped, "res_lr_ac")
+    preview = build_context_for_preview(
+        {"principal_id": "prn_res", "session_id": "ses_1"},
+        principal=principal(),
+        session=session(unit_ids=["unit_203"]),
+        instance=INSTANCE,
+        at=NOW,
+        **rows,
+    )
+    assert preview == replace(capped, purpose="preview")
+    elsewhere = guest_session(unit_ids=["unit_lr"])
+    assert for_session(elsewhere, guest(), the_stay=stay()).role_bindings == ()
 
 
 @pytest.mark.parametrize(
@@ -464,13 +496,18 @@ def test_preview_rows_must_match_the_target(target: dict[str, str], rows: dict[s
 # --- policy index ---
 
 
-def climate(confirmed_modes: frozenset[str] = frozenset({"off", "heat"})) -> DeviceCapabilities:
+def climate(
+    confirmed_modes: frozenset[str] = frozenset({"off", "heat"}),
+    low: str | None = "8",
+    high: str | None = "30",
+    step: str | None = "0.5",
+) -> DeviceCapabilities:
     return DeviceCapabilities(
         "climate",
         frozenset({Action.CLIMATE_SET_TEMPERATURE, Action.CLIMATE_SET_MODE}),
-        target_c_min=Decimal("8"),
-        target_c_max=Decimal("30"),
-        target_c_step=Decimal("0.5"),
+        target_c_min=None if low is None else Decimal(low),
+        target_c_max=None if high is None else Decimal(high),
+        target_c_step=None if step is None else Decimal(step),
         hvac_modes=frozenset({"off", "cool", "heat", "auto"}),
         confirmed_modes=confirmed_modes,
     )
@@ -635,15 +672,66 @@ def test_device_range_clips_and_a_grant_without_rule_spans_the_device_range() ->
     )
 
 
-def test_a_device_without_a_temperature_range_offers_no_interval() -> None:
-    no_range = replace(RESOURCES["res_lr_ac"], capabilities=LIGHT)
-    index = PolicyIndex(
-        {("living", 3): LIVING}, {"res_lr_ac": no_range}, {"unit_lr": frozenset({"res_lr_ac"})}
-    )
+def living_temperatures(
+    capabilities: DeviceCapabilities, *fences: dict[str, Any]
+) -> tuple[Interval, ...]:
+    """LIVING's set_temperature grants on res_lr_ac: one without rule, one 5-40 in steps of 1."""
+    ref = replace(RESOURCES["res_lr_ac"], capabilities=capabilities)
+    index = PolicyIndex({("living", 3): LIVING}, {ref.id: ref}, {"unit_lr": frozenset({ref.id})})
     capability = index.effective_capability(
-        ctx(LIVING_BINDING), "res_lr_ac", Action.CLIMATE_SET_TEMPERATURE
+        ctx(LIVING_BINDING, fences=fences), ref.id, Action.CLIMATE_SET_TEMPERATURE
     )
-    assert capability == EffectiveCapability(matched=("living@3:0", "living@3:1"))
+    assert capability is not None and capability.matched == ("living@3:0", "living@3:1")
+    return capability.intervals
+
+
+def test_a_grant_without_rule_moves_in_device_steps() -> None:
+    assert living_temperatures(climate(step="0.1")) == (
+        interval("8", "30", "0.1"),
+        interval("8", "30", "1"),
+    )
+
+
+def test_a_device_without_limits_is_clipped_only_by_grants_and_fences() -> None:
+    # without a rule a grant spans what the target_c schema accepts, in steps of 0.5
+    assert living_temperatures(climate(low=None, high=None, step=None)) == (
+        interval("-99.9", "99.9"),
+        interval("5", "40", "1"),
+    )
+    assert living_temperatures(climate(low=None, high=None), fence()) == (
+        interval("0", "22"),
+        interval("5", "22", "1"),
+    )
+    assert living_temperatures(LIGHT) == living_temperatures(climate(low=None, high=None))
+
+
+def test_raw_device_limits_are_rounded_inwards_to_cents() -> None:
+    assert living_temperatures(climate(low="7.123456789", high="29.987")) == (
+        interval("7.13", "29.98"),
+        interval("7.13", "29.98", "1"),
+    )
+    assert living_temperatures(climate(low="-7.129", high="-0.001")) == (
+        interval("-7.12", "-0.01"),
+    )
+
+
+def test_far_device_limits_clip_nothing_or_everything() -> None:
+    assert living_temperatures(climate(low="-1E+40", high="1E+40")) == (
+        interval("-99.9", "99.9"),
+        interval("5", "40", "1"),
+    )
+    assert living_temperatures(climate(low="1E+40", high="2E+40")) == ()
+    assert living_temperatures(climate(low="-2E+40", high="-1E+40")) == ()
+
+
+def test_a_device_range_that_rounding_empties_offers_nothing() -> None:
+    assert living_temperatures(climate(low="20.001", high="20.009")) == ()
+
+
+@pytest.mark.parametrize(("low", "high"), [("8", "30"), ("8.000000000", "30.0000000")])
+def test_device_limits_are_written_without_trailing_zeros(low: str, high: str) -> None:
+    (full, _) = living_temperatures(climate(low=low, high=high))
+    assert full.model_dump(mode="json") == {"min": "8", "max": "30", "step": "0.5", "origin": "0"}
 
 
 def test_percent_without_rule_is_zero_to_hundred_in_whole_steps() -> None:

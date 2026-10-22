@@ -2,11 +2,9 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Context, Decimal
 from types import MappingProxyType
 from typing import Literal, get_args
-
-from pydantic import ValidationError
 
 from myha_gateway.adapters.base import Action, DeviceCapabilities
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
@@ -14,6 +12,10 @@ from myha_gateway.policy.model import PARAM_SCHEMA, Bound, Fence, Grant, Interva
 
 _MODES: frozenset[str] = frozenset(get_args(Mode))
 _PERCENT = Interval(min=Decimal("0"), max=Decimal("100"), step=Decimal("1"))
+_TARGET_C_MIN, _TARGET_C_MAX = Decimal("-99.9"), Decimal("99.9")  # all TargetCParams accepts
+_HALF, _CENT = Decimal("0.5"), Decimal("0.01")
+_FAR = Decimal("1000000")  # beyond every rule value (six integer digits)
+_ROUNDING = Context(prec=28)  # independent of the caller's decimal context
 
 
 @dataclass(frozen=True)
@@ -131,16 +133,14 @@ class PolicyIndex:
                     allowed &= fence.parameters.mode.allowed
             confirmed = resource.capabilities.confirmed_modes
             return EffectiveCapability(allowed=allowed & confirmed, matched=matched)
-        device = _device_range(name, resource.capabilities)
-        if device is None:
-            return EffectiveCapability(matched=matched)
-        bounds: list[Bound] = [device]
-        bounds += [bound for fence in fences if (bound := getattr(fence.parameters, name))]
+        capabilities = resource.capabilities
+        low, high = _device_limits(name, capabilities)
+        bounds: list[Bound] = [b for fence in fences if (b := getattr(fence.parameters, name))]
         intervals: dict[Interval, None] = {}  # ordered set: identical intervals appear once
         for grant in grants.values():
             rule = getattr(grant.parameters, name)
-            for interval in (device,) if rule is None else rule.intervals:
-                clipped: Interval | None = interval
+            for interval in (_full_range(name, capabilities),) if rule is None else rule.intervals:
+                clipped = _within(interval, low, high)
                 for bound in bounds:
                     clipped = None if clipped is None else clipped.clip(bound)
                 if clipped is not None:
@@ -148,17 +148,42 @@ class PolicyIndex:
         return EffectiveCapability(intervals=tuple(intervals), matched=matched)
 
 
-def _device_range(name: str, capabilities: DeviceCapabilities) -> Interval | None:
-    """The range and step of the device; ``None`` while it reports no usable range."""
+def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
+    """What a grant without a rule for ``name`` allows: the schema range in device steps."""
     if name != "target_c":
         return _PERCENT
-    try:
-        return Interval.model_validate(
-            {
-                "min": capabilities.target_c_min,
-                "max": capabilities.target_c_max,
-                "step": capabilities.target_c_step,
-            }
-        )
-    except ValidationError:  # missing or unusable: offer nothing rather than guess
+    step = capabilities.target_c_step or _HALF  # adapters keep it to 0.01..10 in hundredths
+    return Interval(min=_TARGET_C_MIN, max=_TARGET_C_MAX, step=step)
+
+
+def _device_limits(
+    name: str, capabilities: DeviceCapabilities
+) -> tuple[Decimal | None, Decimal | None]:
+    """The device range rounded inwards to cents; ``None`` where the device names no limit.
+
+    Raw device numbers need not fit a rule decimal: they are compared, and a limit becomes an
+    interval bound only where it lies inside a grant, whose values do fit.
+    """
+    if name != "target_c":
+        return _PERCENT.min, _PERCENT.max
+    return (
+        _cents(capabilities.target_c_min, ROUND_CEILING),
+        _cents(capabilities.target_c_max, ROUND_FLOOR),
+    )
+
+
+def _cents(value: Decimal | None, rounding: str) -> Decimal | None:
+    if value is None:
         return None
+    near = min(max(value, -_FAR), _FAR)  # cuts nothing a rule can reach, keeps rounding cheap
+    # normalize: 8.000000000 is 8 again and fits a rule decimal once inside a grant
+    return near.quantize(_CENT, rounding=rounding, context=_ROUNDING).normalize(_ROUNDING)
+
+
+def _within(interval: Interval, low: Decimal | None, high: Decimal | None) -> Interval | None:
+    """``interval`` cut to the device limits; the result stays inside the grant's values."""
+    low = interval.min if low is None else max(interval.min, low)
+    high = interval.max if high is None else min(interval.max, high)
+    if low > high:
+        return None
+    return Interval(min=low, max=high, step=interval.step, origin=interval.origin)
