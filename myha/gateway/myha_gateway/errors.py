@@ -9,9 +9,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
-# Below 500 the framework raises HTTPException for routing (404, 405) and unparsable bodies
-# (400); every other client error maps to INVALID_PARAMETERS.
-_HTTP_CODES = {404: "NOT_FOUND", 405: "ACTION_NOT_ALLOWED"}
+# Below 500 the framework raises HTTPException for routing (404, 405), unparsable bodies (400)
+# and its security helpers (401); every other client error maps to INVALID_PARAMETERS.
+_HTTP_CODES = {401: "UNAUTHENTICATED", 404: "NOT_FOUND", 405: "ACTION_NOT_ALLOWED"}
 
 
 class ApiError(Exception):

@@ -141,6 +141,17 @@ async def test_server_side_http_error_maps_to_upstream_unavailable(ctx: AppConte
     assert r.json() == {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Service Unavailable"}}
 
 
+async def test_http_401_maps_to_unauthenticated(ctx: AppContext) -> None:
+    async def unauthorized() -> None:  # what FastAPI's security helpers raise
+        raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
+
+    app = create_public_app(ctx)
+    app.get("/api/v1/unauthorized")(unauthorized)
+    r = await call(app, "GET", "/api/v1/unauthorized")
+    assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
+    assert r.json() == {"error": {"code": "UNAUTHENTICATED", "message": "Not authenticated"}}
+
+
 async def echo(n: int) -> int:
     return n
 
