@@ -12,14 +12,7 @@ from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.auth.passwords import Argon2Timing, measure_argon2
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import ApiError
-from myha_gateway.ha.messages import HAUser
 from tests.helpers import call, fake_supervisor
-
-OWNER = {"X-Remote-User-Id": "owner1"}
-
-
-async def only_the_owner() -> list[HAUser]:
-    return [HAUser("owner1", "Owner", "owner", True, True, False, ("system-admin",))]
 
 
 @pytest.fixture
@@ -29,7 +22,6 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppContext:
     monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
     ctx = await AppContext.create()
     ctx.supervisor = fake_supervisor()  # never the network
-    monkeypatch.setattr(ctx.ha, "auth_list", only_the_owner)  # the admin role check asks Core
     return ctx
 
 
@@ -50,15 +42,14 @@ async def test_admin_probe_requires_trusted_peer(ctx: AppContext) -> None:
 
 
 async def test_admin_probe_echoes_identity_headers_from_trusted_peer(ctx: AppContext) -> None:
-    headers = {**OWNER, "X-Ingress-Path": "/api/hassio_ingress/abc"}
+    headers = {"X-Remote-User-Id": "u1", "X-Ingress-Path": "/api/hassio_ingress/abc"}
     r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
     assert r.status_code == 200 and r.json()["peer"] == "172.30.32.2"
-    assert r.json()["headers"]["x-remote-user-id"] == "owner1"
+    assert r.json()["headers"]["x-remote-user-id"] == "u1"
 
 
 async def test_admin_probe_shows_only_identity_and_forwarding_headers(ctx: AppContext) -> None:
     headers = {
-        **OWNER,
         "X-Remote-User-Name": "dimitri",
         "X-Forwarded-For": "192.168.1.20",
         "X-Real-IP": "192.168.1.20",
@@ -68,7 +59,6 @@ async def test_admin_probe_shows_only_identity_and_forwarding_headers(ctx: AppCo
     }
     r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
     assert r.json()["headers"] == {
-        "x-remote-user-id": "owner1",
         "x-remote-user-name": "dimitri",
         "x-forwarded-for": "192.168.1.20",
         "x-real-ip": "192.168.1.20",
@@ -80,7 +70,7 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
 ) -> None:
     monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-secret")
     (ctx.settings.data_dir / "options.json").write_text("{}", encoding="utf-8")
-    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=OWNER)
+    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
     body = r.json()
     assert body["supervisor_info"] == {
         "version": "2026.10.3",
@@ -98,14 +88,14 @@ async def test_admin_probe_reports_supervisor_environment_and_paths(
     assert datetime.fromisoformat(body["time"]).utcoffset() == timedelta(0)
 
 
-async def test_probe_details_show_supervisor_errors_instead_of_failing(ctx: AppContext) -> None:
+async def test_admin_probe_shows_supervisor_errors_instead_of_failing(ctx: AppContext) -> None:
     ctx.supervisor = fake_supervisor(reachable=False)
-    body = await probe.details(ctx)  # the route itself needs the Supervisor for the version gate
-    assert "sup-secret" not in str(body)
+    r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe")
+    assert r.status_code == 200 and "sup-secret" not in r.text
     error = "SupervisorUnavailable: GET /info: ConnectError: Name or service not known"
-    assert body["supervisor_info"] == {"error": error}
-    assert body["host_info"]["error"].startswith("SupervisorUnavailable: GET /host/info")
-    assert body["self_info"]["error"].startswith("SupervisorUnavailable: GET /addons/self")
+    assert r.json()["supervisor_info"] == {"error": error}
+    assert r.json()["host_info"]["error"].startswith("SupervisorUnavailable: GET /host/info")
+    assert r.json()["self_info"]["error"].startswith("SupervisorUnavailable: GET /addons/self")
 
 
 def fast_argon2() -> list[Argon2Timing]:

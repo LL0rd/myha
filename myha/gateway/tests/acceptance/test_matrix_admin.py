@@ -16,7 +16,7 @@ from myha_gateway.auth.admin import csrf_token, require_admin, require_csrf
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import add_error_handlers
 from myha_gateway.ha.supervisor import SupervisorClient
-from myha_simulator.fixtures import USERS
+from myha_simulator.fixtures import HA_VERSION, SUPERVISOR_VERSION, USERS
 from tests.acceptance.conftest import OWNER, Clocks
 from tests.helpers import SimHandle, call
 
@@ -85,8 +85,7 @@ async def test_a03_missing_duplicate_headers_and_old_supervisor(
     sim: SimHandle,
     clocks: Clocks,
 ) -> None:
-    for path in (SESSION, PROBE):
-        assert denied(await call(admin_app, "GET", path))  # no X-Remote-User-Id
+    assert denied(await call(admin_app, "GET", SESSION))  # no X-Remote-User-Id
     for second in (OWNER, "user1"):
         twice = [("X-Remote-User-Id", OWNER), ("X-Remote-User-Id", second)]
         assert denied(await admin_client.get(SESSION, headers=twice))
@@ -190,10 +189,6 @@ async def test_session_reports_identity_csrf_token_and_versions(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    info = {"supervisor": "2026.10.4", "homeassistant": "2026.10.2"}  # the simulator lacks Core's
-    answer = httpx.Response(200, json={"result": "ok", "data": info})
-    transport = httpx.MockTransport(lambda request: answer)
-    ctx.supervisor = SupervisorClient("http://supervisor", None, transport=transport)
     headers = {
         "X-Remote-User-Name": "owner",
         "X-Remote-User-Display-Name": "Owner",
@@ -206,8 +201,8 @@ async def test_session_reports_identity_csrf_token_and_versions(
     assert r.json() == {
         "user": {"id": OWNER, "name": "Owner"},
         "csrf_token": token,
-        "supervisor_version": "2026.10.4",
-        "core_version": "2026.10.2",
+        "supervisor_version": SUPERVISOR_VERSION,
+        "core_version": HA_VERSION,
         "setup_state": "fresh",
         "time_trusted": True,
     }
@@ -246,7 +241,7 @@ async def test_cross_origin_preflight_gets_no_cors_answer(admin_client: httpx.As
 async def test_every_admin_api_route_requires_the_guard(ctx: AppContext) -> None:
     guards = {require_admin(fresh=False), require_admin(fresh=True), require_csrf}
     for route in create_admin_app(ctx).routes:
-        if isinstance(route, APIRoute):
+        if isinstance(route, APIRoute) and route.path != PROBE:  # S0 tool, peer guard only
             calls = {dependency.call for dependency in route.dependant.dependencies}
             assert calls & guards, route.path
             if route.methods & {"POST", "PUT", "PATCH", "DELETE"}:

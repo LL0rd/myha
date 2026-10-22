@@ -603,6 +603,7 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
     async def info(authorization: AuthHeader = None) -> Response:
         data = {
             "supervisor": sim.supervisor_version,
+            "homeassistant": fixtures.HA_VERSION,
             "channel": "stable",
             "arch": "amd64",
             "supported": True,

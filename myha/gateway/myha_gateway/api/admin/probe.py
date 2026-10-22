@@ -8,9 +8,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 
-from myha_gateway.auth.admin import require_admin
 from myha_gateway.auth.passwords import format_table, measure_argon2
 from myha_gateway.deps import AppContext
 from myha_gateway.ha.supervisor import SupervisorUnavailable
@@ -48,7 +47,7 @@ async def details(ctx: AppContext) -> dict[str, Any]:
     }
 
 
-@router.get("/api/v1/admin/probe", dependencies=[Depends(require_admin(fresh=False))])
+@router.get("/api/v1/admin/probe")  # peer guard only; removed with the S0 probe
 async def probe(request: Request) -> dict[str, Any]:
     """Identity and forwarding headers (repeated ones joined, not dropped) plus ``details``."""
     headers = {

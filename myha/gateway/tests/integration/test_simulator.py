@@ -463,6 +463,7 @@ async def test_supervisor_answers_like_aiohttp(sim: SimHandle) -> None:
     assert (wrong.status_code, wrong.text) == (403, "403: Forbidden")
     assert info.json()["data"] == {
         "supervisor": "2026.10.3",
+        "homeassistant": "2026.10.2",
         "channel": "stable",
         "arch": "amd64",
         "supported": True,
