@@ -63,7 +63,7 @@ scripts/check-no-external.mjs
 
 ### Task 5a.3: Redeem, Sessions, `/me`, Logout, WS-Ticket, Renew
 
-> Hinweis aus WP3: Gast-Sessions mit `unit_ids = [stay.unit_id]` anlegen und beim Zimmerwechsel nachziehen (eine leere Liste bedeutet „keine Obergrenze“, eine fremde Unit „nichts im Scope“); Display-Bestätigung (Plan 3) lehnt eine leere Unit-Liste ab.
+> Hinweis aus WP3: Gast-Sessions mit `unit_ids = [stay.unit_id]` anlegen und beim Zimmerwechsel nachziehen (eine leere Liste bedeutet „keine Obergrenze“, eine fremde Unit „nichts im Scope“); Display-Bestätigung (Plan 3) lehnt eine leere Unit-Liste ab. Principals werden mit `status = "active"` angelegt; nur dieser Wert hält Sessions aktiv (Design §5), Deaktivieren setzt `disabled` und widerruft die Sessions.
 
 **Files:**
 - Create: `myha_gateway/auth/public.py`, `api/public/{auth,me,ws_ticket,config}.py`
