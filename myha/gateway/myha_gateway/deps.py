@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from myha_gateway.auth.ratelimit import SlidingWindowLimiter
 from myha_gateway.db import create_engine, session_factory
 from myha_gateway.db.models import Instance
+from myha_gateway.events.bus import EventBus
 from myha_gateway.ha.client import HAClient
 from myha_gateway.ha.messages import ConnectionStatus, StateChanged
 from myha_gateway.ha.supervisor import SupervisorClient
@@ -27,7 +28,7 @@ _DNS_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z
 
 
 async def _fan_out[T](handlers: list[Callable[[T], Awaitable[None]]], update: T) -> None:
-    """Hand an HA event or status change to each handler in order (the event bus joins in 6.3).
+    """Hand an HA event or status change to each handler in order: loader, then event bus.
 
     A failing handler is logged and skips none of the others.
     """
@@ -102,7 +103,7 @@ def _no_password() -> bytes:
 
 @dataclass
 class AppContext:
-    """Shared backend context; the event bus joins in a later task."""
+    """Shared backend context."""
 
     settings: Settings
     supervisor: SupervisorClient
@@ -110,6 +111,7 @@ class AppContext:
     engine: AsyncEngine  # connects on first use, after the admin lifespan has migrated
     sessions: async_sessionmaker[AsyncSession]  # reads; writes go through db.write_session
     policy: PolicyLoader  # index, contexts and drift; its worker starts with the HA connection
+    bus: EventBus  # live events for the client connections
     instance: Instance | None = None  # loaded at startup; services that change it replace it
     restore_mode: bool = False  # backup_dir/restore.sqlite was there at startup (design 4.6)
     # Set by refresh_public(). public_origin is the only source for origin checks and join
@@ -129,6 +131,7 @@ class AppContext:
         ha_token = "" if token is None else token.get_secret_value()
         on_event: list[Callable[[StateChanged], Awaitable[None]]] = []
         on_status: list[Callable[[ConnectionStatus], Awaitable[None]]] = []
+        bus = EventBus()
         ha = HAClient(
             settings.ha_ws_url,
             ha_token,
@@ -139,8 +142,10 @@ class AppContext:
         policy = PolicyLoader(engine, ha, audit=_audit_policy)
         on_event.append(policy.on_event)
         on_status.append(policy.on_status)
+        on_event.append(bus.on_event)  # after the loader: connections use the index it updated
+        on_status.append(bus.on_status)
         supervisor = SupervisorClient(settings.supervisor_url, token)
-        ctx = cls(settings, supervisor, ha, engine, session_factory(engine), policy)
+        ctx = cls(settings, supervisor, ha, engine, session_factory(engine), policy, bus)
         ctx.refresh_public()  # the settings override only; the admin lifespan decides again
         return ctx
 
