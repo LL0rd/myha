@@ -54,7 +54,7 @@ async def test_real_server_config_and_redacted_logs(
     config = server.config
     assert config.proxy_headers is False and config.server_header is False
     assert config.access_log is True and config.log_config is None
-    assert config.ws_max_size == 65536 and config.timeout_graceful_shutdown == 4
+    assert config.ws_max_size == 65536 and config.timeout_graceful_shutdown == 3
     for name in ("uvicorn.access", "uvicorn.error"):  # both reach the redacting root handler
         assert logging.getLogger(name).handlers == [] and logging.getLogger(name).propagate
     assert health.json()["client_ip"] == "127.0.0.1" and "server" not in health.headers

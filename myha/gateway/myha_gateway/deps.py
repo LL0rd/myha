@@ -1,5 +1,8 @@
 """Process-wide resources, created once and shared by the admin and the public app."""
 
+import ipaddress
+import logging
+import re
 import ssl
 from dataclasses import dataclass
 from typing import Self
@@ -13,22 +16,48 @@ from myha_gateway.ha.client import HAClient
 from myha_gateway.ha.supervisor import SupervisorClient
 from myha_gateway.settings import Settings
 
+logger = logging.getLogger(__name__)
+_DNS_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*")
+
 
 async def _unused(update: object) -> None:
     """HA events and status changes go nowhere until the event bus subscribes (task 6.3)."""
 
 
 def _is_origin(origin: str, *, allow_http: bool) -> bool:
-    """``https://host[:port]`` exactly as browsers send ``Origin``; ``http`` only if allowed."""
+    """``https://host[:port]`` exactly as browsers serialize ``Origin``; ``http`` only if allowed.
+
+    Origin checks compare it byte for byte and join URLs start with it, so only the canonical
+    form passes: lowercase ASCII host, compressed IPv6, no default port, nothing after it.
+    """
     try:
         parts = urlsplit(origin)
-        parts.port  # noqa: B018 (raises ValueError when malformed or out of range)
+        port = parts.port
+        host = parts.hostname or ""
+        if ":" in host:  # IPv6: browsers send it compressed and lowercase, never with a zone
+            address = ipaddress.IPv6Address(host)
+            host = "" if address.scope_id else f"[{address.compressed}]"
     except ValueError:
         return False
-    schemes = ("https", "http") if allow_http else ("https",)
-    # Equal to its own scheme://netloc: no path, query, fragment, trailing slash or user.
-    exact = origin == f"{parts.scheme}://{parts.netloc}" and "@" not in parts.netloc
-    return exact and parts.scheme in schemes and bool(parts.hostname)
+    default = {"https": 443, "http": 80 if allow_http else None}.get(parts.scheme)
+    named = bool(_DNS_NAME.fullmatch(host)) or host.startswith("[")
+    canonical = f"{parts.scheme}://{host}" + ("" if port in (None, default) else f":{port}")
+    return default is not None and named and origin == canonical
+
+
+def _origin_problem(origin: str, *, allow_http: bool) -> str | None:
+    """Why ``origin`` cannot be the public origin, or ``None``."""
+    if "@" in origin:  # user info may carry a password: never echo such an origin
+        return "public origin contains '@' (user info is not allowed)"
+    if not _is_origin(origin, allow_http=allow_http):
+        form = "http(s)" if allow_http else "https"
+        return f"public origin {origin!r} is not {form}://host[:port] as browsers send it"
+    return None
+
+
+def _no_password() -> bytes:
+    """Asked for an encrypted key's passphrase instead of OpenSSL's terminal prompt."""
+    raise ValueError("the private key is encrypted; myHA needs an unencrypted key")
 
 
 @dataclass
@@ -77,28 +106,35 @@ class AppContext:
         settings, instance, tls = self.settings, self.instance, None
         if self.restore_mode:
             return "restore mode, the restore awaits review in the admin UI"
-        if settings.public_enabled:  # dev/test override: plain HTTP, the instance is ignored
+        if settings.public_enabled:  # dev/test override: plain HTTP
             origin = settings.public_origin or ""
-            if not _is_origin(origin, allow_http=True):
-                return f"MYHA_PUBLIC_ORIGIN {origin!r} is not http(s)://host[:port]"
+            if problem := _origin_problem(origin, allow_http=True):
+                return problem
+            if instance is not None:  # the startup decision; create() has no instance yet
+                # Mostly for probe_mode, which switches the override on (until task 1.6).
+                message = "settings override: public listener on plain HTTP for %s; %s"
+                logger.info(message, origin, "the instance's public settings do not apply")
         else:
             if instance is None or not instance.public_origin:
                 return "no public origin configured"
             origin = instance.public_origin
-            if not _is_origin(origin, allow_http=False):
-                return f"public origin {origin!r} is not https://host[:port]"
+            if problem := _origin_problem(origin, allow_http=False):
+                return problem
             if instance.tls_mode == "tls":
                 cert, key = instance.tls_cert_path, instance.tls_key_path
                 if not (cert and key):
                     return "certificate or key path missing"
-                try:  # what uvicorn does with ssl_certfile and ssl_keyfile
-                    ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key)
+                try:  # what uvicorn does with ssl_certfile and ssl_keyfile, minus the prompt
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.load_cert_chain(cert, key, password=_no_password)
                 except (OSError, ValueError) as exc:  # SSLError is an OSError; no file content
                     return f"certificate or key not usable: {exc}"
                 tls = (cert, key)
             elif instance.tls_mode != "proxy":
                 return f"TLS mode {instance.tls_mode!r} is neither tls nor proxy"
-            elif not instance.proxy_cidrs:  # design 3: proxy mode needs its trusted CIDRs
+            # shortcut: proxy CIDRs are only checked for presence; parsing them
+            # (ipaddress.ip_network) and the proxy peer guard come with Plan 3
+            elif not instance.proxy_cidrs:
                 return "proxy mode without proxy CIDRs"
         self.public_ready, self.public_origin, self.public_tls = True, origin, tls
         return None

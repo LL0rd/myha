@@ -1,5 +1,6 @@
 """The two ASGI apps: admin (Supervisor ingress only) and public (guests)."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import SAFETY_HEADERS, add_error_handlers, error_response
+from myha_gateway.ha.supervisor import SupervisorUnavailable
 from myha_gateway.static import SecurityHeadersMiddleware, content_security_policy, serve_bundle
 
 logger = logging.getLogger(__name__)
@@ -51,12 +53,32 @@ def _app(
     return app
 
 
+async def _log_supervisor(ctx: AppContext) -> None:
+    """One startup line on the Supervisor version; ``require_admin`` enforces the minimum."""
+    minimum = ctx.settings.min_supervisor_version
+    try:
+        info = await ctx.supervisor.info()
+        current = info.is_at_least(minimum)
+    except SupervisorUnavailable as exc:  # its message never contains the token
+        logger.warning("Supervisor unreachable (minimum %s): %s", minimum, exc)
+        return
+    except Exception:  # only a log line: it must never stop the startup
+        logger.exception("Supervisor version check failed")
+        return
+    if current:
+        logger.info("Supervisor %s (minimum %s)", info.version, minimum)
+    else:
+        message = "Supervisor %s (minimum %s): admin access stays blocked until it is updated"
+        logger.warning(message, info.version, minimum)
+
+
 @asynccontextmanager
 async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown, once per process, since the admin app always runs.
 
-    Order: restore check, database, instance row, public listener decision, S0 probe, HA
-    client. ``_serve`` then opens the admin listener, and the public one if ``public_ready``.
+    Order: restore check, database, instance row, public listener decision, S0 probe, then
+    the HA client beside the Supervisor version line. ``_serve`` then opens the admin
+    listener, and the public one if ``public_ready``.
     """
     ctx: AppContext = app.state.ctx
     # Before the database: a later restore must not find an instance row made by this start.
@@ -81,7 +103,9 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("public listener off: %s", reason)
         if ctx.settings.probe_mode:
             await probe.log_startup(ctx)
-        await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
+        # Side by side, so that a slow Supervisor (5 s timeout) adds nothing to the HA start;
+        # neither raises: an unreachable Core is logged and retried, never fatal.
+        await asyncio.gather(ctx.ha.start(), _log_supervisor(ctx))
         yield
     finally:  # also after an aborted startup; stop() tolerates a client that never started
         await ctx.ha.stop()

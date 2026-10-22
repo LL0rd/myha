@@ -14,7 +14,6 @@ from fastapi import FastAPI
 from myha_gateway.api.admin import probe
 from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.deps import AppContext
-from myha_gateway.ha.supervisor import SupervisorUnavailable
 from myha_gateway.logsetup import setup_logging
 from myha_gateway.settings import Settings
 
@@ -38,8 +37,9 @@ def _server(
         ws_max_size=65536,
         log_config=None,
         access_log=True,
-        # Public, then admin stop in turn; 2 x 4 s fits the Supervisor's 10 s stop timeout.
-        timeout_graceful_shutdown=4,
+        # Public, then admin stop in turn: 2 x 3 s plus up to 2 s for closing the HA socket
+        # stays below the 10 s after which Docker kills the app (8.4 s at worst).
+        timeout_graceful_shutdown=3,
     )
     return uvicorn.Server(config)
 
@@ -52,22 +52,6 @@ def _public_server(ctx: AppContext) -> uvicorn.Server:
     )
 
 
-async def _log_supervisor(ctx: AppContext) -> None:
-    """One startup line on the Supervisor version; ``require_admin`` enforces the minimum."""
-    minimum = ctx.settings.min_supervisor_version
-    try:
-        info = await ctx.supervisor.info()
-        current = info.is_at_least(minimum)
-    except SupervisorUnavailable as exc:  # its message never contains the token
-        logger.warning("Supervisor unreachable (minimum %s): %s", minimum, exc)
-        return
-    if current:
-        logger.info("Supervisor %s (minimum %s)", info.version, minimum)
-    else:
-        message = "Supervisor %s (minimum %s): admin access stays blocked until it is updated"
-        logger.warning(message, info.version, minimum)
-
-
 async def _serve(
     settings: Settings, public_server: Callable[[AppContext], uvicorn.Server] = _public_server
 ) -> None:
@@ -77,7 +61,9 @@ async def _serve(
     leaves ``main()`` with its code. A failing public server is restarted with backoff while
     the admin listener stays up. Each ``serve()`` installs uvicorn's signal handlers and on
     exit re-raises the signal to the handler it replaced, so a signal stops the public server
-    (started last) first, then the admin server.
+    (started last) first, then the admin server. Setting ``should_exit`` on the admin server
+    instead (tests) stops the public server only after the admin lifespan has shut down;
+    starting and stopping the public listener at runtime comes with Plan 3.
     """
     ctx = await AppContext.create(settings)
     admin = _server(create_admin_app(ctx), settings.admin_bind, settings.admin_port)
@@ -89,8 +75,8 @@ async def _serve(
             if stop.is_set():  # the admin server never started
                 return
             await asyncio.sleep(0.1)
-        await _log_supervisor(ctx)
         delay, longest = PUBLIC_RESTART
+        failed = False
         # public_ready is decided by the admin lifespan; no restart once the admin stops.
         while ctx.public_ready and not (stop.is_set() or admin.should_exit):
             try:
@@ -98,12 +84,13 @@ async def _serve(
                 await running[0].serve()
                 return  # stopped by a signal or by the shutdown below
             except (Exception, SystemExit) as exc:  # SystemExit: uvicorn's bind or startup error
-                logger.error(
-                    "public listener failed: %r; next attempt in %g s",
-                    exc,
-                    delay,
-                    exc_info=not isinstance(exc, SystemExit),  # uvicorn logged the cause
-                )
+                if failed:  # the first failure of the series carried the details
+                    message = "public listener failed again: %r; next attempt in %g s"
+                    logger.warning(message, exc, delay)
+                else:  # no traceback for SystemExit: uvicorn has logged its cause
+                    message = "public listener failed: %r; next attempt in %g s"
+                    logger.error(message, exc, delay, exc_info=not isinstance(exc, SystemExit))
+                failed = True
             finally:
                 running.clear()
             with contextlib.suppress(TimeoutError):

@@ -4,12 +4,15 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
@@ -20,20 +23,16 @@ import pytest
 import uvicorn
 
 import myha_gateway.__main__ as gateway
-from myha_gateway.app import create_admin_app
+from myha_gateway.app import _log_supervisor, create_admin_app
 from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
-from myha_gateway.deps import AppContext
+from myha_gateway.deps import AppContext, _is_origin
 from myha_gateway.settings import Settings
 from tests.helpers import fake_supervisor
 
 OVERRIDE = {"public_enabled": True, "public_origin": "http://guest.test:8443"}
-
-
-def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+CIDRS = ["10.0.0.0/8"]
+LISTENING = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+)")
 
 
 def closed(port: int) -> bool:
@@ -46,27 +45,43 @@ def port_of(server: uvicorn.Server) -> int:
 
 
 def local(data_dir: Path, **fields: Any) -> Settings:
-    """Both listeners on 127.0.0.1, the public one on a free port; the Supervisor refuses."""
-    return Settings(
-        data_dir=data_dir,
-        admin_bind="127.0.0.1",
-        admin_port=0,
-        public_bind="127.0.0.1",
-        public_port=free_port(),
-        supervisor_url="http://127.0.0.1:1",
-        **fields,
-    )
+    """Both listeners on free ports of 127.0.0.1; the Supervisor refuses at once."""
+    defaults = {
+        "admin_bind": "127.0.0.1",
+        "admin_port": 0,
+        "public_bind": "127.0.0.1",
+        "public_port": 0,
+        "supervisor_url": "http://127.0.0.1:1",
+    }
+    return Settings(data_dir=data_dir, **(defaults | fields))
 
 
-def self_signed(directory: Path, name: str = "guest") -> tuple[Path, Path]:
+def gateway_env(data_dir: Path, **variables: str) -> dict[str, str]:
+    """``local`` for a ``myha-gateway serve`` subprocess."""
+    return {
+        **os.environ,
+        "MYHA_DATA_DIR": str(data_dir),
+        "MYHA_ADMIN_BIND": "127.0.0.1",
+        "MYHA_ADMIN_PORT": "0",
+        "MYHA_PUBLIC_BIND": "127.0.0.1",
+        "MYHA_PUBLIC_PORT": "0",
+        "MYHA_SUPERVISOR_URL": "http://127.0.0.1:1",
+        **variables,
+    }
+
+
+def self_signed(
+    directory: Path, name: str = "guest", passphrase: str | None = None
+) -> tuple[Path, Path]:
     """A throwaway certificate and key from the openssl command line tool."""
     openssl = shutil.which("openssl")
     if openssl is None:
         pytest.skip("openssl not installed")
     cert, key = directory / f"{name}.crt", directory / f"{name}.key"
+    protection = ["-nodes"] if passphrase is None else ["-passout", f"pass:{passphrase}"]
     subprocess.run(  # noqa: S603 (fixed arguments)
         [openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-        + ["-nodes", "-subj", "/CN=guest.test", "-days", "1"]
+        + [*protection, "-subj", "/CN=guest.test", "-days", "1"]
         + ["-keyout", str(key), "-out", str(cert)],
         check=True,
         capture_output=True,
@@ -87,10 +102,10 @@ async def configure(settings: Settings, **fields: Any) -> None:
 
 
 @asynccontextmanager
-async def started(settings: Settings) -> AsyncIterator[AppContext]:
+async def started(settings: Settings, supervisor: Any = None) -> AsyncIterator[AppContext]:
     """The admin lifespan alone, as uvicorn runs it before the admin listener opens."""
     ctx = await AppContext.create(settings)
-    ctx.supervisor = fake_supervisor()
+    ctx.supervisor = supervisor or fake_supervisor()
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         yield ctx
@@ -100,6 +115,11 @@ async def until(condition: Callable[[], object], seconds: float = 10) -> None:
     async with asyncio.timeout(seconds):
         while not condition():  # noqa: ASYNC110
             await asyncio.sleep(0.01)
+
+
+async def wait_out_the_public_decision() -> None:
+    """``_serve`` polls the admin start every 0.1 s and decides on the public server at once."""
+    await asyncio.sleep(0.3)
 
 
 async def answers(admin: uvicorn.Server) -> bool:
@@ -156,9 +176,8 @@ async def test_without_public_origin_only_the_admin_listener_opens(
     settings.state_dir.chmod(0o755)  # as builds with the S0 probe left it
     async with serving(settings, monkeypatch) as servers:
         assert stat.S_IMODE(settings.state_dir.stat().st_mode) == 0o700
-        # Logged right before the public decision, in the same step.
-        await until(lambda: "Supervisor unreachable" in caplog.text)
-        assert len(servers) == 1 and closed(settings.public_port)
+        await wait_out_the_public_decision()
+        assert len(servers) == 1  # no public server, not even a failed one
         ctx = ctx_of(servers[0])
         assert not ctx.public_ready and ctx.public_origin is None and ctx.instance is not None
     off = [r for r in caplog.records if r.getMessage().startswith("public listener off")]
@@ -175,7 +194,7 @@ async def test_settings_override_opens_plain_http_with_its_origin(
         ctx = ctx_of(servers[0])
         assert ctx.public_ready and ctx.public_tls is None
         assert ctx.public_origin == "http://guest.test:8443"  # the only origin source from now on
-        r = await healthz(f"http://127.0.0.1:{settings.public_port}")
+        r = await healthz(f"http://127.0.0.1:{port_of(servers[1])}")
         assert r.status_code == 200 and r.json()["client_ip"] == "127.0.0.1"
 
 
@@ -186,10 +205,10 @@ async def test_restore_export_keeps_public_closed_and_creates_no_instance(
     settings.backup_dir.mkdir()
     (settings.backup_dir / "restore.sqlite").write_bytes(b"")
     async with serving(settings, monkeypatch) as servers:
-        await until(lambda: "Supervisor unreachable" in caplog.text)
+        await wait_out_the_public_decision()
         ctx = ctx_of(servers[0])
         assert ctx.restore_mode and not ctx.public_ready and ctx.public_origin is None
-        assert ctx.instance is None and len(servers) == 1 and closed(settings.public_port)
+        assert ctx.instance is None and len(servers) == 1
     with closing(sqlite3.connect(settings.db_path)) as db:
         assert db.execute("SELECT count(*) FROM instance").fetchone() == (0,)
     assert "public listener off: restore mode" in caplog.text
@@ -223,19 +242,29 @@ async def test_tls_mode_serves_https_with_the_configured_files(
         assert ctx.public_ready and ctx.public_origin == "https://guest.test:8443"
         assert ctx.public_tls == (str(cert), str(key))
         await until(lambda: len(servers) == 2 and servers[1].started)
-        r = await healthz(f"https://127.0.0.1:{settings.public_port}")
+        r = await healthz(f"https://127.0.0.1:{port_of(servers[1])}")
         assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
-@pytest.mark.parametrize("broken", ["missing key", "key of another certificate"])
+@pytest.mark.parametrize(
+    ("broken", "reason"),
+    [
+        ("missing key", "No such file or directory"),
+        ("key of another certificate", "KEY_VALUES_MISMATCH"),
+        # OpenSSL would ask for the passphrase on the terminal and hold up the startup.
+        ("encrypted key", "the private key is encrypted; myHA needs an unencrypted key"),
+    ],
+)
 async def test_tls_mode_with_unusable_key_keeps_public_closed(
-    broken: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    broken: str, reason: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     cert, key = self_signed(tmp_path)
     if broken == "missing key":
         key.unlink()
-    else:
+    elif broken == "key of another certificate":
         key = self_signed(tmp_path, "other")[1]
+    else:
+        cert, key = self_signed(tmp_path, "locked", passphrase="test-passphrase")
     settings = local(tmp_path)
     await configure(
         settings,
@@ -244,15 +273,13 @@ async def test_tls_mode_with_unusable_key_keeps_public_closed(
         tls_cert_path=str(cert),
         tls_key_path=str(key),
     )
-    async with started(settings) as ctx:
+    async with asyncio.timeout(10), started(settings) as ctx:
         assert not ctx.public_ready and ctx.public_origin is None and ctx.public_tls is None
     off = [r for r in caplog.records if r.getMessage().startswith("public listener off")]
     assert len(off) == 1 and off[0].levelno == logging.WARNING
-    assert "certificate or key not usable" in off[0].getMessage()
+    assert "certificate or key not usable: " in off[0].getMessage()
+    assert reason in off[0].getMessage()
     assert "PRIVATE KEY" not in caplog.text and "CERTIFICATE" not in caplog.text
-
-
-CIDRS = ["10.0.0.0/8"]
 
 
 @pytest.mark.parametrize(
@@ -260,16 +287,11 @@ CIDRS = ["10.0.0.0/8"]
     [
         ("https://guest.example", "proxy", CIDRS, None),
         ("https://guest.example:8443", "proxy", CIDRS, None),
-        ("https://[2001:db8::1]:8443", "proxy", CIDRS, None),
         (None, "proxy", CIDRS, "no public origin configured"),
         ("https://guest.example", "proxy", [], "proxy mode without proxy CIDRs"),
         ("https://guest.example", None, CIDRS, "TLS mode None is neither tls nor proxy"),
-        ("http://guest.example", "proxy", CIDRS, "is not https://host[:port]"),
-        ("https://guest.example/", "proxy", CIDRS, "is not https://host[:port]"),
-        ("https://guest.example/join", "proxy", CIDRS, "is not https://host[:port]"),
-        ("https://admin@guest.example", "proxy", CIDRS, "is not https://host[:port]"),
-        ("https://guest.example:99999", "proxy", CIDRS, "is not https://host[:port]"),
-        ("guest.example", "proxy", CIDRS, "is not https://host[:port]"),
+        ("https://guest.example", "tls", CIDRS, "certificate or key path missing"),
+        ("http://guest.example", "proxy", CIDRS, "is not https://host[:port] as browsers"),
     ],
 )
 async def test_public_decision_from_the_instance(
@@ -284,6 +306,48 @@ async def test_public_decision_from_the_instance(
 
 
 @pytest.mark.parametrize(
+    ("cert", "key"), [(None, None), ("/ssl/fullchain.pem", None), (None, "/ssl/privkey.pem")]
+)
+async def test_tls_mode_needs_both_paths(cert: str | None, key: str | None, tmp_path: Path) -> None:
+    ctx = await AppContext.create(Settings(data_dir=tmp_path))
+    ctx.instance = Instance(
+        public_origin="https://guest.example",
+        tls_mode="tls",
+        tls_cert_path=cert,
+        tls_key_path=key,
+        proxy_cidrs=[],
+    )
+    assert ctx.refresh_public() == "certificate or key path missing" and not ctx.public_ready
+
+
+async def test_user_info_in_the_origin_never_reaches_the_log(tmp_path: Path) -> None:
+    ctx = await AppContext.create(Settings(data_dir=tmp_path))
+    origin = "https://admin:s3cret@guest.example"
+    ctx.instance = Instance(public_origin=origin, tls_mode="proxy", proxy_cidrs=CIDRS)
+    reason = ctx.refresh_public()
+    assert reason is not None and "s3cret" not in reason and not ctx.public_ready
+
+
+async def test_settings_override_beats_a_tls_instance(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    ctx = await AppContext.create(Settings(data_dir=tmp_path, **OVERRIDE))
+    ctx.instance = Instance(  # files that do not exist: the override never looks at them
+        public_origin="https://guest.example",
+        tls_mode="tls",
+        tls_cert_path=str(tmp_path / "missing.crt"),
+        tls_key_path=str(tmp_path / "missing.key"),
+        proxy_cidrs=[],
+    )
+    assert ctx.refresh_public() is None
+    assert ctx.public_ready and ctx.public_tls is None
+    assert ctx.public_origin == "http://guest.test:8443"
+    [line] = [r for r in caplog.records if "settings override" in r.getMessage()]
+    assert line.levelno == logging.INFO and "http://guest.test:8443" in line.getMessage()
+
+
+@pytest.mark.parametrize(
     ("origin", "ready"), [("http://guest.test", True), ("http://guest.test/join", False)]
 )
 async def test_override_allows_plain_http_but_needs_an_origin(
@@ -292,6 +356,56 @@ async def test_override_allows_plain_http_but_needs_an_origin(
     settings = Settings(data_dir=tmp_path, public_enabled=True, public_origin=origin)
     ctx = await AppContext.create(settings)  # decided without the instance, before the lifespan
     assert ctx.public_ready is ready and ctx.public_origin == (origin if ready else None)
+
+
+@pytest.mark.parametrize(
+    ("origin", "allow_http"),
+    [
+        ("https://guest.example", False),
+        ("https://guest.example:8443", False),
+        ("https://xn--gst-qla.example", False),  # punycode, as browsers send it
+        ("https://[2001:db8::1]:8443", False),
+        ("http://127.0.0.1:8443", True),
+    ],
+)
+def test_browser_origins_pass(origin: str, allow_http: bool) -> None:
+    assert _is_origin(origin, allow_http=allow_http)
+
+
+@pytest.mark.parametrize(
+    ("origin", "allow_http"),
+    [
+        ("https://Guest.Example", False),  # browsers send lowercase
+        ("https://guest.example:443", False),  # and never the default port
+        ("http://127.0.0.1:80", True),
+        ("https://guest.example:0443", False),
+        ("https://guest.example:", False),
+        ("https://guest.example:99999", False),
+        ("https://guest .example", False),
+        (" https://guest.example", False),
+        ("https://guest\t.example", False),  # urlsplit would drop the tab
+        ("https://guest\x00.example", False),
+        ("https://%67uest.example", False),
+        ("https://*.example", False),
+        ("https://gäst.example", False),  # browsers send punycode
+        ("https://guest.example.", False),
+        ("https://[2001:0db8:0:0:0:0:0:1]:8443", False),  # browsers compress IPv6
+        ("https://[2001:DB8::1]", False),
+        ("https://[fe80::1%25eth0]", False),  # no zone in a URL
+        ("https://[::1", False),
+        ("https://guest.example/", False),
+        ("https://guest.example/join", False),
+        ("https://guest.example?x=1", False),
+        ("https://guest.example#x", False),
+        ("https://user:pass@guest.example", False),
+        ("http://127.0.0.1:8443", False),  # plain http only where allowed
+        ("ftp://guest.example", False),
+        ("guest.example", False),
+        ("https://", False),
+    ],
+)
+def test_other_spellings_fail(origin: str, allow_http: bool) -> None:
+    assert not _is_origin(origin, allow_http=allow_http)
 
 
 async def test_public_listener_restarts_after_a_failure(
@@ -312,11 +426,11 @@ async def test_public_listener_restarts_after_a_failure(
         await until(lambda: "public listener failed" in caplog.text)
         assert await answers(admin)  # up while the public listener waits for its restart
         await until(lambda: len(servers) == 2 and servers[1].started)
-        assert (await healthz(f"http://127.0.0.1:{settings.public_port}")).status_code == 200
+        assert (await healthz(f"http://127.0.0.1:{port_of(servers[1])}")).status_code == 200
         assert await answers(admin) and not admin.should_exit and servers[0] is admin
     assert len(attempts) == 2 and attempts[1] - attempts[0] >= 0.3
     failed = [r for r in caplog.records if r.getMessage().startswith("public listener failed")]
-    assert len(failed) == 1 and failed[0].levelno == logging.ERROR
+    assert len(failed) == 1 and failed[0].levelno == logging.ERROR and failed[0].exc_info
     assert "RuntimeError('first attempt fails')" in failed[0].getMessage()
 
 
@@ -324,32 +438,33 @@ async def test_public_bind_conflict_keeps_the_admin_listener(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(gateway, "PUBLIC_RESTART", (0.05, 0.1))
-    settings = local(tmp_path, **OVERRIDE)
+
+    def failures() -> list[logging.LogRecord]:
+        return [r for r in caplog.records if r.getMessage().startswith("public listener failed")]
+
     with socket.socket() as blocker:
-        blocker.bind(("127.0.0.1", settings.public_port))
+        blocker.bind(("127.0.0.1", 0))
         blocker.listen()
+        settings = local(tmp_path, public_port=blocker.getsockname()[1], **OVERRIDE)
         async with serving(settings, monkeypatch) as servers:
-            # uvicorn exits its startup with SystemExit(3); the attempts go on.
-            await until(lambda: caplog.text.count("public listener failed: SystemExit(3)") >= 2)
+            # uvicorn ends its startup with SystemExit(3); the attempts go on.
+            await until(lambda: len(failures()) >= 3)
             assert await answers(servers[0]) and not servers[0].should_exit
             blocker.close()  # the port frees up: a later attempt takes it
             await until(lambda: len(servers) > 2 and servers[-1].started)
             assert (await healthz(f"http://127.0.0.1:{settings.public_port}")).status_code == 200
+    first, *again = failures()
+    assert first.levelno == logging.ERROR and "SystemExit(3)" in first.getMessage()
+    assert not first.exc_info  # uvicorn has logged the cause: no traceback of its sys.exit
+    assert again and all(r.levelno == logging.WARNING and not r.exc_info for r in again)
     assert "never retrieved" not in caplog.text
 
 
 def test_admin_startup_failure_leaves_main_with_its_exit_code(tmp_path: Path) -> None:
     (tmp_path / "state" / "myha.sqlite").mkdir(parents=True)  # unusable: uvicorn exits with 3
-    env = {
-        **os.environ,
-        "MYHA_DATA_DIR": str(tmp_path),
-        "MYHA_ADMIN_BIND": "127.0.0.1",
-        "MYHA_ADMIN_PORT": "0",
-        "MYHA_PUBLIC_PORT": str(free_port()),
-    }
     run = subprocess.run(
         [sys.executable, "-W", "error", "-m", "myha_gateway", "serve"],
-        env=env,
+        env=gateway_env(tmp_path),
         capture_output=True,
         text=True,
         timeout=60,
@@ -359,6 +474,51 @@ def test_admin_startup_failure_leaves_main_with_its_exit_code(tmp_path: Path) ->
     assert run.returncode == 3, output
     assert "startup aborted" in output
     assert "never retrieved" not in output and "Exception ignored" not in output
+
+
+def test_sigterm_closes_the_public_port_first_and_ends_by_the_signal(tmp_path: Path) -> None:
+    log = tmp_path / "gateway.log"
+    env = gateway_env(tmp_path, MYHA_PUBLIC_ENABLED="1", MYHA_PUBLIC_ORIGIN="http://guest.test")
+    with log.open("w") as out:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "myha_gateway", "serve"],
+            env=env,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+        )
+    try:
+        deadline = time.monotonic() + 30
+        while len(ports := LISTENING.findall(log.read_text())) < 2:  # admin first, then public
+            assert process.poll() is None and time.monotonic() < deadline, log.read_text()
+            time.sleep(0.05)
+        listeners = {"admin": int(ports[0]), "public": int(ports[1])}
+        process.send_signal(signal.SIGTERM)  # this process only, never by name
+        closed_at: dict[str, float] = {}
+        while len(closed_at) < 2 and time.monotonic() < deadline + 10:
+            for name, port in listeners.items():
+                if name not in closed_at and closed(port):
+                    closed_at[name] = time.monotonic()
+            time.sleep(0.005)
+        assert process.wait(timeout=10) == -signal.SIGTERM, log.read_text()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert closed_at["public"] < closed_at["admin"], closed_at
+
+
+class BrokenSupervisor:
+    async def info(self) -> None:
+        raise RuntimeError("unexpected answer")
+
+
+async def test_a_failing_supervisor_check_never_stops_the_startup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with started(local(tmp_path, **OVERRIDE), BrokenSupervisor()) as ctx:
+        assert ctx.public_ready
+    [failed] = [r for r in caplog.records if r.getMessage() == "Supervisor version check failed"]
+    assert failed.levelno == logging.ERROR and failed.exc_info
 
 
 @pytest.mark.parametrize(
@@ -380,7 +540,7 @@ async def test_startup_logs_the_supervisor_version(
     caplog.set_level(logging.INFO)
     ctx = await AppContext.create(Settings(data_dir=tmp_path, min_supervisor_version=minimum))
     ctx.supervisor = fake_supervisor(reachable=reachable)
-    await gateway._log_supervisor(ctx)
-    [record] = [r for r in caplog.records if r.name == gateway.__name__]
+    await _log_supervisor(ctx)
+    [record] = [r for r in caplog.records if r.name == "myha_gateway.app"]
     assert record.levelno == level and record.getMessage().startswith(message)
     assert "sup-secret" not in caplog.text
