@@ -4,7 +4,7 @@ const themes = ["light", "dark", "contrast"] as const;
 
 // shortcut: proves the token themes only; no persistence and no way back to the system theme until the ThemeProvider task.
 export function ThemeSwitch() {
-  const [theme, setTheme] = useState<string>();
+  const [theme, setTheme] = useState<(typeof themes)[number] | undefined>();
   return (
     <div role="group" aria-label="Theme">
       {themes.map((t) => (

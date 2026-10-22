@@ -7,5 +7,5 @@ export const shared: UserConfig = {
   plugins: [react()],
   // es2019 for older Fire tablet WebViews; do not raise. No data: URIs: the gateway CSP (default-src 'self') would block inlined fonts.
   build: { target: "es2019", assetsInlineLimit: 0 },
-  server: { proxy: { "/api": "http://127.0.0.1:8443" } },
+  server: { proxy: { "/api": { target: "http://127.0.0.1:8443", ws: true } } },
 };

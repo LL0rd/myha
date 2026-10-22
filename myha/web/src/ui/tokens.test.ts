@@ -16,3 +16,10 @@ it("system dark repeats the explicit dark tokens exactly", () => {
   const flat = (selector: string) => rule(selector).replace(/\s+/g, "");
   expect(flat(':root:not([data-theme="light"])')).toBe(flat(':root[data-theme="dark"]'));
 });
+
+it("dark and contrast set the same tokens, and :root defines all of them", () => {
+  const names = (selector: string) => (rule(selector).match(/--[\w-]+(?=\s*:)/g) ?? []).sort();
+  const dark = names(':root[data-theme="dark"]');
+  expect(names(':root[data-theme="contrast"]')).toEqual(dark);
+  expect(names(":root")).toEqual(expect.arrayContaining(dark));
+});
