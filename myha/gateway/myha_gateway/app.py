@@ -1,7 +1,6 @@
 """The two ASGI apps: admin (Supervisor ingress only) and public (guests)."""
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -115,8 +114,7 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:  # also after an aborted startup; stop() tolerates a client that never started
         if guard_task is not None:
             guard_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await guard_task
+            await asyncio.gather(guard_task, return_exceptions=True)
         await ctx.ha.stop()
         await ctx.close()
 
