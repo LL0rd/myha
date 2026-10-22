@@ -62,6 +62,22 @@ it("offers only the buttons the capabilities allow", () => {
   expect(card("Humidity").getByText("48 %")).toBeTruthy();
 });
 
+it("a switch toggles like a light without a dimmer", async () => {
+  const onAction = vi.fn();
+  const fan: Resource = {
+    id: "res_fan",
+    kind: "switch",
+    label: "Fan",
+    state: { ...online, power: "off" },
+    capabilities: { "switch.on": {}, "switch.off": {} },
+  };
+  render(<GuestPanel title="Room 203" rooms={[{ id: "u", name: "Room", resources: [fan] }]} status="online" onAction={onAction} />);
+  expect(card("Fan").getByText("Off")).toBeTruthy();
+  expect(card("Fan").queryByRole("slider")).toBeNull();
+  await userEvent.click(card("Fan").getByRole("button", { name: "Turn on" }));
+  expect(onAction).toHaveBeenCalledWith("res_fan", "switch.on", {});
+});
+
 it("disables climate + at the maximum of the effective range", () => {
   render(<GuestPanel title="Room 203" rooms={rooms("22.0")} status="online" onAction={() => {}} />);
   expect((screen.getByRole("button", { name: "Raise target" }) as HTMLButtonElement).disabled).toBe(true);

@@ -1,0 +1,71 @@
+{
+  "status": "online",
+  "policy_version": 7,
+  "rooms": [
+    {
+      "id": "unit_203",
+      "name": "Room 203",
+      "resources": [
+        {
+          "id": "res_203_light",
+          "kind": "light",
+          "label": "Ceiling",
+          "icon": "bulb",
+          "state": { "availability": "online", "observed_at": "2026-10-22T10:00:00.123456Z", "power": "on", "level_pct": 60 },
+          "capabilities": {
+            "light.on": {},
+            "light.off": {},
+            "light.set_level": { "intervals": [{ "min": "0", "max": "100", "step": "1", "origin": "0" }] }
+          }
+        },
+        {
+          "id": "res_203_bedside",
+          "kind": "light",
+          "label": "Bedside",
+          "icon": null,
+          "state": { "availability": "online", "observed_at": null, "power": "off", "level_pct": null }
+        },
+        {
+          "id": "res_203_trv",
+          "kind": "climate",
+          "label": "Radiator",
+          "icon": null,
+          "state": { "availability": "online", "observed_at": "2026-10-22T10:00:00+00:00", "current_c": "21.0", "target_c": "21.5", "hvac_mode": "heat" },
+          "capabilities": {
+            "climate.set_temperature": { "intervals": [{ "min": "19.0", "max": "24.0", "step": "0.5", "origin": "0.0" }] },
+            "climate.set_mode": { "allowed": ["heat", "off"] }
+          }
+        },
+        {
+          "id": "res_203_blind",
+          "kind": "cover",
+          "label": "Blind",
+          "icon": null,
+          "state": { "availability": "offline", "observed_at": "2026-10-22T09:59:00Z", "position_pct": 30, "cover_state": "open" },
+          "capabilities": {
+            "cover.open": {},
+            "cover.close": {},
+            "cover.stop": {},
+            "cover.set_position": { "intervals": [{ "min": "0", "max": "100", "step": "1", "origin": "0" }] }
+          }
+        },
+        {
+          "id": "res_203_fan",
+          "kind": "switch",
+          "label": "Fan",
+          "icon": null,
+          "state": { "availability": "online", "observed_at": "2026-10-22T10:00:00Z", "power": "off" },
+          "capabilities": { "switch.on": {}, "switch.off": {} }
+        },
+        {
+          "id": "res_203_hum",
+          "kind": "sensor",
+          "label": "Humidity",
+          "icon": null,
+          "state": { "availability": "unknown", "observed_at": "2026-10-22T10:00:00Z", "value": "48", "unit": "%" }
+        },
+        { "id": "res_203_door", "kind": "sensor", "label": "Door", "icon": null }
+      ]
+    }
+  ]
+}

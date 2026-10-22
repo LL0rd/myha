@@ -1,8 +1,10 @@
 // Dashboard projection as served by GET /api/v1/dashboard; Task 8.1 replaces these with the generated API types.
 
-export type Kind = "light" | "climate" | "cover" | "sensor";
+export type Kind = "light" | "switch" | "climate" | "cover" | "sensor";
 
 export type Action =
+  | "switch.on"
+  | "switch.off"
   | "light.on"
   | "light.off"
   | "light.set_level"
@@ -22,8 +24,8 @@ export interface Interval {
 }
 
 export interface Capability {
-  intervals?: Interval[];
-  allowed?: string[];
+  intervals?: Interval[] | null;
+  allowed?: string[] | null;
 }
 
 export interface ResourceState {
@@ -55,7 +57,7 @@ export interface Resource {
   /** Absent without state.read. */
   state?: ResourceState | null;
   /** Only the write actions the viewer may use. */
-  capabilities?: Partial<Record<Action, Capability>>;
+  capabilities?: Partial<Record<Action, Capability>> | null;
   rules?: Rule[];
 }
 

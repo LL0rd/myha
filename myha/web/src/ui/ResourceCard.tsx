@@ -105,13 +105,15 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
   else if (state.availability === "offline") stateText = t.unavailable;
   else stateText = t.unknown;
 
-  if (kind === "light") {
+  if (kind === "light" || kind === "switch") {
+    // A switch is a light without a dimmer.
+    const [onAction, offAction] = kind === "light" ? (["light.on", "light.off"] as const) : (["switch.on", "switch.off"] as const);
     const power = state?.power;
     if (state && state.availability !== "offline")
       stateText = power === "on" ? (state.level_pct != null ? t.onLevel(state.level_pct) : t.on) : power === "off" ? t.off : t.unknown;
-    const on = button("light.on", t.turnOn, actionIcon["light.on"], "primary");
-    const off = button("light.off", t.turnOff, actionIcon["light.off"], "secondary");
-    buttons = can("light.on") && can("light.off") && (power === "on" || power === "off") ? [power === "on" ? off : on] : [on, off];
+    const on = button(onAction, t.turnOn, actionIcon[onAction], "primary");
+    const off = button(offAction, t.turnOff, actionIcon[offAction], "secondary");
+    buttons = can(onAction) && can(offAction) && (power === "on" || power === "off") ? [power === "on" ? off : on] : [on, off];
     const intervals = caps["light.set_level"]?.intervals;
     if (intervals?.length) {
       const min = Math.min(...intervals.map((i) => Number(i.min)));

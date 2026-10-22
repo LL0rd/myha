@@ -1,8 +1,10 @@
-"""``myha-gateway serve`` runs both listeners; ``dev-seed room203`` seeds a dev database."""
+"""``myha-gateway serve`` runs both listeners; ``dev-seed room203`` seeds a dev database;
+``openapi --public|--admin`` prints that app's OpenAPI schema."""
 
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import sys
 from collections.abc import Callable
@@ -146,12 +148,24 @@ async def _dev_seed(settings: Settings) -> list[str]:
         await ctx.close()
 
 
+async def _openapi(settings: Settings, *, admin: bool) -> dict[str, object]:
+    """Build the app without its lifespan: no server, no Home Assistant, no database access."""
+    ctx = await AppContext.create(settings)  # the engine connects lazily, so nothing is opened
+    try:
+        return (create_admin_app if admin else create_public_app)(ctx).openapi()
+    finally:
+        await ctx.close()
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point of the ``myha-gateway`` command."""
     parser = argparse.ArgumentParser(prog="myha-gateway")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("serve")
     commands.add_parser("dev-seed").add_argument("world", choices=["room203"])
+    audience = commands.add_parser("openapi").add_mutually_exclusive_group(required=True)
+    audience.add_argument("--public", action="store_true")
+    audience.add_argument("--admin", action="store_true")
     args = parser.parse_args(argv)
     settings = Settings()
     setup_logging(settings.log_level)
@@ -162,6 +176,9 @@ def main(argv: list[str] | None = None) -> None:
                 raise SystemExit(2)
             for url in asyncio.run(_dev_seed(settings)):
                 print(url)  # the only output on stdout; the logs go to stderr
+            return
+        if args.command == "openapi":  # the schema is the only output on stdout
+            print(json.dumps(asyncio.run(_openapi(settings, admin=args.admin)), indent=2))
             return
         asyncio.run(_serve(settings))  # SystemExit from the admin server keeps its exit code
     except KeyboardInterrupt:  # Ctrl+C after graceful shutdown, like uvicorn

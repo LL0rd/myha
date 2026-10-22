@@ -21,6 +21,7 @@ import {
   IconMinus,
   IconPlayerStop,
   IconPlug,
+  IconPlugOff,
   IconPlus,
   IconPower,
   IconSend,
@@ -36,6 +37,7 @@ import type { CommandState, Kind } from "./types";
 // Bundled SVG components only: the CSP allows no external icon URLs.
 export const kindIcon = {
   light: IconBulb,
+  switch: IconPlug,
   climate: IconTemperature,
   cover: IconWindow,
   sensor: IconDroplet,
@@ -67,6 +69,8 @@ export function resourceIcon(kind: Kind, name?: string | null): Icon {
 }
 
 export const actionIcon = {
+  "switch.on": IconPlug,
+  "switch.off": IconPlugOff,
   "light.on": IconBulb,
   "light.off": IconBulbOff,
   "cover.open": IconArrowBarUp,
