@@ -9,9 +9,12 @@ Developer tools, run from the repository root.
   the processes it started. Needs `uv`, `pnpm` and `pnpm --dir myha/web install`; run
   `pnpm --dir myha/web build` first if the gateway itself should serve the bundles.
   `MYHA_ADMIN_PORT` and `MYHA_PUBLIC_PORT` move the gateway, the Vite proxies stay on 8099/8443.
-- `build-image.sh` builds the amd64 add-on image with Docker and smoke-tests the gateway in it.
+- `build-image.sh` builds the amd64 add-on image `myha-local:dev` with Docker and smoke-tests it
+  twice: the gateway on its own, then the s6 path through `/init`.
+  `scripts/build-image.sh --smoke-only <image-tag>` skips the build and only smoke-tests an
+  existing image, for example the one CI just built.
 - `make-icons.py` redraws `myha/icon.png` and `myha/logo.png`:
-  `uv run --with pillow python scripts/make-icons.py`.
+  `uv run --with pillow==13.0.0 python scripts/make-icons.py`.
 - `install-on-ha.py` (planned, Task 1.1) installs and configures the add-on on a Home Assistant
   instance through the Supervisor API. It reads `HA_URL` and `HA_TOKEN` from the environment.
 

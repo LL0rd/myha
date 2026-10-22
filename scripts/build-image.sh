@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Build the amd64 add-on image, then smoke-test it twice: the gateway on its own, then through s6.
+# Usage: scripts/build-image.sh                           build myha-local:dev, then smoke-test it
+#        scripts/build-image.sh --smoke-only <image-tag>  only smoke-test an existing image
 set -euo pipefail
 cd "$(dirname "$0")/.."
-base=$(sed -n 's/^  amd64: *//p' myha/build.yaml)  # the pinned base image the Supervisor uses
-docker buildx build --load --pull --platform linux/amd64 \
-  --build-arg BUILD_FROM="${base:?no amd64 base image in myha/build.yaml}" -t myha-local:dev myha/
+if [ $# -eq 0 ]; then
+  image=myha-local:dev
+  base=$(sed -n 's/^  amd64: *//p' myha/build.yaml)  # the pinned base image the Supervisor uses
+  docker buildx build --load --pull --platform linux/amd64 \
+    --build-arg BUILD_FROM="${base:?no amd64 base image in myha/build.yaml}" -t "$image" myha/
+elif [ $# -eq 2 ] && [ "$1" = --smoke-only ] && [ -n "$2" ]; then
+  image=$2
+else
+  echo "usage: $0 [--smoke-only <image-tag>]" >&2
+  exit 2
+fi
 
 # Print the container's logs, then stop with a message.
 fail() { docker logs "$1" 2>&1 || true; echo "smoke test failed: $2" >&2; exit 1; }
@@ -13,7 +23,7 @@ fail() { docker logs "$1" 2>&1 || true; echo "smoke test failed: $2" >&2; exit 1
 # removes it even if the start fails; no --rm, so a crashed container keeps its logs.
 gw=$(docker create --entrypoint /opt/myha/venv/bin/myha-gateway \
   -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
-  --tmpfs /data -p 127.0.0.1:18443:8443 myha-local:dev serve)
+  --tmpfs /data -p 127.0.0.1:18443:8443 "$image" serve)
 trap 'docker rm -f "$gw" >/dev/null 2>&1 || true' EXIT
 docker start "$gw" >/dev/null
 for _ in $(seq 1 30); do
@@ -31,7 +41,7 @@ docker exec "$gw" test -f /opt/myha/web/admin/admin.html || fail "$gw" "admin bu
 
 # 2. Through /init: s6 starts the service, the gateway comes up, docker stop ends with exit 0.
 # Waits for the gateway itself: s6 reports "successfully started" as soon as run is spawned.
-s6=$(docker create -e SUPERVISOR_TOKEN=dummy --tmpfs /data myha-local:dev)
+s6=$(docker create -e SUPERVISOR_TOKEN=dummy --tmpfs /data "$image")
 trap 'docker rm -f "$gw" "$s6" >/dev/null 2>&1 || true' EXIT
 docker start "$s6" >/dev/null
 for _ in $(seq 1 30); do
