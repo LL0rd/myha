@@ -10,7 +10,7 @@ from sqlalchemy import select
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from myha_gateway.api.admin import invites, session, stays
-from myha_gateway.api.public import health
+from myha_gateway.api.public import auth, config, health, me, ws_ticket
 from myha_gateway.auth.admin import AdminGuard
 from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
@@ -123,7 +123,8 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     """Guest-facing app: no admin route, never trusts forwarding headers."""
     settings = ctx.settings
     app = _app(ctx, validation_details=False)
-    app.include_router(health.router)
+    for module in (health, config, auth, me, ws_ticket):
+        app.include_router(module.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
     # WebSockets only to the public origin itself: wss://host, ws://host for the http override.
     origin = ctx.public_origin

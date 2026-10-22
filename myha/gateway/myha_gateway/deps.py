@@ -5,12 +5,13 @@ import logging
 import re
 import ssl
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Self
 from urllib.parse import urlsplit
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from myha_gateway.auth.ratelimit import SlidingWindowLimiter
 from myha_gateway.db import create_engine, session_factory
 from myha_gateway.db.models import Instance
 from myha_gateway.ha.client import HAClient
@@ -87,6 +88,11 @@ def _origin_problem(origin: str, *, allow_http: bool) -> str | None:
     return None
 
 
+def _limiters() -> dict[str, SlidingWindowLimiter]:
+    """Per client IP: ``config`` 60/min for ``public/config``, ``redeem`` 10/min (spec §12.1)."""
+    return {"config": SlidingWindowLimiter(60, 60), "redeem": SlidingWindowLimiter(10, 60)}
+
+
 def _no_password() -> bytes:
     """Asked for an encrypted key's passphrase instead of OpenSSL's terminal prompt."""
     raise ValueError("the private key is encrypted; myHA needs an unencrypted key")
@@ -110,6 +116,7 @@ class AppContext:
     public_origin: str | None = None
     public_tls: tuple[str, str] | None = None  # certificate and key file when serving HTTPS
     timeguard: TimeGuard | None = None  # set by the admin lifespan once the instance row exists
+    limiters: dict[str, SlidingWindowLimiter] = field(default_factory=_limiters)  # tests swap
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> Self:
