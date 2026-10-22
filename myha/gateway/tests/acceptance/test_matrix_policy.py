@@ -304,6 +304,19 @@ def test_a18_mode_cannot_keep_a_target_between_two_grants() -> None:
     assert heat("19.5").code is Code.GRANTED  # inside a range: the step does not matter
 
 
+def test_a18_mode_check_ranges_are_not_snapped_to_the_grid() -> None:
+    """A device target between grid points passes when it lies inside the fence (E7)."""
+    mode = {"resources": ["res_203_trv"], "actions": ["climate.set_mode"]}
+    index = room203_index(grants=[temperature_grant(("19", "24", "0.5")), mode])
+    ctx = guest_context(temperature_fence("stay", "stay_203", "21.3"))
+    view = fixture_view("res_203_trv", target_c=Decimal("21.2"))
+    params = {"mode": "heat"}
+    heat = check(
+        "climate.set_mode", params, resource="res_203_trv", ctx=ctx, index=index, view=view
+    )
+    assert (heat.code, heat.check_range) == (Code.GRANTED, (Decimal("19"), Decimal("21.3")))
+
+
 def test_stay_window() -> None:
     before = check("state.read", now=STAY_START - timedelta(microseconds=1))
     assert (before.code, before.public_code) == (Code.STAY_NOT_STARTED, "ACCESS_EXPIRED")
