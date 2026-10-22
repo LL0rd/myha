@@ -62,6 +62,7 @@ def test_scalar_values_pass() -> None:
         VALID | {"parameters": {"k" * 65: 1}},
         VALID | {"parameters": {"note": "x" * 4096}},
         VALID | {"extra": 1},
+        VALID | {"params": {}},
     ],
 )
 def test_malformed_requests_are_refused(body: Any) -> None:
