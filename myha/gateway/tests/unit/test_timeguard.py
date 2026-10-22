@@ -107,10 +107,16 @@ async def test_host_clock_not_synchronized_is_untrusted(engine: AsyncEngine) -> 
     assert audit.events == ["time.untrusted"]
 
 
-@pytest.mark.parametrize("host", [None, HostInfo(dt_synchronized=None), HostInfo(True)])
-async def test_unknown_or_synchronized_host_clock_is_ignored(
-    engine: AsyncEngine, host: HostInfo | None
-) -> None:
+@pytest.mark.parametrize(
+    "host",
+    [
+        None,
+        HostInfo(dt_synchronized=None),
+        HostInfo(dt_synchronized=0),  # type: ignore[arg-type]  # not a bool: no signal
+        HostInfo(dt_synchronized="false"),  # type: ignore[arg-type]
+    ],
+)
+async def test_unknown_host_clock_is_ignored(engine: AsyncEngine, host: HostInfo | None) -> None:
     now = MARK + timedelta(seconds=1)
     assert await guard(engine, Recorder(), host).check(now, 1.0) is True
 
@@ -218,3 +224,22 @@ async def test_system_audit_writes_the_transition(engine: AsyncEngine) -> None:
     assert [(row.actor, row.operation, row.result) for row in rows] == [
         ("system", "time.untrusted", "ok")
     ]
+
+
+async def test_failed_transition_is_retried_and_audited_once(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    calls: list[str] = []
+
+    async def flaky(session: AsyncSession, operation: str) -> None:
+        calls.append(operation)
+        if len(calls) == 1:
+            raise RuntimeError("audit failed")  # rolls the write session back
+        await audit(session, operation)
+
+    timeguard = TimeGuard(engine, None, flaky)
+    with pytest.raises(RuntimeError, match="audit failed"):
+        await timeguard.check(MARK - timedelta(minutes=2), 100.0)
+    assert (await instance(engine)).time_trusted is True  # nothing committed
+    assert await timeguard.check(MARK - timedelta(minutes=1), 160.0) is False
+    assert (await instance(engine)).time_trusted is False
+    assert audit.events == ["time.untrusted"]

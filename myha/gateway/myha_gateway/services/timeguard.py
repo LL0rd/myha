@@ -4,7 +4,9 @@ The wall clock is untrusted when it is behind the high-water mark ``instance.las
 when it moved more than 60 s differently from the monotonic clock since the previous check, or
 when the Supervisor reports the host clock as not synchronized. A later plausible check trusts
 it again: E26 only needs the flag to be current. Only a trusted check advances the mark, so a
-forward jump cannot lock the instance out once the clock is corrected.
+forward jump that is corrected within one check interval does not lock the instance out. A
+jump that persists for more than one interval becomes the baseline; without host info only an
+operator reset helps after its correction.
 
 A host clock that the Supervisor reports as synchronized is authoritative: that check is trusted
 and resets the mark to the wall clock, backwards if need be. A rollback that the host reports as
@@ -108,4 +110,5 @@ class TimeGuard:
             host = await self._host_info()
         except SupervisorUnavailable:
             return None
-        return None if host is None else host.dt_synchronized
+        flag = None if host is None else host.dt_synchronized
+        return flag if isinstance(flag, bool) else None  # anything else is no signal
