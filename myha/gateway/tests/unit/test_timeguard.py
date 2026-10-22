@@ -171,6 +171,7 @@ async def test_synchronized_host_clock_is_authoritative_after_a_jump(engine: Asy
     timeguard = guard(engine, audit, HostInfo(dt_synchronized=True))
     assert await timeguard.check(MARK + timedelta(minutes=1), 1000.0) is True
     assert await timeguard.check(MARK + timedelta(hours=2), 1060.0) is True
+    assert (await instance(engine)).last_seen_clock == MARK + timedelta(hours=2)
     assert audit.events == []
 
 
@@ -187,3 +188,22 @@ async def test_mark_is_written_at_most_every_five_minutes(engine: AsyncEngine) -
         assert await timeguard.check(MARK + timedelta(minutes=minute), 60.0 * minute) is True
     assert len(updates) == 1
     assert (await instance(engine)).last_seen_clock == MARK + timedelta(minutes=5)
+
+
+async def test_no_write_session_when_nothing_is_due(engine: AsyncEngine) -> None:
+    begins: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _count(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if statement == "BEGIN IMMEDIATE":
+            begins.append(statement)
+
+    timeguard = guard(engine, Recorder())
+    assert await timeguard.check(MARK + timedelta(minutes=1), 60.0) is True
+    assert await timeguard.check(MARK + timedelta(minutes=2), 120.0) is True
+    assert begins == []  # trusted, under five minutes of advance
+    assert await timeguard.check(MARK - timedelta(minutes=10), 180.0) is False
+    assert len(begins) == 1  # the transition
+    assert await timeguard.check(MARK - timedelta(minutes=9), 240.0) is False
+    assert await timeguard.check(MARK - timedelta(minutes=8), 300.0) is False
+    assert len(begins) == 1  # still untrusted, nothing due
