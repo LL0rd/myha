@@ -52,9 +52,10 @@ export function createLiveStore() {
     view = { ...view, ...next };
     listeners.forEach((fn) => fn());
   };
+  // A new view starts with Home Assistant online; the server follows each snapshot with the real connection status.
   const fresh = (status: LiveView["status"], rooms: Room[], policyVersion: number) => {
     clearTimeout(staleTimer);
-    set({ status, rooms, policyVersion, staleSince: null, cleared: false });
+    set({ status, rooms, policyVersion, staleSince: null, cleared: false, upstream: "online" });
   };
   const putCommand = (command: CommandPayload) => {
     clearTimeout(fades.get(command.id));
@@ -78,21 +79,26 @@ export function createLiveStore() {
     load(dashboard: DashboardResponse) {
       fresh(dashboard.status, dashboard.rooms, dashboard.policy_version);
     },
-    apply(event: ServerEvent) {
+    /** Applies one event; false when a delta is missing and only a fresh snapshot can repair the view. */
+    apply(event: ServerEvent): boolean {
       switch (event.type) {
         case "snapshot":
           sequence = event.sequence;
-          return fresh(event.dashboard.status, event.dashboard.rooms, event.policy_version);
+          fresh(event.dashboard.status, event.dashboard.rooms, event.policy_version);
+          return true;
         case "resource.updated":
         case "resource.removed":
-          if (event.sequence <= sequence) return; // a repeat after a reconnect
+          if (event.sequence <= sequence) return true; // a repeat after a reconnect
+          if (event.sequence !== sequence + 1) return false; // a gap: never guess what was missed
           sequence = event.sequence;
-          if (event.type === "resource.removed")
-            return withRooms((rooms) =>
+          if (event.type === "resource.removed") {
+            withRooms((rooms) =>
               rooms.map((room) => ({ ...room, resources: room.resources.filter((r) => r.id !== event.resource_id) })),
             );
-          // shortcut: an update for a room the client does not know is dropped; the next snapshot brings it.
-          return withRooms((rooms) =>
+            return true;
+          }
+          if (!view.rooms.some((room) => room.id === event.room_id)) return false; // a room this view lacks: resync
+          withRooms((rooms) =>
             rooms.map((room) => {
               if (room.id !== event.room_id) return room;
               const at = room.resources.findIndex((r) => r.id === event.resource.id);
@@ -102,14 +108,19 @@ export function createLiveStore() {
               return { ...room, resources };
             }),
           );
+          return true;
         case "policy.changed":
-          return set({ policyVersion: event.policy_version }); // a new snapshot follows
+          set({ policyVersion: event.policy_version }); // a new snapshot follows
+          return true;
         case "session.revoked":
-          return set({ ended: true });
+          set({ ended: true });
+          return true;
         case "connection.status":
-          return set({ upstream: event.status });
+          set({ upstream: event.status });
+          return true;
         case "command.updated":
-          return putCommand(event.command);
+          putCommand(event.command);
+          return true;
       }
     },
     /** A command the client just sent; an event about it may have come first and wins. */

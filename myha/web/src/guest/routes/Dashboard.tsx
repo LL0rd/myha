@@ -6,7 +6,7 @@ import { ApiError } from "../../transport";
 import { GuestPanel } from "../../ui/GuestPanel";
 import type { Action, ActionParams } from "../../ui/types";
 import styles from "../guest.module.css";
-import { createLiveStore, panelStatus } from "../store/live";
+import { createLiveStore, panelStatus, STALE_CLEAR_MS } from "../store/live";
 import { useSession } from "../store/session";
 
 type Me = Awaited<ReturnType<ReturnType<typeof useSession>["api"]["me"]>>;
@@ -59,20 +59,22 @@ export function Dashboard() {
       try {
         const { ticket } = await api.wsTicket(); // a fresh ticket for every attempt: tickets are single-use
         if (stopped) return;
-        socket = transport.openSocket("/api/v1/events", ticket);
-        socket.addEventListener("message", (message) => {
-          let data: unknown;
+        const ws = transport.openSocket("/api/v1/events", ticket);
+        socket = ws;
+        // Nothing is ever dropped silently: a frame that does not fit, or a gap in the deltas, closes the socket,
+        // and the close path resyncs from a fresh snapshot.
+        ws.addEventListener("message", (message) => {
+          let data: unknown = null;
           try {
             data = JSON.parse(String(message.data));
           } catch {
-            return;
+            // falls through to the failed schema check
           }
           const parsed = events.any.safeParse(data);
-          if (!parsed.success) return; // shortcut: an invalid frame is dropped; the next snapshot repairs the view
+          if (!parsed.success || !store.apply(parsed.data)) return ws.close();
           if (parsed.data.type === "snapshot") delay = BACKOFF_MS[0];
-          store.apply(parsed.data);
         });
-        socket.addEventListener("close", () => {
+        ws.addEventListener("close", () => {
           socket = null;
           if (!stopped) reconnect(); // a revoked session fails at the next ticket with 401
         });
@@ -111,10 +113,17 @@ export function Dashboard() {
     };
   }, [api, transport, setCsrf, store, navigate, run]);
 
-  // Back from the background: the session may have ended, the socket may be dead.
+  // Back from the background: the session may have ended, the socket may be dead or have missed events.
   useEffect(() => {
+    let hiddenAt: number | null = null;
     const visible = () => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible") {
+        hiddenAt ??= Date.now();
+        return;
+      }
+      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+      hiddenAt = null;
+      if (away > STALE_CLEAR_MS) return setRun((n) => n + 1); // a long nap: /me, dashboard and a new socket
       api.me().then(
         () => store.get().staleSince !== null && setRun((n) => n + 1),
         (error: unknown) => sessionGone(error) && navigate("/ended", { replace: true }),
@@ -137,7 +146,7 @@ export function Dashboard() {
 
   const onAction = (resourceId: string, action: Action, params: ActionParams) => {
     const key = idempotencyKey();
-    const local = (status: "accepted" | "failed", id = key) => {
+    const local = (status: "accepted" | "failed" | "unknown", id = key) => {
       const at = new Date().toISOString();
       store.addCommand({ id, resource_id: resourceId, action, status, created_at: at, updated_at: at });
     };
@@ -148,7 +157,8 @@ export function Dashboard() {
         (error: unknown) => {
           if (error instanceof DOMException && error.name === "TimeoutError" && retries > 0) return send(retries - 1);
           if (sessionGone(error)) navigate("/ended", { replace: true });
-          else local("failed");
+          // Refused by the gateway: nothing happened. A timeout or a network failure: it may have.
+          else local(error instanceof ApiError ? "failed" : "unknown");
         },
       );
     void send(ACTION_RETRIES);

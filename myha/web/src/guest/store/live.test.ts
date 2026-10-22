@@ -35,6 +35,16 @@ it("a snapshot replaces everything", () => {
   expect(store.get().policyVersion).toBe(8);
 });
 
+it("a sequence gap asks for a resync instead of applying", () => {
+  store.apply(snapshot(1));
+  const light = dashboard.rooms[0]!.resources[0]!;
+  expect(store.apply({ type: "resource.updated", sequence: 1, room_id: "unit_203", resource: { ...light, label: "One" } })).toBe(true);
+  expect(store.apply({ type: "resource.updated", sequence: 3, room_id: "unit_203", resource: { ...light, label: "Three" } })).toBe(false);
+  expect(store.get().rooms[0]!.resources[0]!.label).toBe("One");
+  expect(store.apply({ type: "resource.updated", sequence: 1, room_id: "unit_203", resource: light })).toBe(true); // a repeat: dropped, no resync
+  expect(store.get().rooms[0]!.resources[0]!.label).toBe("One");
+});
+
 it("applies resource deltas in sequence and drops repeats", () => {
   store.apply(snapshot(1));
   const light = dashboard.rooms[0]!.resources[0]!;
@@ -77,6 +87,9 @@ it("an upstream outage reported by the gateway locks the controls", () => {
   store.apply({ type: "connection.status", status: "offline" });
   expect(panelStatus(store.get())).toBe("stale");
   store.apply({ type: "connection.status", status: "online" });
+  expect(panelStatus(store.get())).toBe("online");
+  store.apply({ type: "connection.status", status: "offline" });
+  store.apply(snapshot(2)); // a new snapshot starts from online; the server repeats the state if it is not
   expect(panelStatus(store.get())).toBe("online");
 });
 

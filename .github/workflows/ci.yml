@@ -96,6 +96,7 @@ jobs:
         working-directory: myha/gateway
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: myha/web
+      - run: node --test scripts/check-no-external.test.mjs
       - run: node scripts/check-no-external.mjs myha/web/dist/guest
       - run: pnpm install --frozen-lockfile
         working-directory: tests/e2e

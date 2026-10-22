@@ -106,6 +106,66 @@ it("a timed-out click is sent again with the same key", async () => {
   expect(keys[1]).toBe(keys[0]);
 });
 
+it("a click whose outcome stays unknown says so, a refusal says failed", async () => {
+  answers["/api/v1/actions"] = () => {
+    throw new DOMException("timed out", "TimeoutError");
+  };
+  renderDashboard();
+  const light = within(await screen.findByRole("group", { name: "Ceiling" }));
+  fireEvent.click(light.getByRole("button", { name: "Turn off" }));
+  expect(await light.findByText("Result unclear · device not reachable")).toBeTruthy();
+  expect(request.mock.calls.filter(([path]) => path === "/api/v1/actions")).toHaveLength(3); // the first try and two retries
+  cleanup();
+  answers["/api/v1/actions"] = () => {
+    throw new TypeError("Failed to fetch");
+  };
+  renderDashboard();
+  const again = within(await screen.findByRole("group", { name: "Ceiling" }));
+  fireEvent.click(again.getByRole("button", { name: "Turn off" }));
+  expect(await again.findByText("Result unclear · device not reachable")).toBeTruthy();
+  cleanup();
+  answers["/api/v1/actions"] = () => {
+    throw new ApiError(403, "ACTION_NOT_ALLOWED", "Not allowed");
+  };
+  renderDashboard();
+  const refused = within(await screen.findByRole("group", { name: "Ceiling" }));
+  fireEvent.click(refused.getByRole("button", { name: "Turn off" }));
+  expect(await refused.findByText("Failed · nothing was changed")).toBeTruthy();
+});
+
+it("an invalid frame or a sequence gap closes the socket for a fresh snapshot", async () => {
+  renderDashboard();
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  act(() => sockets[0]!.receive({ type: "resource.created", sequence: 1 }));
+  expect(sockets[0]!.close).toHaveBeenCalled();
+  act(() => sockets[0]!.dispatchEvent(new Event("close")));
+  await act(() => vi.advanceTimersByTimeAsync(1_000));
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  act(() => sockets[1]!.receive({ type: "snapshot", generation: 2, sequence: 0, policy_version: 7, dashboard: { status: "online", rooms: fixture.rooms } }));
+  act(() => sockets[1]!.receive({ type: "resource.removed", sequence: 2, resource_id: "res_203_hum" }));
+  expect(sockets[1]!.close).toHaveBeenCalled();
+});
+
+it("after more than 30 s in the background the page resyncs completely", async () => {
+  renderDashboard();
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  visibility.mockReturnValue("hidden");
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await act(() => vi.advanceTimersByTimeAsync(31_000));
+  const before = request.mock.calls.filter(([path]) => path === "/api/v1/dashboard").length;
+  visibility.mockReturnValue("visible");
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await vi.waitFor(() => expect(request.mock.calls.filter(([path]) => path === "/api/v1/dashboard").length).toBe(before + 1));
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  expect(sockets[0]!.close).toHaveBeenCalled();
+  visibility.mockRestore();
+});
+
 it("a lost socket locks the panel and reconnects with a new ticket", async () => {
   const openSocket = renderDashboard();
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
