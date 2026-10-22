@@ -64,6 +64,8 @@ for _ in $(seq 1 30); do
 done
 grep -q "service myha successfully started" <<<"$log" || fail "$s6" "s6 did not start myha"
 grep -q "Uvicorn running on" <<<"$log" || fail "$s6" "no gateway under s6 within 30 s"
+mode=$(docker exec "$s6" stat -c %a /data/state/myha.sqlite) || fail "$s6" "no database"
+[ "$mode" = 600 ] || fail "$s6" "database mode $mode instead of 600 (umask 077 in run)"
 docker stop "$s6" >/dev/null
 code=$(docker inspect -f '{{.State.ExitCode}}' "$s6")
 [ "$code" = 0 ] || fail "$s6" "exit code $code after docker stop"
@@ -71,4 +73,4 @@ log=$(docker logs "$s6" 2>&1)
 if grep -q "defining user bundles in .* is deprecated" <<<"$log"; then
   fail "$s6" "s6 reports the deprecated user bundle layout"
 fi
-echo "s6: service myha started, gateway up, docker stop gave exit code 0, no s6 layout warning"
+echo "s6: service myha started, gateway up, database 0600, docker stop gave exit code 0, no s6 layout warning"

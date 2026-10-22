@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from myha_gateway.settings import Settings
@@ -49,6 +50,14 @@ def test_options_json_sets_only_log_level(data_dir: Path) -> None:
     assert s.log_level == "debug"
     assert s.admin_port == 8099
     assert not s.public_enabled and s.public_origin is None
+
+
+def test_app_options_offer_only_log_level() -> None:
+    # Guards against a probe-like option coming back: the schema is what the UI offers.
+    config = yaml.safe_load((Path(__file__).parents[3] / "config.yaml").read_text())
+    assert set(config["options"]) == set(config["schema"]) == {"log_level"}
+    with pytest.raises(ValidationError, match="probe_mode"):
+        Settings(probe_mode=True)  # type: ignore[call-arg]
 
 
 def test_relative_data_dir_becomes_absolute(

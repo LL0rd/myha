@@ -1,4 +1,4 @@
-"""Password hashing; for now only the S0 timing that picks the Argon2id parameters (E20)."""
+"""Password hashing; for now only the timing that picks the Argon2id parameters (E20)."""
 
 import itertools
 import statistics
