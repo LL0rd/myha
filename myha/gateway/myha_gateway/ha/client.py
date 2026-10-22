@@ -269,6 +269,7 @@ class HAClient:
             await reader  # raises how the connection broke, unless it closed normally
             return f"connection closed ({ws.close_code})"
         finally:
+            self.adapter_locked = True  # decide and projection see the loss at once
             self._ws = None
             for task in tasks:
                 task.cancel()

@@ -240,9 +240,12 @@ async def test_reconnects_after_the_connection_drops(sim: SimHandle) -> None:
     async with started(sim.ws_url) as (client, seen):
         dropped = asyncio.get_running_loop().time()
         await sim.control.post("drop-connections")
-        await until(lambda: not client.connected)
+        async with asyncio.timeout(3):
+            while client.connected:  # noqa: ASYNC110 (catch the very moment the socket goes)
+                await asyncio.sleep(0)
+        assert client.adapter_locked and len(seen.statuses) == 1  # locked before the teardown ends
         # The stale snapshot stays readable; commands fail at once instead of waiting.
-        assert client.state("light.living_ceiling") is not None and client.adapter_locked
+        assert client.state("light.living_ceiling") is not None
         async with asyncio.timeout(0.1):
             with pytest.raises(HAUnavailable):
                 await client.call_service("light", "turn_off", "light.hallway", {})
