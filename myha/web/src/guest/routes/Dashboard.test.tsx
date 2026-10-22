@@ -91,6 +91,21 @@ it("a click sends the action with a fresh idempotency key and shows its progress
   expect(await light.findByText("Confirmed")).toBeTruthy();
 });
 
+it("a timed-out click is sent again with the same key", async () => {
+  let calls = 0;
+  answers["/api/v1/actions"] = () => {
+    if (++calls === 1) throw new DOMException("timed out", "TimeoutError");
+    return { command_id: "cmd_9", status: "accepted", policy_version: 7 };
+  };
+  renderDashboard();
+  const light = within(await screen.findByRole("group", { name: "Ceiling" }));
+  fireEvent.click(light.getByRole("button", { name: "Turn off" }));
+  await vi.waitFor(() => expect(light.getByText("Checking and sending…")).toBeTruthy());
+  const keys = request.mock.calls.filter(([path]) => path === "/api/v1/actions").map(([, options]) => options?.idempotencyKey);
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).toBe(keys[0]);
+});
+
 it("a lost socket locks the panel and reconnects with a new ticket", async () => {
   const openSocket = renderDashboard();
   await vi.waitFor(() => expect(sockets).toHaveLength(1));

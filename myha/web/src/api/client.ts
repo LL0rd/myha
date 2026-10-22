@@ -35,7 +35,7 @@ export function apiClient(transport: Transport) {
     actions: (resourceId: string, action: Action, params: Record<string, string | number>, idempotencyKey: string) =>
       call(actionResponse, "/api/v1/actions", {
         method: "POST",
-        body: { resource_id: resourceId, action, params },
+        body: { resource_id: resourceId, action, parameters: params },
         idempotencyKey,
       }),
     command: (id: string) => call(command, `/api/v1/commands/${encodeURIComponent(id)}`),

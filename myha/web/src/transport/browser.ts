@@ -1,29 +1,50 @@
 import { errorBody } from "../api/schema";
-import { ApiError, type RequestOptions, type Transport } from ".";
+import { ApiError, REQUEST_TIMEOUT_MS, type RequestOptions, type Transport } from ".";
+
+// AbortSignal.timeout is missing in older WebViews (before Chrome 103).
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
 
 /** Same-origin fetch with the session cookie; `csrf` returns the token from redeem or /me. */
 export function browserTransport(csrf: () => string | null = () => null): Transport {
   return {
-    async request(path, { method = "GET", body, sensitive = false, idempotencyKey }: RequestOptions = {}) {
+    async request(path, { method = "GET", body, sensitive = false, idempotencyKey, signal }: RequestOptions = {}) {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["Content-Type"] = "application/json";
       const token = csrf();
       if (token && (method !== "GET" || sensitive)) headers["X-MyHA-CSRF"] = token;
       if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
-      const response = await fetch(path, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        credentials: "include",
-        redirect: "manual", // the API never redirects; a redirect is an attack or a proxy error
-      });
+      let response: Response;
+      try {
+        response = await fetch(path, {
+          method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+          credentials: "include",
+          redirect: "manual", // the API never redirects; a redirect is an attack or a proxy error
+          signal: signal ?? timeoutSignal(REQUEST_TIMEOUT_MS),
+        });
+      } catch (error) {
+        // The fallback signal aborts without a reason: report it as the timeout it is.
+        if (!signal && error instanceof Error && error.name === "AbortError") throw new DOMException("request timed out", "TimeoutError");
+        throw error;
+      }
       if (response.type === "opaqueredirect") throw new ApiError(0, null, "unexpected redirect");
       if (!response.ok) {
         const parsed = errorBody.safeParse(await response.json().catch(() => null));
         if (parsed.success) throw new ApiError(response.status, parsed.data.error.code, parsed.data.error.message);
         throw new ApiError(response.status, null, `HTTP ${response.status}`);
       }
-      return response.status === 204 ? undefined : response.json();
+      if (response.status === 204) return undefined;
+      try {
+        return (await response.json()) as unknown;
+      } catch {
+        throw new ApiError(response.status, null, "invalid response");
+      }
     },
 
     openSocket(path, ticket) {

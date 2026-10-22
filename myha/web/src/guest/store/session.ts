@@ -1,7 +1,7 @@
 // One guest session per page: the transport with its CSRF token, the typed API, and what the join link carried.
 import { createContext, useContext, useEffect, useState } from "react";
-import { ZodError } from "zod";
 import { apiClient, type ApiClient } from "../../api/client";
+import { ZodError } from "../../api/schema";
 import { ApiError, type Transport } from "../../transport";
 import { browserTransport } from "../../transport/browser";
 

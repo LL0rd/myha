@@ -12,6 +12,7 @@ import { useSession } from "../store/session";
 type Me = Awaited<ReturnType<ReturnType<typeof useSession>["api"]["me"]>>;
 
 const BACKOFF_MS = [1_000, 10_000] as const; // first and longest reconnect delay
+const ACTION_RETRIES = 2; // after a timeout, with the same idempotency key
 
 /** The session is gone for good: revoked, expired or never valid. */
 const sessionGone = (error: unknown) => error instanceof ApiError && (error.status === 401 || error.code === "ACCESS_EXPIRED");
@@ -140,10 +141,17 @@ export function Dashboard() {
       const at = new Date().toISOString();
       store.addCommand({ id, resource_id: resourceId, action, status, created_at: at, updated_at: at });
     };
-    api.actions(resourceId, action, params, key).then(
-      (answer) => local(answer.status === "failed" ? "failed" : "accepted", answer.command_id),
-      (error: unknown) => (sessionGone(error) ? navigate("/ended", { replace: true }) : local("failed")),
-    );
+    // A timeout leaves open whether the gateway got the click: the same key makes the retry safe.
+    const send = (retries: number): Promise<void> =>
+      api.actions(resourceId, action, params, key).then(
+        (answer) => local(answer.status === "failed" ? "failed" : "accepted", answer.command_id),
+        (error: unknown) => {
+          if (error instanceof DOMException && error.name === "TimeoutError" && retries > 0) return send(retries - 1);
+          if (sessionGone(error)) navigate("/ended", { replace: true });
+          else local("failed");
+        },
+      );
+    void send(ACTION_RETRIES);
   };
 
   if (failed)

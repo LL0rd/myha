@@ -132,14 +132,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dashboard */
+        get: operations["dashboard_api_v1_dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Action
+         * @description The closed set of product actions (design §4.1); any other string is unknown.
+         * @enum {string}
+         */
+        Action: "metadata.read" | "state.read" | "history.read" | "switch.on" | "switch.off" | "light.on" | "light.off" | "light.set_level" | "climate.set_temperature" | "climate.set_mode" | "cover.open" | "cover.close" | "cover.stop" | "cover.set_position";
+        /**
+         * Capability
+         * @description ``intervals`` for a number, ``allowed`` for a mode, neither for a plain action.
+         */
+        Capability: {
+            /** Intervals */
+            intervals?: components["schemas"]["Interval"][] | null;
+            /** Allowed */
+            allowed?: string[] | null;
+        };
+        /** DashboardResponse */
+        DashboardResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "online" | "waiting" | "expired";
+            /** Rooms */
+            rooms: components["schemas"]["Room"][];
+            /** Policy Version */
+            policy_version: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * Interval
+         * @description Settable values ``origin + k * step`` within ``[min, max]``, as decimal strings.
+         */
+        Interval: {
+            /** Min */
+            min: string;
+            /** Max */
+            max: string;
+            /** Step */
+            step: string;
+            /** Origin */
+            origin: string;
         };
         /** RedeemIn */
         RedeemIn: {
@@ -152,6 +211,65 @@ export interface components {
              * @enum {string}
              */
             client: "browser" | "native";
+        };
+        /** Resource */
+        Resource: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "light" | "switch" | "climate" | "cover" | "sensor";
+            /** Label */
+            label: string;
+            /** Icon */
+            icon?: string | null;
+            state?: components["schemas"]["ResourceState"] | null;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: components["schemas"]["Capability"];
+            } | null;
+        };
+        /**
+         * ResourceState
+         * @description Every state field any kind may show; the projection sets those of the resource's kind.
+         */
+        ResourceState: {
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "online" | "offline" | "unknown";
+            /** Observed At */
+            observed_at?: string | null;
+            /** Power */
+            power?: string | null;
+            /** Level Pct */
+            level_pct?: number | null;
+            /** Current C */
+            current_c?: string | null;
+            /** Target C */
+            target_c?: string | null;
+            /** Hvac Mode */
+            hvac_mode?: string | null;
+            /** Position Pct */
+            position_pct?: number | null;
+            /** Cover State */
+            cover_state?: string | null;
+            /** Value */
+            value?: string | null;
+            /** Unit */
+            unit?: string | null;
+        };
+        /** Room */
+        Room: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Resources */
+            resources: components["schemas"]["Resource"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -334,6 +452,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    dashboard_api_v1_dashboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardResponse"];
                 };
             };
         };

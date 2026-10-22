@@ -35,5 +35,6 @@ def test_openapi_touches_no_database(capsys: pytest.CaptureFixture[str], _data_d
 
 
 def test_openapi_needs_one_audience() -> None:
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exited:
         main(["openapi"])
+    assert exited.value.code == 2  # argparse: usage error

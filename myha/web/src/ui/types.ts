@@ -1,19 +1,9 @@
-// Dashboard projection as served by GET /api/v1/dashboard; Task 8.1 replaces these with the generated API types.
+// What the panel renders: the dashboard projection plus the explain rules of the admin preview.
+import type { actions, kinds } from "../api/schema";
 
-export type Kind = "light" | "switch" | "climate" | "cover" | "sensor";
+export type Kind = (typeof kinds)[number];
 
-export type Action =
-  | "switch.on"
-  | "switch.off"
-  | "light.on"
-  | "light.off"
-  | "light.set_level"
-  | "climate.set_temperature"
-  | "climate.set_mode"
-  | "cover.open"
-  | "cover.stop"
-  | "cover.close"
-  | "cover.set_position";
+export type Action = (typeof actions)[number];
 
 /** Decimal strings as the API sends them, e.g. "18.0"; allowed values lie on origin + k * step. */
 export interface Interval {

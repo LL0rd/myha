@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Room } from "../ui/types";
 import fixture from "./dashboard.fixture.json";
 import { dashboardResponse, errorBody, events } from "./schema";
+import type { components } from "./types";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -10,6 +11,8 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 it("accepts a real dashboard projection and fits the UI types", () => {
   const parsed = dashboardResponse.parse(fixture);
   const rooms: Room[] = parsed.rooms; // compile-time check: the panel renders what the API sends
+  const generated: components["schemas"]["DashboardResponse"] = parsed; // and zod agrees with the gateway's OpenAPI
+  expect(generated.policy_version).toBe(7);
   expect(rooms[0]?.resources).toHaveLength(7);
 });
 

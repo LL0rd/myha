@@ -5,14 +5,15 @@ import { browserTransport } from "./browser";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function stubFetch(response: { ok?: boolean; status?: number; type?: ResponseType; body?: unknown }) {
+function stubFetch(response: { ok?: boolean; status?: number; type?: ResponseType; body?: unknown; text?: string }) {
   const fetchMock = vi.fn<typeof fetch>(
     async () =>
       ({
         ok: response.ok ?? true,
         status: response.status ?? 200,
         type: response.type ?? "basic",
-        json: async () => response.body,
+        // like Response.json(): a body that is not JSON throws a SyntaxError
+        json: async () => (response.text === undefined ? response.body : JSON.parse(response.text)),
       }) as Response,
   );
   vi.stubGlobal("fetch", fetchMock);
@@ -58,8 +59,37 @@ it("fails on non-2xx with the public error from the body", async () => {
 });
 
 it("fails on non-2xx with an unreadable body without a code", async () => {
-  stubFetch({ ok: false, status: 502, body: "<html>bad gateway</html>" });
+  stubFetch({ ok: false, status: 502, text: "<html>bad gateway</html>" });
   await expect(browserTransport().request("/api/v1/me")).rejects.toMatchObject({ status: 502, code: null });
+});
+
+it("a 2xx body that is not JSON is an invalid response", async () => {
+  stubFetch({ status: 200, text: "<html>captive portal</html>" });
+  await expect(browserTransport().request("/api/v1/me")).rejects.toMatchObject({ name: "ApiError", status: 200, code: null, message: "invalid response" });
+});
+
+it("passes the caller's signal, else gives up after 15 s as a TimeoutError", async () => {
+  const fetchMock = stubFetch({ body: {} });
+  const own = new AbortController().signal;
+  await browserTransport().request("/api/v1/me", { signal: own });
+  expect(init(fetchMock).signal).toBe(own);
+
+  const controller = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(
+      (_input, options) =>
+        new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("timed out", "TimeoutError"))),
+        ),
+    ),
+  );
+  const pending = browserTransport().request("/api/v1/me");
+  expect(timeout).toHaveBeenCalledWith(15_000);
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+  timeout.mockRestore();
 });
 
 it("returns nothing for 204", async () => {
@@ -81,6 +111,13 @@ class FakeSocket {
     this.sent.push(data);
   }
 }
+
+it("opens wss behind https", () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("location", new URL("https://guest.example:8443/"));
+  browserTransport().openSocket("/api/v1/events", "tkt");
+  expect(FakeSocket.last.url).toBe("wss://guest.example:8443/api/v1/events");
+});
 
 it("opens the socket on the page's host and sends the ticket as the first frame", () => {
   vi.stubGlobal("WebSocket", FakeSocket);

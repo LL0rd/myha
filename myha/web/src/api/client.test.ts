@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { Transport } from "../transport";
 import { apiClient } from "./client";
 import fixture from "./dashboard.fixture.json";
+import { errorBody } from "./schema";
 
 const transportReturning = (body: unknown) => {
   const request = vi.fn<Transport["request"]>(async () => body);
@@ -20,7 +21,7 @@ it("sends an action with its idempotency key and validates the answer", async ()
   expect(answer.command_id).toBe("cmd_1");
   expect(request).toHaveBeenCalledWith("/api/v1/actions", {
     method: "POST",
-    body: { resource_id: "res_203_trv", action: "climate.set_temperature", params: { target_c: "22.0" } },
+    body: { resource_id: "res_203_trv", action: "climate.set_temperature", parameters: { target_c: "22.0" } },
     idempotencyKey: "key-1",
   });
 });
@@ -48,4 +49,15 @@ it("accepts /me as the guest auth routes send it", async () => {
   };
   expect((await transportReturning(me).client.me()).stay?.unit_name).toBeNull();
   await expect(transportReturning({ ...me, principal: { ...me.principal, password: "x" } }).client.me()).rejects.toThrow();
+});
+
+it("accepts the answers the gateway's guest routes really send", async () => {
+  const routes = (await import("./routes.fixture.json")).default;
+  const answering = (body: unknown) => transportReturning(body).client;
+  expect((await answering(routes.config).config()).instance_name).toBe("myHA");
+  expect((await answering(routes.redeem).redeem("s")).session.waiting).toBe(false);
+  expect((await answering(routes.me).me()).principal.display_name).toBe("");
+  expect((await answering(routes.ws_ticket).wsTicket()).expires_in).toBe(30);
+  expect((await answering(routes.renew).renew()).csrf_token).toBe(routes.renew.csrf_token);
+  expect(errorBody.parse(routes.error).error.code).toBe("UNAUTHENTICATED");
 });

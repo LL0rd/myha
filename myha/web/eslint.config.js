@@ -19,4 +19,18 @@ export default defineConfig(
       ],
     },
   },
+  {
+    // zod probes `new Function` on first use unless schema.ts has set jitless; the CSP would report that probe.
+    files: ["src/**"],
+    ignores: ["src/api/schema.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [{ name: "zod", message: "Import zod only in src/api/schema.ts (jitless for the CSP).", allowTypeImports: true }],
+          patterns: [{ group: ["zod/*"], message: "Import zod only in src/api/schema.ts.", allowTypeImports: true }],
+        },
+      ],
+    },
+  },
 );

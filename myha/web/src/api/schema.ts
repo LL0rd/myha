@@ -2,6 +2,9 @@
 // every object is strict, so a field the server must never send (entity_id, HA attributes) fails.
 import { z } from "zod";
 
+// The one module that imports zod (ESLint enforces it), so the jitless setting below always comes first.
+export { ZodError } from "zod";
+
 // The CSP has no 'unsafe-eval': without this, zod probes `new Function` and the browser reports a violation.
 z.config({ jitless: true });
 

@@ -9,7 +9,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "typecheck": "tsc",
-    "gen:api": "uv --directory ../gateway run myha-gateway openapi --public > openapi.json && openapi-typescript openapi.json -o src/api/types.ts && rm openapi.json"
+    "gen:api": "uv --directory ../gateway run --locked myha-gateway openapi --public | openapi-typescript -o src/api/types.ts"
   },
   "packageManager": "pnpm@10.14.0",
   "dependencies": {

@@ -1,0 +1,61 @@
+{
+  "_source": "captured from the gateway's public auth routes via tests/public_helpers.py (Task 8.4)",
+  "config": {
+    "instance_name": "myHA",
+    "languages": [
+      "de",
+      "en"
+    ],
+    "theme_default": "system",
+    "operator_contact": null
+  },
+  "redeem": {
+    "session": {
+      "not_before": "2026-10-22T00:00:00Z",
+      "not_after": "2026-10-23T23:59:00Z",
+      "waiting": false
+    },
+    "csrf_token": "4h0cGQFSz5dp2TMj_lguab1LR3z5UOerPQzdCeFYrYw"
+  },
+  "me": {
+    "principal": {
+      "id": "prn_26fddc7bdcaa",
+      "type": "guest",
+      "display_name": "",
+      "locale": null,
+      "theme": null
+    },
+    "session": {
+      "not_before": "2026-10-22T00:00:00Z",
+      "not_after": "2026-10-23T23:59:00Z",
+      "waiting": false
+    },
+    "csrf_token": "4h0cGQFSz5dp2TMj_lguab1LR3z5UOerPQzdCeFYrYw",
+    "stay": {
+      "unit_name": "Room 203",
+      "ends_at": "2026-10-23T23:59:00Z"
+    },
+    "instance": {
+      "name": "myHA",
+      "operator_contact": null
+    }
+  },
+  "ws_ticket": {
+    "ticket": "0B1oKhYSAHUsLf_BbINiXEcp1ZO_Cyxll74NQHoYgCo",
+    "expires_in": 30
+  },
+  "renew": {
+    "session": {
+      "not_before": "2026-10-22T00:00:00Z",
+      "not_after": "2026-10-23T23:59:00Z",
+      "waiting": false
+    },
+    "csrf_token": "4h0cGQFSz5dp2TMj_lguab1LR3z5UOerPQzdCeFYrYw"
+  },
+  "error": {
+    "error": {
+      "code": "UNAUTHENTICATED",
+      "message": "Not signed in"
+    }
+  }
+}
