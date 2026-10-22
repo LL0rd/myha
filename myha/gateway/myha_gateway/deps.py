@@ -34,9 +34,9 @@ def _is_origin(origin: str, *, allow_http: bool) -> bool:
         parts = urlsplit(origin)
         port = parts.port
         host = parts.hostname or ""
-        if ":" in host:  # IPv6: browsers send it compressed and lowercase, never with a zone
+        if ":" in host:  # IPv6: zones and IPv4-mapped forms never equal what browsers send
             address = ipaddress.IPv6Address(host)
-            host = "" if address.scope_id else f"[{address.compressed}]"
+            host = "" if address.scope_id or address.ipv4_mapped else f"[{address.compressed}]"
     except ValueError:
         return False
     default = {"https": 443, "http": 80 if allow_http else None}.get(parts.scheme)

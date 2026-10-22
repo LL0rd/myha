@@ -392,6 +392,8 @@ def test_browser_origins_pass(origin: str, allow_http: bool) -> None:
         ("https://[2001:0db8:0:0:0:0:0:1]:8443", False),  # browsers compress IPv6
         ("https://[2001:DB8::1]", False),
         ("https://[fe80::1%25eth0]", False),  # no zone in a URL
+        ("https://[::ffff:1.2.3.4]", False),  # IPv4-mapped: Python and browsers spell it
+        ("https://[::ffff:102:304]", False),  # differently, so neither form can match
         ("https://[::1", False),
         ("https://guest.example/", False),
         ("https://guest.example/join", False),
