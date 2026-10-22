@@ -92,19 +92,4 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test
-        # Like scripts/build-image.sh: --entrypoint bypasses s6, no --rm keeps the logs of a crashed container.
-        run: |
-          cid=$(docker run -d --entrypoint /opt/myha/venv/bin/myha-gateway \
-            -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN=http://127.0.0.1:18443 \
-            --tmpfs /data -p 127.0.0.1:18443:8443 "myha-ci:$GITHUB_SHA" serve)
-          trap 'rc=$?; [ "$rc" -eq 0 ] || docker logs "$cid"; docker rm -f "$cid" >/dev/null' EXIT
-          for _ in $(seq 30); do
-            if curl -fs --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz >/dev/null; then
-              curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz; echo
-              curl -fsSI --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "gateway not healthy after 30 attempts" >&2
-          exit 1
+        run: bash scripts/build-image.sh --smoke-only "myha-ci:$GITHUB_SHA"
