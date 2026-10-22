@@ -572,6 +572,10 @@ class NewEntity(_Body):
     attributes: JSON = {}
 
 
+class TemperatureUnit(_Body):
+    unit: str
+
+
 class EntityRef(_Body):
     entity_id: str
 
@@ -737,6 +741,12 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
     @app.post("/_sim/registry/area")
     async def registry_area(body: AreaChange) -> None:
         await sim.move(body.entity_id, body.area_id)
+
+    @app.post("/_sim/config/temperature-unit")
+    async def temperature_unit(body: TemperatureUnit) -> None:
+        """Another unit system, announced like Core does: core_config_updated, then get_config."""
+        sim.config["unit_system"]["temperature"] = body.unit
+        await sim.fire("core_config_updated", {})
 
     @app.post("/_sim/entity")
     async def entity_add(body: NewEntity) -> JSON:

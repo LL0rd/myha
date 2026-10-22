@@ -525,3 +525,16 @@ async def test_entity_add_and_remove_errors(
     body = {"area_id": None} | body if path == "entity" else body
     response = await sim.control.client.post(f"/_sim/{path}", json=body)
     assert response.status_code == status
+
+
+async def test_temperature_unit_change_is_announced(sim: SimHandle) -> None:
+    async with connect(sim) as listener, connect(sim) as ws:
+        await command(listener, {"id": 1, "type": "subscribe_events"})
+        await sim.control.post("config/temperature-unit", {"unit": "°F"})
+        event = (await receive(listener))["event"]
+        config = (await command(ws, {"id": 1, "type": "get_config"}))["result"]
+        await sim.control.post("reset")
+        reset = (await command(ws, {"id": 2, "type": "get_config"}))["result"]
+    assert event["event_type"] == "core_config_updated"
+    assert config["unit_system"]["temperature"] == "°F"
+    assert reset["unit_system"]["temperature"] == "°C"
