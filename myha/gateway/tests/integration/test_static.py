@@ -89,6 +89,8 @@ async def test_content_types_and_head(dist: Path) -> None:
     assert (await call(app, "GET", "/")).headers["content-type"].startswith("text/html")
     assert (await call(app, "GET", "/sw.js")).headers["content-type"].startswith("text/javascript")
     assert (await call(app, "GET", "/assets/f.woff2")).headers["content-type"] == "font/woff2"
+    manifest = await call(app, "GET", "/manifest.webmanifest")
+    assert manifest.headers["content-type"] == "application/manifest+json"
     head = await call(app, "HEAD", "/assets/g.js")
     assert head.status_code == 200 and head.content == b""
     assert head.headers["cache-control"] == IMMUTABLE

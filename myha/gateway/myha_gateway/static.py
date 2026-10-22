@@ -16,6 +16,8 @@ from myha_gateway.errors import SAFETY_HEADERS, ApiError
 # Python's own table has no font types and the Alpine image has no /etc/mime.types.
 mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("font/woff", ".woff")
+# Explicit, so a host /etc/mime.types cannot change the PWA manifest type.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 _IMMUTABLE = "public, max-age=31536000, immutable"  # Vite puts a content hash in asset names
 
