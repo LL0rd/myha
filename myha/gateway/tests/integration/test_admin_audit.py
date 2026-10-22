@@ -3,7 +3,7 @@
 import base64
 import secrets
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -57,10 +57,14 @@ async def admin(world: World) -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
-async def write(world: World, *events: AuditEvent) -> None:
+async def write(world: World, *events: AuditEvent, now: datetime | None = None) -> None:
     for event in events:
         async with write_session(world.ctx.engine) as session:
-            await audit(session, event, aggregate=True)
+            await audit(session, event, aggregate=True, now=now)
+
+
+def cursor_of(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode()
 
 
 async def listing(admin: httpx.AsyncClient, **params: Any) -> dict[str, Any]:
@@ -142,6 +146,24 @@ async def test_keyset_pages_walk_every_row_newest_first(
     assert len(seen) == 5 and seen == sorted(seen, reverse=True)
 
 
+async def test_keyset_pages_split_rows_of_the_same_timestamp(
+    world: World, admin: httpx.AsyncClient
+) -> None:
+    same = utcnow()
+    await write(world, *(AuditEvent(operation="test.tie", result="ok") for _ in range(5)), now=same)
+    seen: list[int] = []
+    cursor = None
+    while True:
+        params = {"filter": "operation=test.tie", "limit": 2}
+        body = await listing(admin, **params | ({"cursor": cursor} if cursor else {}))
+        assert {row["ts"] for row in body["events"]} <= {same.isoformat().replace("+00:00", "Z")}
+        seen += [row["id"] for row in body["events"]]
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert seen == list(range(seen[0], seen[0] - 5, -1))  # all five, descending, no gaps
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -151,7 +173,18 @@ async def test_keyset_pages_walk_every_row_newest_first(
         {"filter": "result=ok,result=denied"},
         {"filter": "since=2026-10-22T12:00:00"},
         {"filter": "until=yesterday"},
+        {"filter": ","},
+        {"filter": "operation=a,,result=ok"},
+        {"filter": "operation=a,"},
+        {"filter": "since=0001-01-01T00:00:00+14:00"},
         {"cursor": "not base64 !"},
+        {"cursor": cursor_of(f"2026-10-22T12:00:00+00:00|{2**64}")},
+        {"cursor": cursor_of(f"2026-10-22T12:00:00+00:00|{2**63}")},
+        {"cursor": cursor_of("2026-10-22T12:00:00+00:00|" + "9" * 30)},
+        {"cursor": cursor_of("2026-10-22T12:00:00+00:00|0")},
+        {"cursor": cursor_of("2026-10-22T12:00:00+00:00|-5")},
+        {"cursor": cursor_of("2026-10-22T12:00:00+00:00|1_0")},
+        {"cursor": cursor_of("0001-01-01T00:00:00+14:00|5")},
         {"cursor": base64.urlsafe_b64encode(b"2026-10-22T12:00:00+00:00|x").decode()},
         {"cursor": base64.urlsafe_b64encode(b"2026-10-22T12:00:00|1").decode()},
         {"limit": 0},

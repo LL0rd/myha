@@ -38,7 +38,6 @@ async def test_audit_writes_one_row_with_the_audit_fields(engine: AsyncEngine) -
         session_id="ses_1",
         policy_version=3,
         normalized_params={"level": 40, "transition": {"seconds": 2}},
-        anon_key="auth.redeem|UNAUTHENTICATED|2026-10-22T12:00|203.0.113.9",
     )
     before = datetime.now(UTC)
     async with write_session(engine) as session:
@@ -53,8 +52,7 @@ async def test_audit_writes_one_row_with_the_audit_fields(engine: AsyncEngine) -
     )
     assert (row.resource_id, row.policy_version) == ("res_203_light", 3)
     assert row.normalized_params == {"level": 40, "transition": {"seconds": 2}}
-    assert row.anon_key == "auth.redeem|UNAUTHENTICATED|2026-10-22T12:00|203.0.113.9"
-    assert row.ha_context_id is None
+    assert row.anon_key is row.ha_context_id is None
     assert row.aggregate_count == 1
 
 

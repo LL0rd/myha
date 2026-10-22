@@ -1,7 +1,12 @@
-"""Admin API: the audit log, newest first, by keyset pages (design §6)."""
+"""Admin API: the audit log, newest first, by keyset pages (design §6).
+
+``filter`` is ``key=value`` pairs separated by commas. Timestamps of ``since`` and ``until``
+need an offset; send ``Z`` or URL-encode the ``+`` of ``+02:00``, which arrives as a space
+otherwise.
+"""
 
 import base64
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -27,18 +32,19 @@ def _invalid(message: str) -> ApiError:
 
 
 def _aware(value: str) -> datetime:
+    """An ISO timestamp with offset, in UTC; ``ValueError`` or ``OverflowError`` otherwise."""
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         raise ValueError("naive timestamp")
-    return parsed
+    return parsed.astimezone(UTC)  # OverflowError at the ends of the range, e.g. year 1 +14:00
 
 
 def _conditions(text: str) -> tuple[list[Any], set[str]]:
     """``key=value`` pairs separated by commas; keys from a closed set, each at most once."""
     conditions: list[Any] = []
     seen: set[str] = set()
-    for clause in filter(None, text.split(",")):
-        key, _, value = clause.partition("=")
+    for clause in text.split(",") if text else ():
+        key, _, value = clause.partition("=")  # an empty clause has an empty key: refused
         if key in seen or not value or (key not in _COLUMNS and key not in ("since", "until")):
             raise _invalid("Invalid filter")
         seen.add(key)
@@ -47,7 +53,7 @@ def _conditions(text: str) -> tuple[list[Any], set[str]]:
             continue
         try:
             at = _aware(value)
-        except ValueError:
+        except (ValueError, OverflowError):
             raise _invalid("Invalid filter") from None
         conditions.append(AuditRow.ts >= at if key == "since" else AuditRow.ts < at)
     return conditions, seen
@@ -61,10 +67,13 @@ def _after(cursor: str) -> Any:
     """The keyset condition for the rows older than the cursor's ``(ts, id)``."""
     try:
         ts, _, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().partition("|")
-        at, before = _aware(ts), int(row_id)
-    except ValueError:
+        at = _aware(ts)
+        if not (row_id.isascii() and row_id.isdigit() and 0 < int(row_id) < 2**63):
+            raise ValueError("id out of range")  # SQLite integers are 64-bit signed
+    except (ValueError, OverflowError):
         raise _invalid("Invalid cursor") from None
-    return or_(AuditRow.ts < at, and_(AuditRow.ts == at, AuditRow.id < before))
+    # ts <= at first, so SQLite range-seeks on the ts index.
+    return and_(AuditRow.ts <= at, or_(AuditRow.ts < at, AuditRow.id < int(row_id)))
 
 
 def _row_json(row: AuditRow) -> dict[str, Any]:

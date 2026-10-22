@@ -4,7 +4,7 @@ Refusals never echo a value: the body comes from the guest and may carry anythin
 """
 
 import json
-import uuid
+import re
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -18,6 +18,8 @@ MAX_KEY = 64
 MAX_PARAMS_JSON = 4096
 _PRODUCT_ID: TypeAdapter[str] = TypeAdapter(ProductId)
 _FIELDS = frozenset({"resource_id", "action", "parameters"})
+# The canonical 8-4-4-4-12 form only: no braces, URN or bare hex, so one key has one spelling.
+_UUID = re.compile(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _invalid(message: str) -> ApiError:
@@ -39,19 +41,27 @@ def validate_action_request(body: Any) -> tuple[str, Action, dict[str, Any]]:
     if (
         not isinstance(params, dict)
         or len(params) > MAX_PARAMS
-        or any(len(key) > MAX_KEY for key in params)
+        or not all(0 < len(key) <= MAX_KEY and key.isprintable() for key in params)
         or not all(
             value is None or isinstance(value, str | int | float) for value in params.values()
         )
-        or len(json.dumps(params)) > MAX_PARAMS_JSON
+        or _size(params) > MAX_PARAMS_JSON
     ):
         raise _invalid("Invalid parameters")
     return resource_id, Action(raw_action), params
 
 
-def idempotency_key(header: str | None) -> str:
-    """The ``Idempotency-Key`` header as a canonical lowercase UUID, else 400."""
+def _size(params: dict[str, Any]) -> float:
+    """The UTF-8 size of ``params`` as compact JSON; infinite for NaN and infinities."""
     try:
-        return str(uuid.UUID(header or ""))
+        text = json.dumps(params, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
     except ValueError:
-        raise _invalid("Idempotency-Key must be a UUID") from None
+        return float("inf")
+    return len(text.encode())
+
+
+def idempotency_key(header: str | None) -> str:
+    """The ``Idempotency-Key`` header, a UUID in its 8-4-4-4-12 form, lowercased; else 400."""
+    if header is None or not _UUID.fullmatch(header):
+        raise _invalid("Idempotency-Key must be a UUID")
+    return header.lower()

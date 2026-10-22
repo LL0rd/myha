@@ -228,13 +228,13 @@ async def redeem(
             )
             await audit(db, event)
     except _Refused as refused:
-        key = f"auth.redeem|{refused.reason}|{now:%Y-%m-%dT%H:%M}|{peer_key}"
+        key = f"auth.redeem|{refused.reason}|{peer_key}"
         event = AuditEvent(
             operation="auth.redeem", result="denied", reason_code=refused.reason, anon_key=key
         )
         try:
             async with write_session(ctx.engine) as db:
-                await audit(db, event, aggregate=True)  # one row per client and minute
+                await audit(db, event, aggregate=True, now=now)  # one row per client and minute
         except Exception:  # e.g. busy timeout: the answer stays the uniform 401
             logger.warning("redeem denial not audited", exc_info=True)
         raise redeem_refused() from None

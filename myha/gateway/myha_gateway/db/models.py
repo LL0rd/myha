@@ -317,8 +317,9 @@ class Command(Base):
 class AuditEvent(Base):
     __tablename__ = "audit_event"
     __table_args__ = (
-        # Finds the row that folds repeated anonymous denials (design §5); the key already holds
-        # operation, reason code, minute and client IP. Partial: other rows pay nothing for it.
+        # Finds the row that folds repeated anonymous denials (design §5); the key holds
+        # operation, reason code and client, the minute is a ts range. Partial: other rows pay
+        # nothing for it.
         Index("ix_audit_event_fold", "anon_key", sqlite_where=text("anon_key IS NOT NULL")),
         # AUTOINCREMENT: ids never repeat, even after retention emptied the table.
         {"sqlite_autoincrement": True},
@@ -336,7 +337,7 @@ class AuditEvent(Base):
     policy_version: Mapped[int | None]
     normalized_params: Mapped[dict[str, Any] | None]
     ha_context_id: Mapped[str | None]  # spec §15.2
-    # Fold key of an anonymous event (operation|reason_code|minute|client_ip), else NULL.
+    # Fold key of an anonymous event (operation|reason_code|client), else NULL.
     anon_key: Mapped[str | None] = mapped_column(String(128))
     # Denials folded into this row (design §5).
     aggregate_count: Mapped[int] = mapped_column(default=1, server_default="1")

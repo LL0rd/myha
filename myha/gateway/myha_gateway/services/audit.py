@@ -70,30 +70,50 @@ class AuditEvent:
         _check_keys(self.normalized_params)
         if self.anon_key is not None and len(self.anon_key) > 128:
             raise ValueError("anon_key is longer than 128 characters")
+        # Anonymous means one thing everywhere: actor "anonymous", no session, no principal.
+        # System and admin events have no session either, but their own actor and no anon_key.
+        anonymous = self.actor == "anonymous" or self.anon_key is not None
+        if anonymous and (
+            self.actor != "anonymous"
+            or self.session_id is not None
+            or self.effective_principal is not None
+        ):
+            raise ValueError("an anonymous event has the actor 'anonymous' and no session")
 
 
-async def audit(session: AsyncSession, event: AuditEvent, *, aggregate: bool = False) -> None:
+async def audit(
+    session: AsyncSession,
+    event: AuditEvent,
+    *,
+    aggregate: bool = False,
+    now: datetime | None = None,
+) -> None:
     """Add the event to the caller's write session; the caller's transaction commits it.
 
     ``aggregate`` folds a denial (any result but ``ok``) into the row with the same fold key in
-    the same UTC minute, counting it in ``aggregate_count``; that row keeps its first ``ts``.
-    The fold key is ``(session_id, operation, result, reason_code)``, or ``anon_key`` for an
-    anonymous event (no session): SQL ``=`` never matches NULL, so those need a NULL-free key.
+    the same UTC minute of ``now`` (default: the current time), counting it in
+    ``aggregate_count``. That row keeps the ``ts`` of the first event that took the write lock.
+    The fold key is ``(operation, result)`` plus ``(session_id, reason_code)``, or plus
+    ``anon_key`` for an anonymous event: SQL ``=`` never matches the NULL session of an
+    anonymous event, so it needs a NULL-free key such as ``operation|reason|client``.
     """
     _check_keys(event.normalized_params)  # the mapping may have changed since the event was made
-    now = datetime.now(UTC)
+    now = datetime.now(UTC) if now is None else now.astimezone(UTC)
     if aggregate and event.result != "ok":
         if event.session_id is None and event.anon_key is None:
             raise ValueError("an anonymous denial folds only with an anon_key")
         minute = now.replace(second=0, microsecond=0)
-        same = [AuditRow.ts >= minute, AuditRow.ts < minute + timedelta(minutes=1)]
+        same = [
+            AuditRow.ts >= minute,
+            AuditRow.ts < minute + timedelta(minutes=1),
+            AuditRow.operation == event.operation,
+            AuditRow.result == event.result,
+        ]
         if event.session_id is None:
             same.append(AuditRow.anon_key == event.anon_key)
         else:
             same += [
                 AuditRow.session_id == event.session_id,
-                AuditRow.operation == event.operation,
-                AuditRow.result == event.result,
                 AuditRow.reason_code.is_not_distinct_from(event.reason_code),
             ]
         first = select(AuditRow.id).where(*same).order_by(AuditRow.id).limit(1).scalar_subquery()

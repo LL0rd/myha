@@ -61,6 +61,13 @@ def test_scalar_values_pass() -> None:
         VALID | {"parameters": {f"k{i}": i for i in range(17)}},
         VALID | {"parameters": {"k" * 65: 1}},
         VALID | {"parameters": {"note": "x" * 4096}},
+        VALID | {"parameters": {"note": "é" * 2100}},  # under 4096 characters, over 4 KiB
+        VALID | {"parameters": {"level_pct": float("nan")}},
+        VALID | {"parameters": {"level_pct": float("inf")}},
+        VALID | {"parameters": {"level_pct": float("-inf")}},
+        VALID | {"parameters": {"": 1}},
+        VALID | {"parameters": {"level\npct": 1}},
+        VALID | {"parameters": {"level\x00": 1}},
         VALID | {"extra": 1},
         VALID | {"params": {}},
     ],
@@ -80,13 +87,30 @@ def test_refusal_never_echoes_values() -> None:
         assert secret not in json.dumps([error.message, error.details])
 
 
+def test_utf8_size_counts_bytes() -> None:
+    params = {"note": "é" * 1500}  # 3000 bytes of UTF-8
+    assert validate_action_request(VALID | {"parameters": params})[2] == params
+
+
 def test_idempotency_key_is_a_canonical_uuid() -> None:
     upper = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
     assert idempotency_key(upper) == upper.lower()
-    assert idempotency_key("{6f9619ff-8b86-d011-b42d-00c04fc964ff}") == upper.lower()
+    assert idempotency_key(upper.lower()) == upper.lower()
 
 
-@pytest.mark.parametrize("header", [None, "", "not-a-uuid", "6f9619ff8b86d011b42d00c04fc964ff0"])
+@pytest.mark.parametrize(
+    "header",
+    [
+        None,
+        "",
+        "not-a-uuid",
+        "6f9619ff8b86d011b42d00c04fc964ff",  # bare hex
+        "{6f9619ff-8b86-d011-b42d-00c04fc964ff}",
+        "urn:uuid:6f9619ff-8b86-d011-b42d-00c04fc964ff",
+        "6f9619ff-8b86-d011-b42d-00c04fc964ff\n",
+        " 6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    ],
+)
 def test_idempotency_key_missing_or_malformed_is_refused(header: str | None) -> None:
     with pytest.raises(ApiError) as caught:
         idempotency_key(header)
