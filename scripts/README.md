@@ -23,3 +23,6 @@ Developer tools, run from the repository root.
 
 `.dev/` is git-ignored and holds local state: the gateway data of `dev.sh` and `ha.env` with
 `HA_URL` and `HA_TOKEN` for `install-on-ha.py` (`set -a; source .dev/ha.env; set +a`).
+
+Dependabot writes `myha/gateway/uv.lock` with uv 0.11, while CI and the Dockerfile pin uv 0.10.x;
+raise both pins with the first uv pull request.

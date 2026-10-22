@@ -22,6 +22,8 @@ class _AddonOptions(PydanticBaseSettingsSource):
         if not path.is_file():
             return {}
         options = json.loads(path.read_text(encoding="utf-8"))
+        # Task 1.6: drop "probe_mode" here in the same commit as Settings.probe_mode; otherwise
+        # startup fails with extra_forbidden while options.json still carries the key.
         return {key: options[key] for key in ("log_level", "probe_mode") if key in options}
 
 
