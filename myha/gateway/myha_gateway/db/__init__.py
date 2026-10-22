@@ -72,10 +72,15 @@ async def write_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """One transaction that takes the write lock up front, commits on exit, rolls back on error.
 
     ``BEGIN IMMEDIATE`` makes concurrent writers wait on ``busy_timeout`` instead of failing
-    with ``database is locked`` when a deferred read upgrades to a write. SQLite's busy handler
-    is not FIFO, and the lock blocks every other writer, so: no Home Assistant or other network
-    I/O inside, and no nested write session in the same task (it waits on its own lock until
-    ``busy_timeout`` expires).
+    with ``database is locked`` when a deferred read upgrades to a write. The lock blocks every
+    other writer and SQLite's busy handler is not FIFO, so inside a write session:
+
+    - use only this one session and pass it down to the services; no second session of any
+      kind, not even a read session: it needs another pool connection while the writers queued
+      behind the lock hold the rest, which stalls until ``busy_timeout`` and fails them with
+      ``database is locked``;
+    - no nested write session (it waits on its own lock);
+    - no Home Assistant or other network I/O.
     """
     writer = engine.execution_options(myha_write=True)
     async with AsyncSession(writer, expire_on_commit=False) as session, session.begin():
