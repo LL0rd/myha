@@ -738,6 +738,8 @@ class PublicListener:
 
 `create_public_app(ctx)` entsteht je Start neu, damit die origin-gebundene CSP (`connect-src 'self' wss://<host>`, wie heute in `app.py`) und die Proxy-Middleware (Task 11.2) den aktuellen Stand sehen. `GET /api/v1/admin/session` liefert zusätzlich `public_ready` und `public_reason`.
 
+Hinweis zur Verbindungsebene: Der Admin-Listener läuft bewusst ohne `limit_concurrency`, und die Peer-Prüfung greift heute erst in der ASGI-Schicht (`PeerGuardMiddleware`), nachdem h11 die Anfrage geparst hat. Sobald diese Listener-Steuerung existiert, schließt Task 11.2 fremde Peers schon in `connection_made`.
+
 - [ ] **Step 1 – Tests (rot)** mit injizierter Factory und Fake-Servern wie in Task 4.2: aus beim Start → Origin und Proxy setzen, `apply_public` → Server startet; Origin-Wechsel → alter Server `should_exit`, neuer mit neuer CSP; Listener aus (Restore) → Server stoppt ohne Neustart; `reload()` bei unverändertem Setup startet nichts neu; Fehler → Backoff wie bisher; `stop` → kein Neustart; SIGTERM-Reihenfolge (bestehender Test) bleibt grün. Lauf: `uv run pytest tests/integration/test_public_listener.py tests/integration/test_startup.py -q` → FAIL.
 - [ ] **Step 2 – Implementieren.**
 - [ ] **Step 3 – Grün:** Gateway-Prüfung.
@@ -747,21 +749,25 @@ class PublicListener:
 
 **Files:**
 - Create: `myha_gateway/proxy.py` (`ProxyPeerFilter`)
-- Modify: `myha_gateway/net.py` (aus Task 5b.7; `parse_proxy_cidrs`), `myha_gateway/app.py` (`create_public_app`), `myha_gateway/deps.py`
-- Test: `tests/unit/test_net.py`, `tests/integration/test_proxy_mode.py`, `tests/integration/test_startup.py`
+- Modify: `myha_gateway/net.py` (aus Task 5b.7; `parse_proxy_cidrs`), `myha_gateway/app.py` (`create_public_app`), `myha_gateway/deps.py`, `myha_gateway/__main__.py` (`_server()` mit Peer-Protokollklasse)
+- Test: `tests/unit/test_net.py`, `tests/integration/test_proxy_mode.py`, `tests/integration/test_proxy_wire.py` (echter uvicorn-Server auf Port 0, rohe Sockets), `tests/integration/test_startup.py`
 
 Verhalten:
 - Heute hält `decide_public()` den Modus `proxy` mit dem Grund „proxy mode is not available yet“ zu; ein `shortcut:`-Kommentar verweist auf diesen Task. Der Task öffnet den Modus; Kommentar und Grund entfallen.
 - `parse_proxy_cidrs(raw: list[str]) -> tuple[IPv4Network | IPv6Network, ...]` in `net.py`: je Eintrag `ipaddress.ip_network(entry, strict=False)` (Host-Bits werden genullt, `10.0.0.5/24` → `10.0.0.0/24`), 1–16 Einträge, nie `0.0.0.0/0` oder `::/0`, kein Netz, das `172.30.32.0/23` (HAOS-hassio-Netz) oder `172.17.0.0/16` (Docker-Bridge) schneidet: Sonst würden der Supervisor oder der Docker-Gateway als Proxy vertraut. Fehler → `ValueError` mit Grund. `decide_public()`, `ProxyPeerFilter` und `ProxyHeadersMiddleware` nutzen dieselbe normalisierte Liste; ein Fehler hält den Listener mit Grund aus.
 - Bei `instance.tls_mode == "proxy"` (nicht beim Dev-Override) ist `ProxyPeerFilter(networks)` die äußerste Schicht: HTTP von einem Peer außerhalb → 403 JSON `UNAUTHENTICATED` mit Safety-Headern, WebSocket → Close 1008 vor dem Handshake. Darin setzt uvicorns `ProxyHeadersMiddleware(trusted_hosts=[str(n) for n in networks])` `scope["client"]` aus `X-Forwarded-For` und das Schema aus `X-Forwarded-Proto`, nur für vertrauenswürdige Peers. So sehen Rate-Limits, Audit-IP-Klassen und der Gastgerätetest den echten Client, ohne dass ein Dienst sich darum kümmern muss.
+- Request-Smuggling: Im Modus `proxy` lehnt `ProxyPeerFilter` jede HTTP-Anfrage mit **beiden** Headern `Content-Length` und `Transfer-Encoding` mit 400 `INVALID_PARAMETERS` und `Connection: close` ab; uvicorn schließt danach die Verbindung, eine nachgeschobene Anfrage auf derselben Verbindung wird nie verarbeitet. h11 ist hier nachsichtig; ein Proxy, der beide Header weiterreicht und Upstream-Verbindungen wiederverwendet, wäre sonst ein Smuggling-Weg.
+- Peer-Prüfung auf Verbindungsebene: Beide Listener bekommen über `uvicorn.Config(http=...)` eine Unterklasse von uvicorns `H11Protocol`, die in `connection_made` Verbindungen fremder Peers sofort schließt, bevor h11 ein Byte parst (Admin: `trusted_ingress_peer`; Public im Modus `proxy`: die normalisierten CIDRs; sonst kein Filter). Die ASGI-Filter (`PeerGuardMiddleware`, `ProxyPeerFilter`) bleiben als zweite Schicht. Der Admin-Listener bleibt ohne `limit_concurrency`, weil der Ingress-Peer der einzige zugelassene Peer ist; der Docstring von `_server()` sagt das.
 - `X-Forwarded-Host` wird nie verwendet; Origin-Prüfungen und die origin-gebundene CSP (`connect-src 'self' wss://<host>`) bleiben an `ctx.public_origin`. Im Modus `tls` und im Dev-Override gilt kein Weiterleitungsheader (wie heute).
 
 - [ ] **Step 1 – Unit-Tests (rot):** `tests/unit/test_net.py`: `10.0.0.5/24` → `10.0.0.0/24`; `0.0.0.0/0`, `::/0`, `172.30.0.0/16`, `172.17.5.0/24`, `10.0.0.0/33`, leere Liste und 17 Einträge → `ValueError`. Lauf: `uv run pytest tests/unit/test_net.py -q` → FAIL.
 - [ ] **Step 2 – `parse_proxy_cidrs` implementieren;** Lauf wie Step 1 → PASS.
 - [ ] **Step 3 – Integrationstests (rot):** Peer außerhalb → 403 bzw. 1008; Peer innerhalb mit `X-Forwarded-For: 198.51.100.7` → `GET /healthz` meldet `client_ip == "198.51.100.7"`; derselbe Header von außerhalb erreicht nie die App; Instanz mit `10.0.0.5/24` lässt Peer `10.0.0.9` durch (Filter und Middleware nutzen dieselbe normalisierte Liste); Modus `tls` ignoriert den Header; ungültige CIDR-Liste → `decide_public()` liefert einen Grund, der Listener bleibt aus; gültige Proxy-Instanz → `public_ready`. Lauf: `uv run pytest tests/integration/test_proxy_mode.py tests/integration/test_startup.py -q` → FAIL.
 - [ ] **Step 4 – Filter, Middleware-Kette und `decide_public()` umsetzen** (zuletzt hinzugefügte Middleware ist außen, wie beim Admin-Listener); Lauf wie Step 3 → PASS.
-- [ ] **Step 5 – Grün:** Gateway-Prüfung.
-- [ ] **Step 6 – Commit:** `feat(gateway): proxy mode accepts only trusted proxy peers and their forwarded client`.
+- [ ] **Step 5 – Wire-Tests (rot):** `tests/integration/test_proxy_wire.py` mit rohem Socket gegen einen echten Server im Modus `proxy`, Peer `127.0.0.1` in den CIDRs: genau das Muster `POST /api/v1/auth/login HTTP/1.1` mit `Content-Length: 4` **und** `Transfer-Encoding: chunked`, dahinter eine zweite, gepipelinte Anfrage `GET /healthz` auf derselben Verbindung → Antwort 400 im Fehlerformat, danach liefert `recv()` `b""` (Verbindung zu), die zweite Anfrage bekommt keine Antwort; ohne den Doppel-Header → 200. Verbindungsebene: Admin-Server mit vertrauenswürdigem Peer `10.255.0.1` (also nicht der Test-Peer) → die TCP-Verbindung wird ohne HTTP-Antwort geschlossen; Public im Modus `proxy` mit CIDR `10.0.0.0/8` → ebenso. Lauf: `uv run pytest tests/integration/test_proxy_wire.py -q` → FAIL.
+- [ ] **Step 6 – Doppel-Header-Abwehr und Peer-Protokollklasse umsetzen;** Lauf wie Step 5 → PASS.
+- [ ] **Step 7 – Grün:** Gateway-Prüfung.
+- [ ] **Step 8 – Commit:** `feat(gateway): proxy mode with trusted peers only, connection-level peer filter and no CL+TE requests`.
 
 ### Task 11.3: Zertifikate und Leaf-Pins; Zertifikatswechsel (E28)
 
