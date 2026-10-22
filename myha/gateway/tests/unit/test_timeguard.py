@@ -3,9 +3,10 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from myha_gateway.db import (
@@ -56,7 +57,7 @@ def guard(engine: AsyncEngine, audit: Recorder, host: HostInfo | None = None) ->
 
 async def test_first_check_is_trusted_and_persists_the_mark(engine: AsyncEngine) -> None:
     audit = Recorder()
-    now = MARK + timedelta(seconds=30)
+    now = MARK + timedelta(minutes=5)
     assert await guard(engine, audit).check(now, 100.0) is True
     row = await instance(engine)
     assert row.time_trusted is True
@@ -131,5 +132,58 @@ async def test_plausible_check_restores_trust_with_one_audit(engine: AsyncEngine
     assert await timeguard.check(MARK + timedelta(seconds=110), 220.0) is True
     row = await instance(engine)
     assert row.time_trusted is True
-    assert row.last_seen_clock == MARK + timedelta(seconds=110)
+    assert row.last_seen_clock == MARK + timedelta(seconds=50)  # written with the transition
     assert audit.events == ["time.untrusted", "time.trusted"]
+
+
+async def test_forward_jump_does_not_move_the_mark(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit)
+    assert await timeguard.check(MARK + timedelta(minutes=1), 1000.0) is True
+    assert await timeguard.check(MARK + timedelta(days=365, minutes=2), 1060.0) is False
+    assert (await instance(engine)).last_seen_clock == MARK + timedelta(minutes=1)
+    # the correction back is itself a jump against the last observation ...
+    assert await timeguard.check(MARK + timedelta(minutes=3), 1120.0) is False
+    # ... and the next check trusts the clock again: the mark never reached the future
+    assert await timeguard.check(MARK + timedelta(minutes=4), 1180.0) is True
+    row = await instance(engine)
+    assert row.time_trusted is True
+    assert row.last_seen_clock == MARK + timedelta(minutes=4)
+    assert audit.events == ["time.untrusted", "time.trusted"]
+
+
+@pytest.mark.parametrize("synchronized", [True, False])
+async def test_synchronized_host_clock_is_authoritative_behind_the_mark(
+    engine: AsyncEngine, synchronized: bool
+) -> None:
+    audit = Recorder()
+    now = MARK - timedelta(hours=1)
+    timeguard = guard(engine, audit, HostInfo(dt_synchronized=synchronized))
+    assert await timeguard.check(now, 1.0) is synchronized
+    row = await instance(engine)
+    assert row.time_trusted is synchronized
+    assert row.last_seen_clock == (now if synchronized else MARK)
+    assert audit.events == ([] if synchronized else ["time.untrusted"])
+
+
+async def test_synchronized_host_clock_is_authoritative_after_a_jump(engine: AsyncEngine) -> None:
+    audit = Recorder()
+    timeguard = guard(engine, audit, HostInfo(dt_synchronized=True))
+    assert await timeguard.check(MARK + timedelta(minutes=1), 1000.0) is True
+    assert await timeguard.check(MARK + timedelta(hours=2), 1060.0) is True
+    assert audit.events == []
+
+
+async def test_mark_is_written_at_most_every_five_minutes(engine: AsyncEngine) -> None:
+    updates: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _count(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if statement.startswith("UPDATE instance"):
+            updates.append(statement)
+
+    timeguard = guard(engine, Recorder())
+    for minute in (5, 6, 7):
+        assert await timeguard.check(MARK + timedelta(minutes=minute), 60.0 * minute) is True
+    assert len(updates) == 1
+    assert (await instance(engine)).last_seen_clock == MARK + timedelta(minutes=5)
