@@ -149,7 +149,7 @@ async def test_call_service_changes_state_notifies_and_records(sim: SimHandle) -
         ("climate.set_temperature", TRV, {"temperature": 5}, "service_validation_error"),
         ("climate.set_hvac_mode", TRV, {"hvac_mode": "cool"}, "service_validation_error"),
         ("climate.set_hvac_mode", TRV, {"hvac_mode": "warm"}, "invalid_format"),
-        ("climate.set_temperature", TRV, {"temperature": "21"}, "invalid_format"),
+        ("climate.set_temperature", TRV, {"temperature": "warm"}, "invalid_format"),
         ("light.turn_on", "light.room_203_ceiling", {"brightness_pct": 101}, "invalid_format"),
         ("cover.set_cover_position", "cover.room_203_blind", {"position": -1}, "invalid_format"),
         ("light.explode", "light.hallway", {}, "not_found"),
@@ -169,9 +169,51 @@ async def test_validation_errors_read_like_core(sim: SimHandle) -> None:
     async with connect(sim) as ws:
         cold = await command(ws, call_service(1, "climate.set_temperature", TRV, temperature=5))
         cool = await command(ws, call_service(2, "climate.set_hvac_mode", TRV, hvac_mode="cool"))
-    assert [cold["error"]["message"], cool["error"]["message"]] == [
-        "Provided temperature 5.0 is not valid. Accepted range is 7 to 30.",
-        "HVAC mode cool is not valid. Valid HVAC modes are: heat, off.",
+    assert cold["error"] == {
+        "code": "service_validation_error",
+        "message": "Validation error: Provided temperature 5.0 is not valid."
+        " Accepted range is 7 to 30.",
+        "translation_key": "temp_out_of_range",
+        "translation_placeholders": {"check_temp": "5.0", "min_temp": "7", "max_temp": "30"},
+        "translation_domain": "climate",
+    }
+    assert cool["error"]["message"] == (
+        "Validation error: HVAC mode cool is not valid. Valid HVAC modes are: heat, off."
+    )
+    assert cool["error"]["translation_key"] == "not_valid_hvac_mode"
+    assert cool["error"]["translation_placeholders"] == {"mode": "cool", "modes": "heat, off"}
+
+
+async def test_cover_services_need_their_feature(sim: SimHandle) -> None:
+    blind = "cover.kitchen_blind"  # features 11: open, close and stop, no set_position
+    async with connect(sim) as ws:
+        position = await command(
+            ws, call_service(1, "cover.set_cover_position", blind, position=40)
+        )
+        stop = await command(ws, call_service(2, "cover.stop_cover", blind))
+        no_stop = {"entity_id": blind, "attributes": {"supported_features": 3}}
+        await sim.control.post("entity/attributes", no_stop)
+        refused = await command(ws, call_service(3, "cover.stop_cover", blind))
+    assert position["success"] is False and position["error"] == {
+        "code": "service_validation_error",
+        "message": "Validation error: Entity cover.kitchen_blind does not support action"
+        " cover.set_cover_position.",
+        "translation_key": "service_not_supported",
+        "translation_placeholders": {
+            "domain": "cover",
+            "service": "set_cover_position",
+            "entity_id": blind,
+        },
+        "translation_domain": "homeassistant",
+    }
+    assert stop["success"] is True
+    assert refused["error"]["code"] == "service_validation_error"
+    assert refused["error"]["translation_placeholders"]["service"] == "stop_cover"
+    calls = await sim.control.get("service-calls")
+    assert [call["error"] for call in calls] == [
+        "service_validation_error",
+        None,
+        "service_validation_error",
     ]
 
 

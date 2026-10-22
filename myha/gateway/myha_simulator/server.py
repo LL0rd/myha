@@ -48,17 +48,37 @@ KEPT_WHEN_UNAVAILABLE = frozenset(
 AuthHeader = Annotated[str | None, Header()]
 
 
-def _error(msg_id: Any, code: str, message: str) -> JSON:
-    error = {"code": code, "message": message}
+def _error(msg_id: Any, code: str, message: str, translation: JSON | None = None) -> JSON:
+    error = {"code": code, "message": message, **(translation or {})}
     return {"id": msg_id, "type": "result", "success": False, "error": error}
 
 
 class CommandError(Exception):
-    """A command that fails with ``{"success": false, "error": {"code", "message"}}``."""
+    """A command that fails with ``{"success": false, "error": {"code", "message", ...}}``."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, translation: JSON | None = None) -> None:
         super().__init__(message)
-        self.code, self.message = code, message
+        self.code, self.message, self.translation = code, message, translation
+
+
+# Core's English texts of the ServiceValidationErrors raised here, by translation key.
+VALIDATION_TEXTS = {
+    "temp_out_of_range": "Provided temperature {check_temp} is not valid. "
+    "Accepted range is {min_temp} to {max_temp}.",
+    "not_valid_hvac_mode": "HVAC mode {mode} is not valid. Valid HVAC modes are: {modes}.",
+    "service_not_supported": "Entity {entity_id} does not support action {domain}.{service}.",
+}
+
+
+def _invalid(domain: str, key: str, /, **placeholders: str) -> CommandError:
+    """A ``ServiceValidationError`` as Core's ``call_service`` answers it."""
+    message = "Validation error: " + VALIDATION_TEXTS[key].format(**placeholders)
+    translation = {
+        "translation_key": key,
+        "translation_placeholders": placeholders,
+        "translation_domain": domain,
+    }
+    return CommandError("service_validation_error", message, translation)
 
 
 def _number(data: JSON, key: str) -> float:
@@ -101,9 +121,12 @@ def _set_temperature(state: str, attrs: JSON, data: JSON) -> str:
     temperature = _number(data, "temperature")
     low, high = attrs.get("min_temp", 7), attrs.get("max_temp", 35)
     if not low <= temperature <= high:
-        message = f"Provided temperature {float(temperature)} is not valid."
-        raise CommandError(
-            "service_validation_error", f"{message} Accepted range is {low} to {high}."
+        raise _invalid(
+            "climate",
+            "temp_out_of_range",
+            check_temp=str(float(temperature)),
+            min_temp=str(low),
+            max_temp=str(high),
         )
     attrs["temperature"] = temperature
     return state
@@ -115,8 +138,7 @@ def _set_hvac_mode(state: str, attrs: JSON, data: JSON) -> str:
         raise CommandError("invalid_format", "expected a valid HVAC mode for data['hvac_mode']")
     if mode not in attrs["hvac_modes"]:  # KeyError: a climate entity without modes is broken
         modes = ", ".join(attrs["hvac_modes"])
-        message = f"HVAC mode {mode} is not valid. Valid HVAC modes are: {modes}."
-        raise CommandError("service_validation_error", message)
+        raise _invalid("climate", "not_valid_hvac_mode", mode=mode, modes=modes)
     return mode
 
 
@@ -136,6 +158,13 @@ SERVICES: dict[str, Callable[[str, JSON, JSON], str]] = {
     "cover.close_cover": lambda state, attrs, data: _set_position(state, attrs, {"position": 0}),
     "cover.stop_cover": lambda state, attrs, data: state,
     "cover.set_cover_position": _set_position,
+}
+# CoverEntityFeature bit each cover service needs; Core refuses the call without it.
+REQUIRED_FEATURES = {
+    "cover.open_cover": 1,
+    "cover.close_cover": 2,
+    "cover.set_cover_position": 4,
+    "cover.stop_cover": 8,
 }
 
 
@@ -310,7 +339,7 @@ class SimState:
                 case _:
                     raise CommandError("unknown_command", "Unknown command.")
         except CommandError as exc:
-            return _error(msg_id, exc.code, exc.message)
+            return _error(msg_id, exc.code, exc.message, exc.translation)
         except Exception as exc:  # like Core: answer, log and keep the connection
             logger.exception("command %s failed", msg["type"])
             return _error(msg_id, "unknown_error", str(exc))
@@ -362,6 +391,13 @@ class SimState:
         if old is None:
             logger.warning("%s: no entity %s", name, entity_id)  # Core only warns as well
         elif old["state"] != "unavailable":  # Core skips it as well; the call still succeeds
+            required = REQUIRED_FEATURES.get(name, 0)
+            if (old["attributes"].get("supported_features", 0) & required) != required:
+                domain, service = name.split(".")
+                placeholders = {"domain": domain, "service": service, "entity_id": entity_id}
+                raise _invalid("homeassistant", "service_not_supported", **placeholders)
+            # shortcut: Core checks the service schema before it resolves entities, the handlers
+            # only for existing, available ones; split schema from handlers when a test needs it
             attrs = dict(old["attributes"])
             state = handler(old["state"], attrs, data)
             jump = self.mode_setpoints.get((entity_id, state))
