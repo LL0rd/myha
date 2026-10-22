@@ -71,9 +71,10 @@ async def quiet_timeguard(admin_app: FastAPI) -> None:
     Request it in tests that set the flag or the mark themselves: the running guard writes
     the flag back on its next transition or mark write (real wall clock, every 60 s).
     """
-    for task in asyncio.all_tasks():
-        if task.get_name() == "timeguard":
-            task.cancel()
+    tasks = [task for task in asyncio.all_tasks() if task.get_name() == "timeguard"]
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture

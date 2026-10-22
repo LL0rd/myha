@@ -1,13 +1,15 @@
 """The admin lifespan runs the time guard in the background and stops it on shutdown."""
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from myha_gateway.app import create_admin_app
+from myha_gateway.db import ensure_instance, run_migrations, write_session
+from myha_gateway.db.models import AuditEvent as AuditRow
 from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext
 from myha_gateway.services import timeguard
@@ -29,6 +31,11 @@ async def test_admin_lifespan_runs_the_time_guard(
     monkeypatch.setattr(timeguard.TimeGuard, "check", counted)
     ctx = await AppContext.create(Settings(data_dir=tmp_path))
     ctx.supervisor = fake_supervisor()  # /host/info answers 403: no host time source
+    # A mark an hour ahead: the guard's first check must flip the flag.
+    ctx.settings.state_dir.mkdir(parents=True)
+    await run_migrations(ctx.engine)
+    async with write_session(ctx.engine) as session:
+        (await ensure_instance(session)).last_seen_clock = datetime.now(UTC) + timedelta(hours=1)
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         assert ctx.timeguard is not None
@@ -37,8 +44,10 @@ async def test_admin_lifespan_runs_the_time_guard(
                 await asyncio.sleep(0.01)
         async with ctx.sessions() as session:
             instance = (await session.execute(select(Instance))).scalar_one()
-        assert instance.time_trusted is True
-        assert instance.last_seen_clock is not None
+            rows = (await session.execute(select(AuditRow))).scalars().all()
+        assert instance.time_trusted is False
+        events = [(row.actor, row.operation, row.result) for row in rows]
+        assert events == [("system", "time.untrusted", "ok")]
     assert not [task for task in asyncio.all_tasks() if task.get_name() == "timeguard"]
 
 
