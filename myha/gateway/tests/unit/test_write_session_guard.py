@@ -122,3 +122,24 @@ async def test_tasks_inherit_the_flag_only_from_where_they_were_created(
         with pytest.raises(RuntimeError, match="network I/O inside a write session"):
             await inside
     await check()
+
+
+async def test_a_task_from_inside_may_do_network_io_after_the_commit(engine: AsyncEngine) -> None:
+    committed = asyncio.Event()
+
+    async def after_commit() -> None:
+        await committed.wait()
+        await asyncio.sleep(0.05)
+        assert_no_write_session()
+
+    async with write_session(engine):
+        task = asyncio.create_task(after_commit())
+    committed.set()
+    await task  # the lock it inherited is no longer open
+
+
+async def test_nested_write_session_is_refused_at_once(engine: AsyncEngine) -> None:
+    async with write_session(engine):
+        with pytest.raises(RuntimeError, match="nested write session inside a write session"):
+            async with write_session(engine):
+                pass

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from myha_gateway.db import create_engine, run_migrations, session_factory, write_session
@@ -144,3 +144,10 @@ def test_anon_key_is_at_most_128_characters() -> None:
     AuditEvent(operation="auth.redeem", result="failed", anon_key="k" * 128)
     with pytest.raises(ValueError, match="anon_key"):
         AuditEvent(operation="auth.redeem", result="failed", anon_key="k" * 129)
+
+
+async def test_fold_index_is_partial_on_anon_key(engine: AsyncEngine) -> None:
+    query = text("SELECT sql FROM sqlite_master WHERE name = 'ix_audit_event_fold'")
+    async with session_factory(engine)() as session:
+        sql = (await session.execute(query)).scalar_one()
+    assert "(anon_key)" in sql and sql.endswith("WHERE anon_key IS NOT NULL")

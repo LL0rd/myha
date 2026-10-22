@@ -9,7 +9,7 @@ compare and increment them, the ORM never does it implicitly.
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, MetaData, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, MetaData, String, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from myha_gateway.db.types import UtcDateTime
@@ -317,8 +317,9 @@ class Command(Base):
 class AuditEvent(Base):
     __tablename__ = "audit_event"
     __table_args__ = (
-        # Finds the row that folds repeated denials (design §5).
-        Index("ix_audit_event_fold", "operation", "reason_code", "anon_key", "ts"),
+        # Finds the row that folds repeated anonymous denials (design §5); the key already holds
+        # operation, reason code, minute and client IP. Partial: other rows pay nothing for it.
+        Index("ix_audit_event_fold", "anon_key", sqlite_where=text("anon_key IS NOT NULL")),
         # AUTOINCREMENT: ids never repeat, even after retention emptied the table.
         {"sqlite_autoincrement": True},
     )

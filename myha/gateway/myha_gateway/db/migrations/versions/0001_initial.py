@@ -38,7 +38,10 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_audit_event_ts"), "audit_event", ["ts"])
     op.create_index(
-        "ix_audit_event_fold", "audit_event", ["operation", "reason_code", "anon_key", "ts"]
+        "ix_audit_event_fold",
+        "audit_event",
+        ["anon_key"],
+        sqlite_where=sa.text("anon_key IS NOT NULL"),
     )
 
     op.create_table(

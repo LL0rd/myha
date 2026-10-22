@@ -5,6 +5,7 @@ revocation, checkout, invite redemption or refresh rotation, and one fsync per w
 affordable at this write rate.
 """
 
+import contextlib
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -35,13 +36,22 @@ _PRAGMAS = (
     "PRAGMA synchronous=FULL",
 )
 _MIGRATIONS = Path(__file__).parent / "migrations"
-# Set inside write_session; tasks created there inherit it with their context copy.
-_write_session_open: ContextVar[bool] = ContextVar("write_session_open", default=False)
+
+
+class _WriteLock:
+    """Shared by every context copied from inside a write session: closing it frees them all."""
+
+    open = True
+
+
+# Set inside write_session; tasks created there inherit the same lock object.
+_write_lock: ContextVar[_WriteLock | None] = ContextVar("write_lock", default=None)
 
 
 def assert_no_write_session(what: str = "network I/O") -> None:
     """Raise ``RuntimeError`` if called inside a write session (see ``write_session``)."""
-    if _write_session_open.get():
+    lock = _write_lock.get()
+    if lock is not None and lock.open:
         raise RuntimeError(f"{what} inside a write session")
 
 
@@ -97,16 +107,22 @@ async def write_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     - no nested write session (it waits on its own lock);
     - no Home Assistant or other network I/O.
 
-    The read session factory and the network clients enforce the first and the last rule
-    through ``assert_no_write_session``.
+    ``assert_no_write_session`` enforces the rules: here against nesting, in the read session
+    factory and in the network clients. It checks only where a read session is created, so one
+    created before and first used inside the write session goes unnoticed.
     """
+    assert_no_write_session("nested write session")
     writer = engine.execution_options(myha_write=True)
-    flag = _write_session_open.set(True)
+    lock = _WriteLock()
+    token = _write_lock.set(lock)
     try:
         async with AsyncSession(writer, expire_on_commit=False) as session, session.begin():
             yield session
     finally:
-        _write_session_open.reset(flag)
+        lock.open = False
+        # An async generator finalised at loop shutdown runs in a foreign context.
+        with contextlib.suppress(ValueError):
+            _write_lock.reset(token)
 
 
 async def run_migrations(engine: AsyncEngine) -> None:
