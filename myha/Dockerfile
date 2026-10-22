@@ -20,8 +20,9 @@ COPY gateway/pyproject.toml gateway/uv.lock gateway/.python-version ./
 RUN --mount=from=ghcr.io/astral-sh/uv:0.10,source=/uv,target=/bin/uv \
     uv sync --frozen --no-dev --no-install-project --no-build
 COPY gateway/ ./
+# --no-editable: the gateway runs from site-packages, so /opt/myha/gateway is not on sys.path.
 RUN --mount=from=ghcr.io/astral-sh/uv:0.10,source=/uv,target=/bin/uv \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev --no-editable
 COPY --from=web /src/web/dist /opt/myha/web
 COPY rootfs/ /
 RUN chmod a+x /etc/s6-overlay/s6-rc.d/myha/run /etc/s6-overlay/s6-rc.d/myha/finish /opt/myha/backup-export /opt/myha/backup-cleanup
