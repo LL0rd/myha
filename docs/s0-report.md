@@ -7,7 +7,7 @@ is treated as settled (design §1, phase S0). Entries marked **open** still need
 | # | Assumption (design) | Evidence | Result | Consequence |
 |---|---|---|---|---|
 | 1 | Core exposes `config/auth/list` to the Supervisor token and returns `id`, `is_owner`, `is_active`, `group_ids`, `system_generated` (E5) | WebSocket probe against Core 2026.10.2 with an admin token on 2026-10-22 | ✅ confirmed | Admin SSO path stays as designed |
-| 2 | Supervisor ≥ 2026.10.3 exists and contains the `panel_admin` enforcement (E4) | GitHub releases and PR #7308 checked on 2026-10-22 | ✅ confirmed (released 2026-10-19) | Minimum version enforced by the gateway |
+| 2 | Supervisor ≥ 2026.10.3 exists and contains the `panel_admin` enforcement (E4) | GitHub releases and PR #7308 checked on 2026-10-22; the reference installation reports Supervisor 2026.10.3 (stable) via the developer script on 2026-10-22 | ✅ confirmed (released 2026-10-19, rolled out automatically) | Minimum version enforced by the gateway; the probe can run against the reference installation |
 | 3 | Ingress forwards from `172.30.32.2` and sets `X-Remote-User-Id/-Name/-Display-Name` (E5) | Official app documentation; Supervisor source (`supervisor/api/ingress.py`) | ✅ documented; `X-Remote-User-Groups` merged upstream on 2026-10-21, not yet released | Peer check and header handling as designed; groups header logged only |
 | 4 | `GET http://supervisor/info` works without `hassio_api` (§8) | Supervisor middleware source: `api_bypass` contains `/info` | ✅ in source | **open:** confirm on the reference installation (Task 1.2) |
 | 5 | The Supervisor builds apps with BuildKit (`# syntax`, `--mount=from`, `--platform=$BUILDPLATFORM`) | Supervisor source `supervisor/apps/build.py` (PR #5974, 2025-07) uses `docker buildx build --pull` | ✅ in source | Multi-stage Dockerfile kept; **open:** first real build log (Task 1.2) |
@@ -27,4 +27,5 @@ is treated as settled (design §1, phase S0). Entries marked **open** still need
 
 - Dependency versions resolved on 2026-10-22: FastAPI 0.159, Starlette 1.9, Pydantic 2.14, SQLAlchemy 2.1, uvicorn 0.54, websockets 17 (legacy module names are deprecated; the client uses the top-level API).
 - The local image is 205 MB (base 128 MB, venv 77 MB, web 1.8 MB); uv is only mounted during the build and not part of the image.
+- The developer script `scripts/install-on-ha.py status` (read-only) was verified against the reference installation: Supervisor version, repository list and app state are reported; the app is not yet installed.
 - The reference installation is used exclusively for these proofs; nothing in the product is tailored to it.
