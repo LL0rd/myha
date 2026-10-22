@@ -13,7 +13,11 @@ from myha_gateway.db import models as db
 from myha_gateway.policy.model import Fence
 
 Purpose = Literal["access", "preview", "test"]
-_ENDED_STAYS = frozenset({"cancelled", "checked_out"})
+# Stay states that give a guest access; anything else, unknown states too, gives none.
+_ACTIVE_STAYS: Mapping[str, frozenset[str]] = {
+    "access": frozenset({"confirmed"}),
+    "preview": frozenset({"confirmed", "draft"}),  # an admin may look at a stay before confirming
+}
 
 
 @dataclass(frozen=True)
@@ -203,7 +207,7 @@ def _guest_context(
         stay_id=stay.id,
         purpose=purpose,
         policy_version=instance.policy_version,
-        session_active=stay.status not in _ENDED_STAYS
+        session_active=stay.status in _ACTIVE_STAYS.get(purpose, frozenset())
         and (session is None or session.revoked_at is None),
         time_trusted=instance.time_trusted,
     )

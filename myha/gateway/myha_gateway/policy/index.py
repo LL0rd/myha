@@ -1,6 +1,7 @@
 """The immutable index of one policy version and the effective capability (design §4.1)."""
 
-from collections.abc import Mapping
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Context, Decimal
 from types import MappingProxyType
@@ -11,11 +12,17 @@ from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.model import PARAM_SCHEMA, Bound, Fence, Grant, Interval, Mode, RoleRules
 
 _MODES: frozenset[str] = frozenset(get_args(Mode))
-_PERCENT = Interval(min=Decimal("0"), max=Decimal("100"), step=Decimal("1"))
-_TARGET_C_MIN, _TARGET_C_MAX = Decimal("-99.9"), Decimal("99.9")  # all TargetCParams accepts
+# What the request schemas accept per number (model.py): min, max and a step from 0.
+_SCHEMA: Mapping[str, tuple[Decimal, Decimal, Decimal]] = {
+    "level_pct": (Decimal(0), Decimal(100), Decimal(1)),
+    "position_pct": (Decimal(0), Decimal(100), Decimal(1)),
+    "target_c": (Decimal("-99.9"), Decimal("99.9"), Decimal("0.1")),
+}
 _HALF, _CENT = Decimal("0.5"), Decimal("0.01")
-_FAR = Decimal("1000000")  # rule decimals have at most six integer digits
-_ROUNDING = Context(prec=28)  # independent of the caller's decimal context
+_FAR = 1_000_000  # rule decimals have at most six integer digits ...
+_MICRO = 1_000_000  # ... and six decimals, so each is a whole number of millionths
+_CONTEXT = Context(prec=28)  # independent of the caller's decimal context
+_NOTHING = (Decimal(1), Decimal(0))  # an empty check range: low > high, no target passes
 
 
 @dataclass(frozen=True)
@@ -144,21 +151,24 @@ class PolicyIndex:
         intervals: dict[Interval, None] = {}  # ordered set: identical intervals appear once
         for cut in self.grant_intervals(ctx, resource_id, action).values():
             for interval in cut:
-                clipped: Interval | None = interval
-                for bound in bounds:
-                    clipped = None if clipped is None else clipped.clip(bound)
-                if clipped is not None:
-                    intervals[clipped] = None
+                fenced: Interval | None = interval
+                for bound in bounds:  # a fence narrows the range, the grid stays the grant's
+                    fenced = None if fenced is None else _on_grid(fenced, (), bound.min, bound.max)
+                if fenced is not None:
+                    intervals[fenced] = None
         return EffectiveCapability(intervals=tuple(intervals), matched=matched)
 
     def grant_intervals(
         self, ctx: EffectiveContext, resource_id: str, action: Action
     ) -> dict[str, tuple[Interval, ...]]:
-        """Each grant's intervals for the action's number, cut to the device but not to fences.
+        """Each covering grant's settable intervals for the action's number, before fences.
 
-        A grant without a rule spans the schema range in device steps. A grant left with no
-        interval stays with an empty tuple: granted, but nothing is admissible, which is also
-        every grant's lot while a device limit lies beyond the rule format (fail closed).
+        An interval keeps the grant's values (a grant without a rule: all the request schema
+        accepts) that lie within the device limits and on the grant's grid, the device step and
+        the schema's step at once: the step is their least common multiple and both bounds sit
+        on it. A grant left without an interval maps to an empty tuple: granted, but nothing is
+        settable, as for every grant while a device limit lies beyond the rule format. Denies
+        are not applied. Raises ``ValueError`` for an action without a number.
         """
         name = next(iter(PARAM_SCHEMA[action].model_fields), None)
         if name is None or name == "mode":
@@ -167,52 +177,113 @@ class PolicyIndex:
         if resource is None:
             return {}
         capabilities = resource.capabilities
-        limits = _device_limits(name, capabilities)
+        limits = _limits(name, capabilities)
+        steps = _grid_steps(name, capabilities)
         result: dict[str, tuple[Interval, ...]] = {}
         for grant_id, grant in self.grants(ctx, resource_id, action).items():
             rule = getattr(grant.parameters, name)
             spans = (_full_range(name, capabilities),) if rule is None else rule.intervals
-            cuts = [] if limits is None else [_within(span, *limits) for span in spans]
+            cuts = [] if limits is None else [_on_grid(span, steps, *limits) for span in spans]
             result[grant_id] = tuple(cut for cut in cuts if cut is not None)
         return result
 
+    def check_range(
+        self, ctx: EffectiveContext, resource_id: str
+    ) -> tuple[Decimal, Decimal] | None:
+        """The range the reported target must lie in for ``climate.set_mode`` cool or heat (E7).
+
+        With ``climate.set_temperature`` granted: the hull of its effective intervals. Without:
+        the applicable set_temperature fences cut to the device range. Neither: ``None``, no
+        check. ``low > high`` means that no target passes (fail closed).
+        """
+        action = Action.CLIMATE_SET_TEMPERATURE
+        capability = self.effective_capability(ctx, resource_id, action)
+        if capability is not None:
+            if not capability.intervals:
+                return _NOTHING
+            return min(i.min for i in capability.intervals), max(
+                i.max for i in capability.intervals
+            )
+        resource = self.resource(resource_id)
+        fences = self.fences(ctx, resource_id, action)
+        bounds = [b for fence in fences if (b := fence.parameters.target_c) is not None]
+        if resource is None or not bounds:
+            return None
+        limits = _limits("target_c", resource.capabilities)
+        if limits is None:
+            return _NOTHING
+        return max(limits[0], *(b.min for b in bounds)), min(limits[1], *(b.max for b in bounds))
+
 
 def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
-    """What a grant without a rule for ``name`` allows: the schema range in device steps."""
-    if name != "target_c":
-        return _PERCENT
-    step = capabilities.target_c_step or _HALF  # adapters keep it to 0.01..10 in hundredths
-    return Interval(min=_TARGET_C_MIN, max=_TARGET_C_MAX, step=step)
+    """A grant without a rule for ``name``: all the request schema accepts, before the grid."""
+    low, high, step = _SCHEMA[name]
+    if name == "target_c" and capabilities.target_c_step is None:
+        step = _HALF  # the Home Assistant frontend's step for a device that names none
+    return Interval(min=low, max=high, step=step)
 
 
-def _device_limits(
-    name: str, capabilities: DeviceCapabilities
-) -> tuple[Decimal | None, Decimal | None] | None:
-    """The device range rounded inwards to cents, ``None`` for a limit the device does not name.
+def _grid_steps(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, ...]:
+    """The steps from 0 every settable value lies on: the request schema's and the device's."""
+    schema_step = _SCHEMA[name][2]
+    device_step = capabilities.target_c_step if name == "target_c" else None
+    return (schema_step,) if device_step is None else (schema_step, device_step)
 
-    Raw device numbers need not fit a rule decimal: they are compared, and a limit becomes an
-    interval bound only inside a grant, whose values do fit. A limit of 1e6 or more fits no
-    rule decimal at all, so the whole result is ``None``.
+
+def _limits(name: str, capabilities: DeviceCapabilities) -> tuple[Decimal, Decimal] | None:
+    """The range the request schema and the device accept, device limits rounded inwards.
+
+    Raw device numbers are only compared, never made rule decimals; a limit of 1e6 or more fits
+    no rule decimal at all, so the result is ``None`` and nothing is offered (fail closed).
     """
+    low, high, _ = _SCHEMA[name]
     if name != "target_c":
-        return _PERCENT.min, _PERCENT.max
-    low, high = capabilities.target_c_min, capabilities.target_c_max
-    if any(limit is not None and not -_FAR < limit < _FAR for limit in (low, high)):
+        return low, high
+    device_low, device_high = capabilities.target_c_min, capabilities.target_c_max
+    if any(limit is not None and not -_FAR < limit < _FAR for limit in (device_low, device_high)):
         return None
-    return _cents(low, ROUND_CEILING), _cents(high, ROUND_FLOOR)
+    if device_low is not None:
+        low = max(low, device_low.quantize(_CENT, ROUND_CEILING, _CONTEXT))
+    if device_high is not None:
+        high = min(high, device_high.quantize(_CENT, ROUND_FLOOR, _CONTEXT))
+    return low, high
 
 
-def _cents(value: Decimal | None, rounding: str) -> Decimal | None:
-    if value is None:
+def _on_grid(
+    interval: Interval, steps: Iterable[Decimal], low: Decimal, high: Decimal
+) -> Interval | None:
+    """The values of ``interval`` within ``[low, high]`` that also lie on each step from 0.
+
+    Grids meet on the least common multiple of their steps, from the origin the Chinese
+    remainder theorem gives, or nowhere. The bounds move inwards onto the result. Exact in
+    whole millionths, where every quotient is a whole number; ``None`` if no value is left.
+    """
+    step, origin = _micro(interval.step), _micro(interval.origin)
+    for other in map(_micro, steps):
+        common = math.gcd(step, other)
+        if origin % common:
+            return None  # no value lies on both grids
+        modulus = other // common
+        origin += step * (-(origin // common) * pow(step // common, -1, modulus) % modulus)
+        step = step // common * other
+        origin %= step
+    if step >= _FAR * _MICRO:  # a step beyond the rule format: offer nothing (fail closed)
         return None
-    # normalize: 8.000000000 is 8 again and fits a rule decimal once inside a grant
-    return value.quantize(_CENT, rounding=rounding, context=_ROUNDING).normalize(_ROUNDING)
-
-
-def _within(interval: Interval, low: Decimal | None, high: Decimal | None) -> Interval | None:
-    """``interval`` cut to the device limits; the result stays inside the grant's values."""
-    low = interval.min if low is None else max(interval.min, low)
-    high = interval.max if high is None else min(interval.max, high)
-    if low > high:
+    first = -((origin - _micro(max(interval.min, low))) // step)  # rounded up
+    last = (_micro(min(interval.max, high)) - origin) // step  # rounded down
+    if first > last:
         return None
-    return Interval(min=low, max=high, step=interval.step, origin=interval.origin)
+    return Interval(
+        min=_decimal(origin + first * step),
+        max=_decimal(origin + last * step),
+        step=_decimal(step),
+        origin=_decimal(origin),
+    )
+
+
+def _micro(value: Decimal) -> int:
+    return int(value.scaleb(6, _CONTEXT))
+
+
+def _decimal(micro: int) -> Decimal:
+    return Decimal(micro).scaleb(-6, _CONTEXT).normalize(_CONTEXT)

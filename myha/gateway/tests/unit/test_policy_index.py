@@ -287,6 +287,27 @@ def test_guest_session_is_inactive_after_cancel_checkout_or_revocation(
     assert for_session(ses, guest(), the_stay=stay(status=status)).session_active is active
 
 
+@pytest.mark.parametrize(
+    ("status", "for_access", "for_preview"),
+    [
+        ("confirmed", True, True),
+        ("draft", False, True),
+        ("cancelled", False, False),
+        ("checked_out", False, False),
+        ("archived", False, False),  # a state this code does not know
+    ],
+)
+def test_only_a_confirmed_stay_is_active_and_a_preview_also_shows_a_draft(
+    status: str, for_access: bool, for_preview: bool
+) -> None:
+    the_stay = stay(status=status)
+    assert for_session(guest_session(), guest(), the_stay=the_stay).session_active is for_access
+    preview = build_context_for_preview(
+        {"stay_id": "stay_203"}, stay=the_stay, instance=INSTANCE, at=NOW
+    )
+    assert preview.session_active is for_preview
+
+
 def test_revoked_resident_session_is_inactive() -> None:
     assert not for_session(session(revoked_at=NOW), principal()).session_active
 
@@ -332,6 +353,8 @@ def test_test_session_has_no_binding_no_stay_and_no_fences() -> None:
     ctx = for_session(
         ses, None, assignments=[assignment("prn_res", "family", ["unit_203"])], fences=FENCE_ROWS
     )
+    revoked = session("ses_test", None, purpose="test", revoked_at=NOW)
+    assert not for_session(revoked, None).session_active
     assert ctx == EffectiveContext(
         principal_ref="test:ses_test",
         role_bindings=(),
@@ -710,10 +733,10 @@ def test_a_grant_without_rule_moves_in_device_steps() -> None:
     )
 
 
-def test_a_device_without_limits_is_clipped_only_by_grants_and_fences() -> None:
-    # without a rule a grant spans what the target_c schema accepts, in steps of 0.5
+def test_a_device_without_limits_is_clipped_by_the_schema_grants_and_fences() -> None:
+    # without a rule a grant spans what the target_c schema accepts, on the 0.5 grid
     assert living_temperatures(climate(low=None, high=None, step=None)) == (
-        interval("-99.9", "99.9"),
+        interval("-99.5", "99.5"),
         interval("5", "40", "1"),
     )
     assert living_temperatures(climate(low=None, high=None), fence()) == (
@@ -723,14 +746,12 @@ def test_a_device_without_limits_is_clipped_only_by_grants_and_fences() -> None:
     assert living_temperatures(LIGHT) == living_temperatures(climate(low=None, high=None))
 
 
-def test_raw_device_limits_are_rounded_inwards_to_cents() -> None:
+def test_raw_device_limits_snap_inwards_onto_the_grid() -> None:
     assert living_temperatures(climate(low="7.123456789", high="29.987")) == (
-        interval("7.13", "29.98"),
-        interval("7.13", "29.98", "1"),
+        interval("7.5", "29.5"),
+        interval("8", "29", "1"),
     )
-    assert living_temperatures(climate(low="-7.129", high="-0.001")) == (
-        interval("-7.12", "-0.01"),
-    )
+    assert living_temperatures(climate(low="-7.129", high="-0.001")) == (interval("-7", "-0.5"),)
 
 
 @pytest.mark.parametrize(
@@ -752,7 +773,7 @@ def test_a_device_limit_the_rule_format_cannot_hold_offers_nothing(
 
 def test_a_device_limit_just_inside_the_rule_format_still_clips() -> None:
     assert living_temperatures(climate(low="-999999.99", high="999999.99")) == (
-        interval("-99.9", "99.9"),
+        interval("-99.5", "99.5"),
         interval("5", "40", "1"),
     )
 
@@ -783,6 +804,124 @@ def test_grant_intervals_cut_each_grant_to_the_device_but_not_to_fences() -> Non
     assert INDEX.grant_intervals(ctx(STAY_BINDING), "res_unknown", action) == {}
     with pytest.raises(ValueError, match="takes no number"):
         INDEX.grant_intervals(ctx(STAY_BINDING), "res_203_trv", Action.CLIMATE_SET_MODE)
+
+
+def temperature_rule(*intervals: dict[str, str]) -> RoleRules:
+    grant = {
+        "resources": ["res_203_trv"],
+        "actions": ["climate.set_temperature"],
+        "parameters": {"target_c": {"intervals": list(intervals)}},
+    }
+    return RoleRules.model_validate({"grants": [grant]})
+
+
+def trv_index(rules: RoleRules, capabilities: DeviceCapabilities) -> PolicyIndex:
+    """``rules`` as room_guest@1 with res_203_trv reporting ``capabilities``."""
+    ref = replace(RESOURCES["res_203_trv"], capabilities=capabilities)
+    return PolicyIndex({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": frozenset({ref.id})})
+
+
+def trv_temperatures(
+    rules: RoleRules, capabilities: DeviceCapabilities, *fences: dict[str, Any]
+) -> tuple[Interval, ...]:
+    capability = trv_index(rules, capabilities).effective_capability(
+        ctx(STAY_BINDING, fences=fences), "res_203_trv", Action.CLIMATE_SET_TEMPERATURE
+    )
+    assert capability is not None
+    return capability.intervals
+
+
+def test_intervals_promise_only_values_on_their_grid() -> None:
+    pinned = fence(parameters={"target_c": {"min": "21.3", "max": "21.3"}})
+    assert living_temperatures(climate(), pinned) == ()
+    assert living_temperatures(climate(low="7.13", high="7.4")) == ()
+    on_grid = fence(parameters={"target_c": {"min": "21.5", "max": "21.5"}})
+    assert living_temperatures(climate(), on_grid) == (interval("21.5", "21.5"),)
+
+
+def test_the_device_step_joins_the_grant_step() -> None:
+    halves = temperature_rule({"min": "18", "max": "20", "step": "0.5"})
+    assert trv_temperatures(halves, climate(step="1")) == (interval("18", "20", "1"),)
+    assert trv_temperatures(halves, climate(step="0.25")) == (interval("18", "20", "0.5"),)
+    tenths = temperature_rule({"min": "19.2", "max": "23.7", "step": "0.1"})
+    assert trv_temperatures(tenths, climate(step="1")) == (interval("20", "23", "1"),)
+    # the request schema takes one decimal, so quarters settle on halves
+    quarters = temperature_rule({"min": "18", "max": "20", "step": "0.25"})
+    assert trv_temperatures(quarters, climate(step="0.25")) == (interval("18", "20", "0.5"),)
+
+
+def test_a_grant_without_rule_steps_in_tenths_or_coarser() -> None:
+    assert living_temperatures(climate(step="0.25"))[0] == interval("8", "30", "0.5")
+    assert living_temperatures(climate(step="0.01"))[0] == interval("8", "30", "0.1")
+
+
+def test_grids_with_an_origin_meet_where_both_have_values() -> None:
+    # 0.5 steps from 0.5 are the 0.5 grid, so a whole-degree device leaves whole degrees
+    halves = temperature_rule({"min": "18", "max": "21", "step": "0.5", "origin": "0.5"})
+    assert trv_temperatures(halves, climate(step="1")) == (interval("18", "21", "1"),)
+    # whole degrees from 0.5 never meet a whole-degree device
+    offset = temperature_rule({"min": "18", "max": "21", "step": "1", "origin": "0.5"})
+    assert trv_temperatures(offset, climate(step="1")) == ()
+    # 0.3 and 0.5 meet every 1.5 degrees, a quotient no finite decimal holds
+    thirds = temperature_rule({"min": "18", "max": "22", "step": "0.3"})
+    assert trv_temperatures(thirds, climate(step="0.5")) == (interval("18", "21", "1.5"),)
+    # 0.3 steps from 0.1 meet the 0.5 grid every 1.5 degrees from 1: 19, 20.5, 22
+    shifted = temperature_rule({"min": "18", "max": "22", "step": "0.3", "origin": "0.1"})
+    met = Interval.model_validate({"min": "19", "max": "22", "step": "1.5", "origin": "1"})
+    assert trv_temperatures(shifted, climate(step="0.5")) == (met,)
+    # a joint step beyond the rule format offers nothing, not even 0 (fail closed)
+    huge = temperature_rule({"min": "0", "max": "99", "step": "999999.7"})
+    assert trv_temperatures(huge, climate(low="-10", high="10")) == ()
+
+
+def test_rule_grants_end_where_the_request_schema_ends() -> None:
+    wide = temperature_rule({"min": "-200", "max": "200", "step": "1"})
+    assert trv_temperatures(wide, climate(low=None, high=None)) == (interval("-99", "99", "1"),)
+
+
+def test_a_device_limit_on_a_grant_bound_keeps_that_single_value() -> None:
+    halves = temperature_rule({"min": "18", "max": "20", "step": "0.5"})
+    assert trv_temperatures(halves, climate(low="20", high="30")) == (interval("20", "20"),)
+
+
+def test_grant_intervals_are_snapped_but_not_fenced() -> None:
+    tenths = temperature_rule({"min": "19.2", "max": "23.7", "step": "0.1"})
+    fenced = ctx(STAY_BINDING, fences=(fence(),))
+    index = trv_index(tenths, climate(step="1"))
+    assert index.grant_intervals(fenced, "res_203_trv", Action.CLIMATE_SET_TEMPERATURE) == {
+        "room_guest@1:0": (interval("20", "23", "1"),)
+    }
+
+
+def test_check_range_is_the_hull_of_the_effective_temperatures() -> None:
+    assert INDEX.check_range(ctx(STAY_BINDING), "res_203_trv") == (Decimal(18), Decimal(24))
+    fenced = ctx(STAY_BINDING, fences=(fence(),))
+    assert INDEX.check_range(fenced, "res_203_trv") == (Decimal(18), Decimal(22))
+    gap = fence(parameters={"target_c": {"min": "20.5", "max": "21"}})
+    nothing = INDEX.check_range(ctx(STAY_BINDING, fences=(gap,)), "res_203_trv")
+    assert nothing is not None and nothing[0] > nothing[1]  # granted, but no target passes
+
+
+def test_check_range_without_a_temperature_grant_is_its_fences_cut_to_the_device() -> None:
+    modes_only = RoleBinding("room_guest", 1, frozenset({"unit_lr"}))  # set_mode on res_lr_ac
+    assert INDEX.check_range(ctx(modes_only), "res_lr_ac") is None  # neither grant nor fence
+    fenced = ctx(modes_only, fences=(fence(),))
+    assert INDEX.check_range(fenced, "res_lr_ac") == (Decimal(8), Decimal(22))
+    raw = replace(RESOURCES["res_lr_ac"], capabilities=climate(low="7.123456789", high="21.987"))
+    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {raw.id: raw}, {"unit_lr": {raw.id}})
+    assert index.check_range(fenced, raw.id) == (Decimal("7.13"), Decimal("21.98"))
+    beyond = replace(raw, capabilities=climate(high="1E+40"))
+    index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {raw.id: beyond}, {"unit_lr": {raw.id}})
+    closed = index.check_range(fenced, raw.id)
+    assert closed is not None and closed[0] > closed[1]  # a limit beyond the format: fail closed
+    assert INDEX.check_range(fenced, "res_unknown") is None
+
+
+def test_fences_reach_only_their_own_action() -> None:
+    mode_fence = fence(action="climate.set_mode", parameters={"mode": {"allowed": ["off"]}})
+    both = ctx(STAY_BINDING, fences=(mode_fence, fence()))
+    for action in (Action.CLIMATE_SET_TEMPERATURE, Action.CLIMATE_SET_MODE):
+        assert [f.action for f in INDEX.fences(both, "res_203_trv", action)] == [action]
 
 
 def test_percent_without_rule_is_zero_to_hundred_in_whole_steps() -> None:
