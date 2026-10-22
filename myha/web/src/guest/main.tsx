@@ -7,19 +7,18 @@ import "@fontsource/jetbrains-mono/500.css";
 import "../ui/tokens.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { ThemeSwitch } from "../ui/ThemeSwitch";
+import { App } from "./App";
+import { createSession, takeJoinFragment } from "./store/session";
 
-function App() {
-  return (
-    <main>
-      <h1>myHA</h1>
-      <ThemeSwitch />
-    </main>
-  );
+// First of all, before React or any request: the invite secret leaves the address bar.
+const fragment = location.pathname === "/join" ? takeJoinFragment() : null;
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {}); // the page works without it
 }
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <App session={createSession()} fragment={fragment} />
   </StrictMode>,
 );

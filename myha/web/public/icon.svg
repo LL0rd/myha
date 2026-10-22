@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><!-- the mark of scripts/make-icons.py: gold square, white key -->
+<rect width="32" height="32" rx="7.04" fill="#C8A24A"/>
+<circle cx="11" cy="16" r="6" fill="#FFFFFF"/>
+<circle cx="11" cy="16" r="2.5" fill="#C8A24A"/>
+<rect x="16" y="14.5" width="11" height="3" fill="#FFFFFF"/>
+<rect x="20.5" y="17.5" width="2" height="3.5" fill="#FFFFFF"/>
+<rect x="24.5" y="17.5" width="2.5" height="5" fill="#FFFFFF"/>
+</svg>

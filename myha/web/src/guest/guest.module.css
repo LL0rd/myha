@@ -1,0 +1,37 @@
+/* Join, ended and the preferences row; the dashboard itself is the GuestPanel. */
+.page {
+  box-sizing: border-box; max-width: 480px; margin: 0 auto; padding: 32px 16px;
+  display: flex; flex-direction: column; gap: 18px; font-family: var(--font); color: var(--ink);
+}
+.title { margin: 0; font-weight: 800; font-size: 26px; line-height: 1.15; letter-spacing: -0.01em; }
+.muted { color: var(--muted); }
+.hint {
+  padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+  font-size: 14px; line-height: 1.4;
+}
+.form { display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+.field input {
+  min-height: 48px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: 600 16px var(--font);
+}
+.primary {
+  min-height: 56px; border-radius: 16px; border: none; background: var(--accent); color: var(--on-accent);
+  font: 800 18px var(--font); cursor: pointer;
+}
+.primary:disabled { opacity: .6; cursor: default; }
+.error { padding: 12px 14px; border-radius: 12px; background: var(--err-soft); color: var(--err); font-weight: 700; }
+.small { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.empty { margin: 0 16px; color: var(--muted); }
+.retry { align-self: flex-start; }
+
+.prefs {
+  display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: center; padding: 8px 16px 24px;
+  font-family: var(--font); font-size: 13px;
+}
+.prefs [role="group"] { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prefs button, .retry {
+  min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: 600 13px var(--font); cursor: pointer;
+}
+.prefs button[aria-pressed="true"] { border-color: var(--accent-ink); background: var(--accent-soft); }

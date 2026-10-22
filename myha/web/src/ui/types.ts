@@ -72,7 +72,7 @@ export type CommandState = "accepted" | "sent" | "confirmed" | "failed" | "unkno
 export interface Command {
   id: string;
   resource_id: string;
-  action: Action;
+  action: string;
   status: CommandState;
   created_at: string;
   updated_at: string;

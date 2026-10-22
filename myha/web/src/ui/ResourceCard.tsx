@@ -1,7 +1,7 @@
 import type { Icon } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { CommandStatus } from "./CommandStatus";
-import type { Strings } from "./GuestPanel";
+import { useI18n } from "../i18n";
 import styles from "./guest-panel.module.css";
 import { actionIcon, kindIcon, modeIcon, resourceIcon } from "./icons";
 import type { Action, ActionParams, Command, Interval, Resource } from "./types";
@@ -12,12 +12,12 @@ interface Props {
   live: boolean;
   simulate: boolean;
   explain: boolean;
-  t: Strings;
   onAction: (resourceId: string, action: Action, params: ActionParams) => void;
 }
 
 const decimals = (s: string) => (s.split(".")[1] ?? "").length;
 const trimZero = (s: string) => s.replace(/\.0+$/, "");
+const isMode = (m: string): m is "off" | "cool" | "heat" => m === "off" || m === "cool" || m === "heat";
 
 /** Next allowed value above (dir 1) or below (dir -1) `current` across all intervals, as a decimal string; null if none. */
 export function stepTarget(intervals: Interval[], current: string | null | undefined, dir: 1 | -1): string | null {
@@ -61,7 +61,8 @@ function usePending<T>(observed: T, command: Command | undefined) {
   return [pending, setPending] as const;
 }
 
-export function ResourceCard({ resource, command, live, simulate, explain, t, onAction }: Props) {
+export function ResourceCard({ resource, command, live, simulate, explain, onAction }: Props) {
+  const { t } = useI18n();
   const { id, kind, label, state } = resource;
   const caps = resource.capabilities ?? {};
   const can = (a: Action) => caps[a] !== undefined;
@@ -102,18 +103,18 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
   let climate: JSX.Element | null = null;
   let sliderRow: JSX.Element | null = null;
 
-  if (!state) stateText = t.notShared;
-  else if (state.availability === "offline") stateText = t.unavailable;
-  else stateText = t.unknown;
+  if (!state) stateText = t("state.not_shared");
+  else if (state.availability === "offline") stateText = t("state.unavailable");
+  else stateText = t("state.unknown");
 
   if (kind === "light" || kind === "switch") {
     // A switch is a light without a dimmer.
     const [onAction, offAction] = kind === "light" ? (["light.on", "light.off"] as const) : (["switch.on", "switch.off"] as const);
     const power = state?.power;
     if (state && state.availability !== "offline")
-      stateText = power === "on" ? (state.level_pct != null ? t.onLevel(state.level_pct) : t.on) : power === "off" ? t.off : t.unknown;
-    const on = button(onAction, t.turnOn, actionIcon[onAction], "primary");
-    const off = button(offAction, t.turnOff, actionIcon[offAction], "secondary");
+      stateText = power === "on" ? (state.level_pct != null ? t("state.on_level", { pct: state.level_pct }) : t("state.on")) : power === "off" ? t("state.off") : t("state.unknown");
+    const on = button(onAction, t("action.turn_on"), actionIcon[onAction], "primary");
+    const off = button(offAction, t("action.turn_off"), actionIcon[offAction], "secondary");
     buttons = can(onAction) && can(offAction) && (power === "on" || power === "off") ? [power === "on" ? off : on] : [on, off];
     const intervals = caps["light.set_level"]?.intervals;
     if (intervals?.length) {
@@ -130,7 +131,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
             max={max}
             step={Number(intervals[0]?.step) || 1}
             value={value}
-            aria-label={t.brightness}
+            aria-label={t("label.brightness")}
             disabled={!live}
             ref={sliderRef}
             onChange={(e) => setLevel(Number(e.currentTarget.value))}
@@ -140,7 +141,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
       );
     }
   } else if (kind === "climate") {
-    if (state?.current_c != null && state.availability !== "offline") stateText = t.now(trimZero(state.current_c));
+    if (state?.current_c != null && state.availability !== "offline") stateText = t("state.now", { temp: trimZero(state.current_c) });
     const temp = caps["climate.set_temperature"];
     if (temp || simulate) {
       const intervals = temp?.intervals ?? [];
@@ -156,31 +157,31 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
       climate = (
         <div className={styles.climate}>
           <div className={styles.stepper}>
-            <button type="button" className={styles.step} aria-label={t.lower} disabled={!live || lower === null} onClick={() => lower && set(lower)}>
+            <button type="button" className={styles.step} aria-label={t("action.lower")} disabled={!live || lower === null} onClick={() => lower && set(lower)}>
               <actionIcon.lower size={24} aria-hidden="true" />
             </button>
             <div className={styles.target}>
               <span className={styles.temp}>{value == null ? "–" : trimZero(value)}</span>
-              <span className={styles.muted}>{t.celsius}</span>
+              <span className={styles.muted}>{t("unit.celsius")}</span>
             </div>
-            <button type="button" className={styles.step} data-variant="primary" aria-label={t.raise} disabled={!live || raise === null} onClick={() => raise && set(raise)}>
+            <button type="button" className={styles.step} data-variant="primary" aria-label={t("action.raise")} disabled={!live || raise === null} onClick={() => raise && set(raise)}>
               <actionIcon.raise size={24} aria-hidden="true" />
             </button>
           </div>
-          <div className={styles.range}>{temp ? t.range(ranges, steps) : t.readOnlyTemp}</div>
+          <div className={styles.range}>{temp ? t("climate.range", { ranges, steps }) : t("climate.read_only")}</div>
         </div>
       );
     }
     // No dashed buttons for unpermitted modes in simulate: without the right the projection carries no mode list.
     buttons = (caps["climate.set_mode"]?.allowed ?? []).map((mode) =>
-      button("climate.set_mode", t.mode[mode] ?? mode, modeIcon[mode] ?? kindIcon.climate, "secondary", { mode }, state?.hvac_mode === mode),
+      button("climate.set_mode", isMode(mode) ? t(`mode.${mode}`) : mode, modeIcon[mode] ?? kindIcon.climate, "secondary", { mode }, state?.hvac_mode === mode),
     );
   } else if (kind === "cover") {
-    if (state?.position_pct != null && state.availability !== "offline") stateText = t.openPct(state.position_pct);
+    if (state?.position_pct != null && state.availability !== "offline") stateText = t("state.open_pct", { pct: state.position_pct });
     buttons = [
-      button("cover.open", t.open, actionIcon["cover.open"], "primary"),
-      button("cover.stop", t.stop, actionIcon["cover.stop"], "secondary"),
-      button("cover.close", t.close, actionIcon["cover.close"], "secondary"),
+      button("cover.open", t("action.open"), actionIcon["cover.open"], "primary"),
+      button("cover.stop", t("action.stop"), actionIcon["cover.stop"], "secondary"),
+      button("cover.close", t("action.close"), actionIcon["cover.close"], "secondary"),
     ];
   } else if (state?.value != null && state.availability !== "offline") {
     stateText = `${state.value} ${state.unit ?? ""}`.trim();
@@ -212,7 +213,7 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
         {command && (
           <>
             <span className={styles.srOnly}>{label}: </span>
-            <CommandStatus status={command.status} text={t.command[command.status]} />
+            <CommandStatus status={command.status} text={t(`command.${command.status}`)} />
           </>
         )}
       </div>
