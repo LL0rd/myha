@@ -8,8 +8,13 @@ __pycache__/
 # Node
 node_modules/
 dist/
-# Dev state
+# Generated
+myha/web/openapi.json
+# Dev state and secrets
 .dev/
+.env
+*.sqlite
+*.sqlite-*
 # OS/editor
 .DS_Store
 *.swp
