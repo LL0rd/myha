@@ -31,13 +31,15 @@ async def _outcome(call: Awaitable[Any]) -> dict[str, Any] | None:
 
 
 async def details(ctx: AppContext) -> dict[str, Any]:
-    """Supervisor answers, environment variable names (never values) and data paths."""
+    """Supervisor answers, HA connection, environment variable names (never values), paths."""
     supervisor = ctx.supervisor
     data_dir = ctx.settings.data_dir
     return {
         "supervisor_info": await _outcome(supervisor.info()),
         "host_info": await _outcome(supervisor.host_info()),
         "self_info": await _outcome(supervisor.self_info()),
+        "ha_connected": ctx.ha.connected,
+        "ha_generation": ctx.ha.generation,
         "env_names": sorted(os.environ),
         "paths": {name: getattr(ctx.settings, name).exists() for name in _PATHS},
         "data_entries": sorted(p.name for p in data_dir.iterdir()) if data_dir.is_dir() else None,

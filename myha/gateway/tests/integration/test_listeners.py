@@ -12,7 +12,6 @@ from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.auth.passwords import Argon2Timing, measure_argon2
 from myha_gateway.deps import AppContext
 from myha_gateway.errors import ApiError
-from myha_gateway.settings import Settings
 from tests.helpers import call, fake_supervisor
 
 
@@ -113,7 +112,8 @@ async def test_probe_mode_startup_logs_evidence_and_writes_marker(
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(probe, "measure_argon2", fast_argon2)
     caplog.set_level(logging.INFO)
-    ctx = AppContext(Settings(), fake_supervisor(reachable=reachable))
+    ctx = await AppContext.create()
+    ctx.supervisor = fake_supervisor(reachable=reachable)
     app = create_admin_app(ctx)
     async with app.router.lifespan_context(app):
         pass

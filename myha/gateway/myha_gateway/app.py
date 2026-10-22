@@ -46,11 +46,15 @@ def _app(
 
 @asynccontextmanager
 async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """S0 probe evidence in the log, once per process: the admin app always runs."""
+    """Once per process, since the admin app always runs: S0 probe evidence, the HA client."""
     ctx: AppContext = app.state.ctx
     if ctx.settings.probe_mode:
         await probe.log_startup(ctx)
-    yield
+    await ctx.ha.start()  # an unreachable Core is logged and retried, never fatal
+    try:
+        yield
+    finally:
+        await ctx.ha.stop()
 
 
 def create_public_app(ctx: AppContext) -> FastAPI:
