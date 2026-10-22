@@ -27,12 +27,14 @@ gw=$(docker create --entrypoint /opt/myha/venv/bin/myha-gateway \
 trap 'docker rm -f "$gw" >/dev/null 2>&1 || true' EXIT
 docker start "$gw" >/dev/null
 for _ in $(seq 1 30); do
-  curl -fs http://127.0.0.1:18443/healthz >/dev/null && break
+  curl -fs --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz >/dev/null && break
   sleep 1
 done
-curl -fsS http://127.0.0.1:18443/healthz || fail "$gw" "no /healthz within 30 s"
+curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/healthz \
+  || fail "$gw" "no /healthz within 30 s"
 echo
-headers=$(curl -fsSI http://127.0.0.1:18443/ | tr -d '\r') || fail "$gw" "HEAD / failed"
+headers=$(curl -fsSI --connect-timeout 2 --max-time 3 http://127.0.0.1:18443/ | tr -d '\r') \
+  || fail "$gw" "HEAD / failed"
 grep -iE "^(content-security-policy|cache-control):" <<<"$headers" || true
 grep -qiE "^content-security-policy: (.*; )?default-src 'self'(;|$)" <<<"$headers" \
   || fail "$gw" "CSP without default-src 'self'"
