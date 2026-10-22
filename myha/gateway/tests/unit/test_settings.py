@@ -50,6 +50,14 @@ def test_options_json_sets_only_log_level_and_probe_mode(data_dir: Path) -> None
     assert s.public_enabled and s.public_origin == "http://probe.invalid:8443"
 
 
+def test_relative_data_dir_becomes_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MYHA_DATA_DIR", "data")
+    assert Settings().data_dir == Path.cwd() / "data"  # a later chdir moves no database
+
+
 def test_options_json_follows_data_dir_kwarg(tmp_path: Path) -> None:
     other = tmp_path / "other"
     other.mkdir()

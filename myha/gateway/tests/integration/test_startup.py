@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Callable
@@ -151,7 +152,10 @@ async def test_without_public_origin_only_the_admin_listener_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     settings = local(tmp_path)
+    settings.state_dir.mkdir()
+    settings.state_dir.chmod(0o755)  # as builds with the S0 probe left it
     async with serving(settings, monkeypatch) as servers:
+        assert stat.S_IMODE(settings.state_dir.stat().st_mode) == 0o700
         # Logged right before the public decision, in the same step.
         await until(lambda: "Supervisor unreachable" in caplog.text)
         assert len(servers) == 1 and closed(settings.public_port)

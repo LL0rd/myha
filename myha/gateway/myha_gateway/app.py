@@ -63,6 +63,7 @@ async def _admin_lifespan(app: FastAPI) -> AsyncIterator[None]:
     ctx.restore_mode = (ctx.settings.backup_dir / "restore.sqlite").exists()
     try:
         ctx.settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ctx.settings.state_dir.chmod(0o700)  # mkdir's mode spares an existing 0755 state/
         await run_migrations(ctx.engine)
         if ctx.restore_mode:  # load, never create: the restore brings its own row (Plan 3)
             async with ctx.sessions() as session:
