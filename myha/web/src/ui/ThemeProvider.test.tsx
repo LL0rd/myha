@@ -72,9 +72,9 @@ it("the switch applies and persists the choice for every user", async () => {
       <Shown />
     </>,
   );
-  act(() => screen.getByRole("button", { name: "dark" }).click());
+  act(() => screen.getByRole("button", { name: "Dark" }).click());
   expect(screen.getByRole("status").textContent).toBe("dark");
-  expect(screen.getByRole("button", { name: "dark" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Dark" }).getAttribute("aria-pressed")).toBe("true");
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(localStorage.getItem("myha.theme")).toBe("dark");
 });

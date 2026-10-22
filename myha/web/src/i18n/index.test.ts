@@ -3,11 +3,14 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import de from "./de.json";
 import en from "./en.json";
-import { detectLang, translate, useI18n } from "./index";
+import { themes } from "../ui/ThemeProvider";
+import { detectLang, setLang, translate, useI18n, type Key } from "./index";
 
+// The language is page-wide state: every test starts in English with empty storage.
 afterEach(() => {
-  localStorage.clear();
   vi.restoreAllMocks();
+  setLang("en");
+  localStorage.clear();
 });
 
 const placeholders = (s: string) => (s.match(/\{\w+\}/g) ?? []).sort();
@@ -26,8 +29,13 @@ it("covers the eight public error codes and the five command states", () => {
 it("fills placeholders and falls back to the key", () => {
   expect(translate("en", "state.on_level", { pct: 40 })).toBe("On · 40 %");
   expect(translate("de", "state.on_level", { pct: 40 })).toBe("An · 40 %");
-  expect(translate("en", "no.such.key")).toBe("no.such.key");
+  expect(translate("en", "no.such.key" as Key)).toBe("no.such.key");
+  expect(translate("en", "toString" as Key)).toBe("toString");
   expect(translate("en", "state.on_level")).toBe("On · {pct} %");
+});
+
+it("has a label for every theme", () => {
+  expect(Object.keys(en)).toEqual(expect.arrayContaining(["theme.label", ...themes.map((t) => `theme.${t}`)]));
 });
 
 it("detects the stored language first, then the browser language, then English", () => {

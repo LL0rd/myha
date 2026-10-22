@@ -97,7 +97,7 @@
   font: 700 var(--btn-fs) var(--font); cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink);
 }
-.btn[data-variant="primary"] { border-color: transparent; background: var(--accent); color: #1F1D19; }
+.btn[data-variant="primary"] { border-color: transparent; background: var(--accent); color: var(--on-accent); }
 .btn[data-variant="denied"] { border: 1px dashed var(--err); background: transparent; color: var(--err); opacity: .8; }
 .btn[aria-pressed="true"] { border-color: var(--accent-ink); background: var(--accent-soft); }
 
@@ -107,7 +107,7 @@
   width: var(--btn-h); height: var(--btn-h); border-radius: 14px; cursor: pointer; display: grid; place-items: center;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink);
 }
-.step[data-variant="primary"] { border: none; background: var(--accent); color: #1F1D19; }
+.step[data-variant="primary"] { border: none; background: var(--accent); color: var(--on-accent); }
 .target { text-align: center; min-width: 64px; }
 .temp { font-weight: 800; font-size: var(--temp-fs); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .target .muted { font-size: 16px; margin-left: 2px; }
@@ -151,6 +151,11 @@
 .ruleDot[data-status="deny"] { background: var(--err); }
 .ruleDot[data-status="fence"] { background: var(--warn); }
 .ruleAction { font-family: var(--mono); color: var(--ink); }
+
+.srOnly {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
 
 .footer { font-size: 12px; color: var(--muted); text-align: center; padding-top: 4px; }
 

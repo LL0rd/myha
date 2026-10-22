@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { GuestPanel } from "./GuestPanel";
-import type { Command, Resource, Room } from "./types";
+import { stepTarget } from "./ResourceCard";
+import type { Command, Interval, Resource, Room } from "./types";
 
 afterEach(cleanup);
 
@@ -88,6 +89,25 @@ it("sends the brightness once the slider gesture ends", () => {
   expect(slider.value).toBe("40");
 });
 
+it("keyboard and cancelled touch gestures send only on change", () => {
+  const onAction = vi.fn();
+  render(<GuestPanel title="Room 203" rooms={rooms()} status="online" onAction={onAction} />);
+  const slider = screen.getByRole("slider", { name: "Brightness" }) as HTMLInputElement;
+  fireEvent.keyDown(slider, { key: "ArrowRight" });
+  fireEvent.input(slider, { target: { value: "61" } });
+  fireEvent.keyUp(slider, { key: "ArrowRight" });
+  expect(onAction).not.toHaveBeenCalled();
+  fireEvent(slider, new Event("change", { bubbles: true }));
+  expect(onAction).toHaveBeenLastCalledWith("res_light", "light.set_level", { level_pct: 61 });
+  fireEvent.pointerDown(slider);
+  fireEvent.input(slider, { target: { value: "30" } });
+  fireEvent.pointerCancel(slider);
+  expect(onAction).toHaveBeenCalledTimes(1);
+  fireEvent(slider, new Event("change", { bubbles: true }));
+  expect(onAction).toHaveBeenCalledTimes(2);
+  expect(onAction).toHaveBeenLastCalledWith("res_light", "light.set_level", { level_pct: 30 });
+});
+
 it("a simulated brightness change snaps back", () => {
   const onAction = vi.fn();
   render(<GuestPanel title="Room 203" rooms={rooms()} status="online" simulate onAction={onAction} />);
@@ -96,6 +116,34 @@ it("a simulated brightness change snaps back", () => {
   fireEvent(slider, new Event("change", { bubbles: true }));
   expect(onAction).toHaveBeenCalledWith("res_light", "light.set_level", { level_pct: 40 });
   expect(slider.value).toBe("60");
+});
+
+it("keeps the chosen target while intermediate values arrive", async () => {
+  const onAction = vi.fn();
+  const view = (target: string) => <GuestPanel title="Room 203" rooms={rooms(target)} status="online" onAction={onAction} />;
+  const { rerender } = render(view("20.0"));
+  const raise = screen.getByRole("button", { name: "Raise target" });
+  await userEvent.click(raise);
+  await userEvent.click(raise);
+  rerender(view("20.5")); // the first step arrives while the second is under way
+  expect(card("Air conditioning").getByText("21")).toBeTruthy();
+  await userEvent.click(raise);
+  expect(onAction).toHaveBeenLastCalledWith("res_climate", "climate.set_temperature", { target_c: "21.5" });
+  rerender(view("21.5"));
+  expect(card("Air conditioning").getByText("21.5")).toBeTruthy();
+});
+
+it("drops the chosen target when the command ends without success", async () => {
+  const sent = (status: Command["status"]): Command[] => [
+    { id: "c1", resource_id: "res_climate", action: "climate.set_temperature", status, created_at: "2026-10-22T10:00:00Z", updated_at: "2026-10-22T10:00:01Z" },
+  ];
+  const view = (commands: Command[]) => <GuestPanel title="Room 203" rooms={rooms("20.0")} status="online" commands={commands} onAction={() => {}} />;
+  const { rerender } = render(view([]));
+  await userEvent.click(screen.getByRole("button", { name: "Raise target" }));
+  rerender(view(sent("sent")));
+  expect(card("Air conditioning").getByText("20.5")).toBeTruthy();
+  rerender(view(sent("failed")));
+  expect(card("Air conditioning").getByText("20")).toBeTruthy();
 });
 
 it("expired disables every control", () => {
@@ -113,6 +161,25 @@ it("explain shows the rules", () => {
   expect(card("Ceiling light").getByText("capped at 100 % by the stay")).toBeTruthy();
 });
 
+it.each<[string, Interval[], string | null, 1 | -1, string | null]>([
+  ["origin offset", [{ min: "18.25", max: "22.25", step: "0.5", origin: "0.25" }], "20.25", 1, "20.75"],
+  ["gap upwards", [{ min: "18.0", max: "20.0", step: "0.5", origin: "0" }, { min: "22.0", max: "24.0", step: "0.5", origin: "0" }], "20.0", 1, "22.0"],
+  ["gap downwards", [{ min: "18.0", max: "20.0", step: "0.5", origin: "0" }, { min: "22.0", max: "24.0", step: "0.5", origin: "0" }], "22.0", -1, "20.0"],
+  ["below min, up", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], "15.0", 1, "18.0"],
+  ["below min, down", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], "15.0", -1, null],
+  ["above max, down", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], "30.0", -1, "24.0"],
+  ["above max, up", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], "30.0", 1, null],
+  ["unknown, up", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], null, 1, "18.0"],
+  ["unknown, down", [{ min: "18.0", max: "24.0", step: "0.5", origin: "0" }], null, -1, "24.0"],
+  ["0.1 steps", [{ min: "18.0", max: "19.0", step: "0.1", origin: "0" }], "18.7", 1, "18.8"],
+  ["off-grid bounds, up", [{ min: "18.2", max: "21.9", step: "0.5", origin: "0" }], null, 1, "18.5"],
+  ["off-grid bounds, down", [{ min: "18.2", max: "21.9", step: "0.5", origin: "0" }], null, -1, "21.5"],
+  ["two-digit bounds", [{ min: "18.25", max: "19.0", step: "1", origin: "0" }], null, 1, "19.00"],
+  ["step 0", [{ min: "18.0", max: "24.0", step: "0", origin: "0" }], "20.0", 1, null],
+])("stepTarget: %s", (_, intervals, current, dir, expected) => {
+  expect(stepTarget(intervals, current, dir)).toBe(expected);
+});
+
 it("announces the latest command of a resource politely", () => {
   const commands: Command[] = [
     { id: "c1", resource_id: "res_cover", action: "cover.open", status: "confirmed", created_at: "2026-10-22T10:00:00Z", updated_at: "2026-10-22T10:00:01Z" },
@@ -121,6 +188,7 @@ it("announces the latest command of a resource politely", () => {
   render(<GuestPanel title="Room 203" rooms={rooms()} status="online" commands={commands} onAction={() => {}} />);
   const live = card("Blind").getByText(/waiting for the device/).closest("[aria-live]");
   expect(live?.getAttribute("aria-live")).toBe("polite");
+  expect(live?.textContent).toMatch(/^Blind/);
   expect(card("Blind").queryByText(/Confirmed/)).toBeNull();
 });
 

@@ -22,13 +22,17 @@ const trimZero = (s: string) => s.replace(/\.0+$/, "");
 /** Next allowed value above (dir 1) or below (dir -1) `current` across all intervals, as a decimal string; null if none. */
 export function stepTarget(intervals: Interval[], current: string | null | undefined, dir: 1 | -1): string | null {
   // Scaled integers, so 0.1 steps never drift; at least one decimal, as the API expects "22.0".
-  const digits = Math.max(1, ...intervals.map((i) => Math.max(decimals(i.step), decimals(i.origin))));
+  const digits = Math.max(1, ...intervals.map((i) => Math.max(decimals(i.min), decimals(i.max), decimals(i.step), decimals(i.origin))));
   const scale = 10 ** digits;
   const n = (s: string) => Math.round(Number(s) * scale);
   const cur = current == null ? null : n(current);
   let best: number | null = null;
   for (const i of intervals) {
-    const [lo, hi, step, origin] = [n(i.min), n(i.max), n(i.step), n(i.origin)];
+    const [step, origin] = [n(i.step), n(i.origin)];
+    if (!(step > 0)) continue;
+    // Bounds onto the grid, so neither end offers a value the server rejects.
+    const lo = origin + Math.ceil((n(i.min) - origin) / step) * step;
+    const hi = origin + Math.floor((n(i.max) - origin) / step) * step;
     const v =
       dir > 0
         ? cur === null || cur < lo ? lo : origin + (Math.floor((cur - origin) / step) + 1) * step
@@ -38,14 +42,20 @@ export function stepTarget(intervals: Interval[], current: string | null | undef
   return best === null ? null : (best / scale).toFixed(digits);
 }
 
-/** A locally chosen value shown until the device reports a new one or the command fails. */
+/**
+ * A locally chosen value, shown until the device reports exactly it or the newest command ends.
+ * Intermediate reports keep it, so the next step builds on the choice, not on the device.
+ */
 function usePending<T>(observed: T, command: Command | undefined) {
   const [pending, setPending] = useState<T | null>(null);
-  const settled = command && (command.status === "failed" || command.status === "unknown") ? command.id : "";
-  const [seen, setSeen] = useState({ observed, settled });
-  if (seen.observed !== observed || seen.settled !== settled) {
-    setSeen({ observed, settled });
-    if (seen.observed !== observed || settled) setPending(null);
+  // Any end, confirmed included: a light confirms within a tolerance of ±1 %, so an exact match may never come.
+  const ended = command && command.status !== "accepted" && command.status !== "sent" ? `${command.id}:${command.status}` : "";
+  const [seenEnd, setSeenEnd] = useState(ended);
+  if (seenEnd !== ended) {
+    setSeenEnd(ended);
+    if (ended) setPending(null);
+  } else if (pending !== null && pending === observed) {
+    setPending(null);
   }
   return [pending, setPending] as const;
 }
@@ -196,7 +206,12 @@ export function ResourceCard({ resource, command, live, simulate, explain, t, on
       )}
       {sliderRow}
       <div className={styles.live} role="status" aria-live="polite">
-        {command && <CommandStatus status={command.status} text={t.command[command.status]} />}
+        {command && (
+          <>
+            <span className={styles.srOnly}>{label}: </span>
+            <CommandStatus status={command.status} text={t.command[command.status]} />
+          </>
+        )}
       </div>
       {explain && resource.rules?.length ? (
         <ul className={styles.rules}>

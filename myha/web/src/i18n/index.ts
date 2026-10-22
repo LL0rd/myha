@@ -5,11 +5,14 @@ import en from "./en.json";
 export const langs = ["en", "de"] as const;
 export type Lang = (typeof langs)[number];
 export type Vars = Record<string, string | number>;
+export type Key = keyof typeof en;
 
 const dicts: Record<Lang, Record<string, string>> = { en, de };
 const KEY = "myha.lang";
 
 const isLang = (v: unknown): v is Lang => langs.indexOf(v as Lang) >= 0;
+// Object.hasOwn is ES2022; the ES2019 lib in tsconfig is deliberate (older Fire WebViews, no polyfills).
+const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
 /** Stored choice, else the browser language (de-* → de), else English. */
 export function detectLang(): Lang {
@@ -23,9 +26,10 @@ export function detectLang(): Lang {
 }
 
 /** The text for `key` with `{name}` placeholders filled; the key itself when no text exists. */
-export function translate(lang: Lang, key: string, vars?: Vars): string {
-  const text = dicts[lang][key] ?? key;
-  return vars ? text.replace(/\{(\w+)\}/g, (m, name: string) => (name in vars ? String(vars[name]) : m)) : text;
+export function translate(lang: Lang, key: Key, vars?: Vars): string {
+  const dict = dicts[lang];
+  const text = own(dict, key) ? (dict[key] as string) : key;
+  return vars ? text.replace(/\{(\w+)\}/g, (m, name: string) => (own(vars, name) ? String(vars[name]) : m)) : text;
 }
 
 // One language for the whole page, shared by every useI18n caller without a provider.
@@ -56,5 +60,5 @@ export function setLang(lang: Lang) {
 
 export function useI18n() {
   const lang = useSyncExternalStore(subscribe, getLang);
-  return { lang, setLang, t: (key: string, vars?: Vars) => translate(lang, key, vars) };
+  return { lang, setLang, t: (key: Key, vars?: Vars) => translate(lang, key, vars) };
 }

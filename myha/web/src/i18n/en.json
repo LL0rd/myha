@@ -61,6 +61,7 @@
   "error.CONFLICT": "This request conflicts with an earlier one. Please try again.",
   "error.generic": "Something went wrong. Please try again.",
   "theme.label": "Theme",
+  "theme.system": "System",
   "theme.light": "Light",
   "theme.dark": "Dark",
   "theme.contrast": "High contrast",

@@ -61,6 +61,7 @@
   "error.CONFLICT": "Diese Anfrage widerspricht einer früheren. Bitte versuchen Sie es erneut.",
   "error.generic": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
   "theme.label": "Darstellung",
+  "theme.system": "Wie System",
   "theme.light": "Hell",
   "theme.dark": "Dunkel",
   "theme.contrast": "Hoher Kontrast",
