@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23-2026.10.1
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:25-alpine AS web
 WORKDIR /src/web
 # The pnpm version must match packageManager in web/package.json.
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
