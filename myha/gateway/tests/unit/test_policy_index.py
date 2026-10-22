@@ -767,6 +767,24 @@ def test_device_limits_are_written_without_trailing_zeros(low: str, high: str) -
     assert full.model_dump(mode="json") == {"min": "8", "max": "30", "step": "0.5", "origin": "0"}
 
 
+def test_grant_intervals_cut_each_grant_to_the_device_but_not_to_fences() -> None:
+    fenced = ctx(LIVING_BINDING, fences=(fence(),))  # at most 22, which only the capability cuts
+    action = Action.CLIMATE_SET_TEMPERATURE
+    assert INDEX.grant_intervals(fenced, "res_lr_ac", action) == {
+        "living@3:0": (interval("8", "30", "0.5"),),
+        "living@3:1": (interval("8", "30", "1"),),
+    }
+    beyond = replace(RESOURCES["res_lr_ac"], capabilities=climate(high="1E+40"))
+    index = PolicyIndex(
+        {("living", 3): LIVING}, {beyond.id: beyond}, {"unit_lr": frozenset({beyond.id})}
+    )
+    # granted, but nothing admissible: every grant stays, without an interval
+    assert index.grant_intervals(fenced, beyond.id, action) == {"living@3:0": (), "living@3:1": ()}
+    assert INDEX.grant_intervals(ctx(STAY_BINDING), "res_unknown", action) == {}
+    with pytest.raises(ValueError, match="takes no number"):
+        INDEX.grant_intervals(ctx(STAY_BINDING), "res_203_trv", Action.CLIMATE_SET_MODE)
+
+
 def test_percent_without_rule_is_zero_to_hundred_in_whole_steps() -> None:
     capability = INDEX.effective_capability(
         ctx(STAY_BINDING), "res_203_light", Action.LIGHT_SET_LEVEL

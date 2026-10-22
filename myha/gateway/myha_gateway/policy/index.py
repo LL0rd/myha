@@ -140,22 +140,41 @@ class PolicyIndex:
                     allowed &= fence.parameters.mode.allowed
             confirmed = resource.capabilities.confirmed_modes
             return EffectiveCapability(allowed=allowed & confirmed, matched=matched)
-        capabilities = resource.capabilities
-        limits = _device_limits(name, capabilities)
-        if limits is None:  # a device limit beyond the rule format: offer nothing (fail closed)
-            return EffectiveCapability(matched=matched)
-        low, high = limits
         bounds: list[Bound] = [b for fence in fences if (b := getattr(fence.parameters, name))]
         intervals: dict[Interval, None] = {}  # ordered set: identical intervals appear once
-        for grant in grants.values():
-            rule = getattr(grant.parameters, name)
-            for interval in (_full_range(name, capabilities),) if rule is None else rule.intervals:
-                clipped = _within(interval, low, high)
+        for cut in self.grant_intervals(ctx, resource_id, action).values():
+            for interval in cut:
+                clipped: Interval | None = interval
                 for bound in bounds:
                     clipped = None if clipped is None else clipped.clip(bound)
                 if clipped is not None:
                     intervals[clipped] = None
         return EffectiveCapability(intervals=tuple(intervals), matched=matched)
+
+    def grant_intervals(
+        self, ctx: EffectiveContext, resource_id: str, action: Action
+    ) -> dict[str, tuple[Interval, ...]]:
+        """Each grant's intervals for the action's number, cut to the device but not to fences.
+
+        A grant without a rule spans the schema range in device steps. A grant left with no
+        interval stays with an empty tuple: granted, but nothing is admissible, which is also
+        every grant's lot while a device limit lies beyond the rule format (fail closed).
+        """
+        name = next(iter(PARAM_SCHEMA[action].model_fields), None)
+        if name is None or name == "mode":
+            raise ValueError(f"{action} takes no number")
+        resource = self.resource(resource_id)
+        if resource is None:
+            return {}
+        capabilities = resource.capabilities
+        limits = _device_limits(name, capabilities)
+        result: dict[str, tuple[Interval, ...]] = {}
+        for grant_id, grant in self.grants(ctx, resource_id, action).items():
+            rule = getattr(grant.parameters, name)
+            spans = (_full_range(name, capabilities),) if rule is None else rule.intervals
+            cuts = [] if limits is None else [_within(span, *limits) for span in spans]
+            result[grant_id] = tuple(cut for cut in cuts if cut is not None)
+        return result
 
 
 def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
