@@ -52,6 +52,15 @@ it("follows the system preference live while nothing is stored", async () => {
   expect(document.documentElement.dataset.theme).toBeUndefined();
 });
 
+it("initTheme applies the stored choice before anything renders", async () => {
+  prefersDark(false);
+  localStorage.setItem("myha.theme", "contrast");
+  const { initTheme } = await load();
+  expect(document.documentElement.dataset.theme).toBeUndefined();
+  expect(initTheme()).toBe("contrast");
+  expect(document.documentElement.dataset.theme).toBe("contrast");
+});
+
 it("a stored choice beats the system preference", async () => {
   prefersDark(true);
   localStorage.setItem("myha.theme", "contrast");

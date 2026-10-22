@@ -7,7 +7,7 @@ import { createSession, SessionContext, takeJoinFragment, type JoinFragment } fr
 import { Join } from "./Join";
 
 const SECRET = "s3cr3t-s3cr3t-s3cr3t-s3cr3t-s3cr3t-s3cr3t-x"; // 43 characters, as the server issues them
-const config = { instance_name: "Seeblick", languages: ["de", "en"], theme_default: "system", operator_contact: "Reception +49 30 000000" };
+const config = { instance_name: "Example Inn", languages: ["de", "en"], theme_default: "system", operator_contact: "contact@example.test" };
 const session = { session: { not_before: "2026-10-22T00:00:00Z", not_after: "2026-10-24T10:00:00Z", waiting: false }, csrf_token: "csrf-1" };
 
 let csrf: () => string | null;
@@ -73,7 +73,7 @@ it("a refused invite shows the operator contact", async () => {
   });
   await userEvent.click(screen.getByRole("button", { name: "Open my room" }));
   expect(await screen.findByText("This link could not be used.")).toBeTruthy();
-  expect(screen.getByText("Problems? Reception +49 30 000000")).toBeTruthy();
+  expect(screen.getByText("Problems? contact@example.test")).toBeTruthy();
   expect((screen.getByRole("button", { name: "Open my room" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
@@ -87,6 +87,6 @@ it("without a secret the link is incomplete and nothing is sent", async () => {
   renderJoin({ secret: null, inst: null, fp: null }, async () => session);
   expect(screen.getByRole("heading", { name: "Link incomplete" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Open my room" })).toBeNull();
-  expect(await screen.findByText("Problems? Reception +49 30 000000")).toBeTruthy();
+  expect(await screen.findByText("Problems? contact@example.test")).toBeTruthy();
   expect(request.mock.calls.map(([path]) => path)).toEqual(["/api/v1/public/config"]);
 });

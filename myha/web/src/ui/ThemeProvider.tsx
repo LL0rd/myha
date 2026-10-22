@@ -45,6 +45,11 @@ function subscribe(onChange: () => void) {
   return () => listeners.delete(onChange);
 }
 
+/** Applies the stored choice to <html>; call before the first render, so a dark theme never flashes light. */
+export function initTheme(): Theme {
+  return getTheme();
+}
+
 export function setTheme(next: Theme) {
   current = next;
   apply(next);

@@ -11,7 +11,7 @@ const me = {
   session: { not_before: "2026-10-22T00:00:00Z", not_after: "2026-10-24T10:00:00Z", waiting: false },
   csrf_token: "csrf-1",
   stay: { unit_name: "Room 203", ends_at: "2026-10-24T10:00:00Z" },
-  instance: { name: "Seeblick", operator_contact: "Reception +49 30 000000" },
+  instance: { name: "Example Inn", operator_contact: "contact@example.test" },
 };
 
 class FakeSocket extends EventTarget {
