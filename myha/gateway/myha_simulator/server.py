@@ -2,39 +2,50 @@
 
 A test and dev double, not a security boundary. One ``SimState`` per app holds the world in
 memory and behaves like Home Assistant where a client can tell: ``state_changed`` only on real
-changes, carrying the context of the service call that caused it; unavailable entities ignore
-service calls.
+changes, carrying the context of the call that caused it; calls for unknown or unavailable
+entities succeed without effect; errors with the codes and texts Core and Supervisor send.
 """
 
 import contextlib
 import copy
-import uuid
+import itertools
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import uvicorn
-from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from fastapi import Body, FastAPI, Header, HTTPException, Response, WebSocket
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from myha_simulator import fixtures
 from myha_simulator.fixtures import Fixture
 
+logger = logging.getLogger(__name__)
+
 JSON = dict[str, Any]
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024  # per incoming WebSocket message
 REGISTRY_KEYS = ("entity_id", "unique_id", "device_id", "area_id", "platform")
-TOKENS = (fixtures.ADMIN_TOKEN, fixtures.USER_TOKEN)
+HVAC_MODES = frozenset({"off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"})
+# What Core still reports for an unavailable entity: capability and static attributes.
+KEPT_WHEN_UNAVAILABLE = frozenset(
+    {
+        "friendly_name",
+        "icon",
+        "entity_picture",
+        "device_class",
+        "unit_of_measurement",
+        "supported_features",
+        "supported_color_modes",
+        "hvac_modes",
+        "min_temp",
+        "max_temp",
+        "target_temp_step",
+    }
+)
 AuthHeader = Annotated[str | None, Header()]
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _context() -> JSON:
-    return {"id": uuid.uuid4().hex, "parent_id": None, "user_id": None}
 
 
 def _error(msg_id: Any, code: str, message: str) -> JSON:
@@ -50,18 +61,25 @@ class CommandError(Exception):
         self.code, self.message = code, message
 
 
-def _number(data: JSON, key: str, low: float, high: float) -> float:
-    """``data[key]`` if it is a number within ``[low, high]``, else a schema error."""
+def _number(data: JSON, key: str) -> float:
+    """``data[key]`` if it is a number, else a schema error."""
     value = data.get(key)
-    if isinstance(value, bool) or not isinstance(value, int | float) or not low <= value <= high:
-        raise CommandError("invalid_format", f"{key} must be a number from {low} to {high}")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise CommandError("invalid_format", f"expected a number for data['{key}']")
+    return value
+
+
+def _percent(data: JSON, key: str) -> float:
+    """``data[key]`` if it is a number from 0 to 100, else a schema error."""
+    if not 0 <= (value := _number(data, key)) <= 100:
+        raise CommandError("invalid_format", f"value must be from 0 to 100 for data['{key}']")
     return value
 
 
 # Service handlers get the old state, a copy of its attributes to change and the service data;
 # they return the new state.
 def _light_on(state: str, attrs: JSON, data: JSON) -> str:
-    pct = _number(data, "brightness_pct", 0, 100) if "brightness_pct" in data else None
+    pct = _percent(data, "brightness_pct") if "brightness_pct" in data else None
     if pct == 0:  # Home Assistant turns the light off
         return _light_off(state, attrs, data)
     if "brightness" in attrs:  # dimmable; a light that was off comes on at full brightness
@@ -80,20 +98,30 @@ def _light_off(state: str, attrs: JSON, data: JSON) -> str:
 
 
 def _set_temperature(state: str, attrs: JSON, data: JSON) -> str:
+    temperature = _number(data, "temperature")
     low, high = attrs.get("min_temp", 7), attrs.get("max_temp", 35)
-    attrs["temperature"] = _number(data, "temperature", low, high)
+    if not low <= temperature <= high:
+        message = f"Provided temperature {float(temperature)} is not valid."
+        raise CommandError(
+            "service_validation_error", f"{message} Accepted range is {low} to {high}."
+        )
+    attrs["temperature"] = temperature
     return state
 
 
 def _set_hvac_mode(state: str, attrs: JSON, data: JSON) -> str:
-    modes = attrs.get("hvac_modes", [])
-    if data.get("hvac_mode") not in modes:
-        raise CommandError("invalid_format", f"hvac_mode must be one of {modes}")
-    return str(data["hvac_mode"])
+    mode = data.get("hvac_mode")
+    if not isinstance(mode, str) or mode not in HVAC_MODES:
+        raise CommandError("invalid_format", "expected a valid HVAC mode for data['hvac_mode']")
+    if mode not in attrs["hvac_modes"]:  # KeyError: a climate entity without modes is broken
+        modes = ", ".join(attrs["hvac_modes"])
+        message = f"HVAC mode {mode} is not valid. Valid HVAC modes are: {modes}."
+        raise CommandError("service_validation_error", message)
+    return mode
 
 
 def _set_position(state: str, attrs: JSON, data: JSON) -> str:
-    attrs["current_position"] = position = int(_number(data, "position", 0, 100))
+    attrs["current_position"] = position = int(_percent(data, "position"))
     return "open" if position else "closed"
 
 
@@ -116,15 +144,28 @@ class Connection:
 
     def __init__(self, ws: WebSocket) -> None:
         self.ws = ws
+        self.user_id: str | None = None
         self.is_admin = False
-        self.subscriptions: dict[int, str | None] = {}  # subscribe command id -> event type
+        self.subscriptions: dict[int, str] = {}  # subscribe command id -> event type or "*"
+
+    async def receive(self) -> Any:
+        """The next JSON message; bad data closes with 1007, a binary frame with 1003."""
+        try:
+            return await self.ws.receive_json()
+        except ValueError:
+            code = 1007
+        except (KeyError, TypeError):  # a binary frame has no text
+            code = 1003
+        await self.close(code)
+        raise WebSocketDisconnect(code)
 
     async def send(self, message: JSON) -> None:
-        with contextlib.suppress(WebSocketDisconnect, WebSocketDisconnected):
+        # RuntimeError: uvicorn refuses to send once its keepalive has closed the connection
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             await self.ws.send_json(message)
 
     async def close(self, code: int = 1000) -> None:
-        with contextlib.suppress(WebSocketDisconnect, WebSocketDisconnected):
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             await self.ws.close(code)
 
 
@@ -135,10 +176,11 @@ class SimState:
         self.fixture = fixture
         self.connections: set[Connection] = set()
         self.states: dict[str, JSON] = {}
+        self._context_ids = itertools.count(1)  # never reset, so ids stay unique
         self._load()
         for spec in fixture.entities:
             attributes = copy.deepcopy(spec["attributes"])
-            self._write(spec["entity_id"], spec["state"], attributes, _context())
+            self._write(spec["entity_id"], spec["state"], attributes, self.context())
 
     def _load(self) -> None:
         """Registries, users, config and every mode from the fixture; states change separately."""
@@ -157,28 +199,45 @@ class SimState:
         self.supervisor_version = fixtures.SUPERVISOR_VERSION
         self.host_info_mode = "forbidden"
         self.mode_setpoints: dict[tuple[str, str], float] = {}
-        self.offline: dict[str, str] = {}  # entity id -> state before /_sim/offline
+        self.offline: dict[str, JSON] = {}  # entity id -> state before /_sim/offline
 
-    async def fire(self, event_type: str, data: JSON, context: JSON | None = None) -> None:
-        """Send an event to every matching subscription; ``time_fired`` includes the skew."""
+    def now(self) -> datetime:
+        """Home Assistant's clock, wrong by ``clock_skew`` seconds."""
+        return datetime.now(UTC) + timedelta(seconds=self.clock_skew)
+
+    def context(self, user_id: str | None = None) -> JSON:
+        """A new context; the id has the length of Core's ULIDs and counts up."""
+        return {"id": f"{next(self._context_ids):026d}", "parent_id": None, "user_id": user_id}
+
+    async def fire(
+        self,
+        event_type: str,
+        data: JSON,
+        context: JSON | None = None,
+        time_fired: str | None = None,
+    ) -> None:
+        """Send an event to every matching subscription."""
         event = {
             "event_type": event_type,
             "data": data,
             "origin": "LOCAL",
-            "time_fired": (_now() + timedelta(seconds=self.clock_skew)).isoformat(),
-            "context": context or _context(),
+            "time_fired": time_fired or self.now().isoformat(),
+            "context": context or self.context(),
         }
+        # shortcut: a subscriber that stops reading blocks fan-out, upgrade to per-connection
+        # queues once E2E runs many clients
         for conn in list(self.connections):
             for sub_id, event_filter in list(conn.subscriptions.items()):
-                if event_filter in (None, event_type):
+                if event_filter in ("*", event_type):
                     await conn.send({"id": sub_id, "type": "event", "event": event})
 
     def _write(self, entity_id: str, state: str, attributes: JSON, context: JSON) -> JSON | None:
         """Like ``hass.states.async_set``: the ``state_changed`` data, None if nothing changed."""
+        now = self.now().isoformat()
         old = self.states.get(entity_id)
         if old is not None and old["state"] == state and old["attributes"] == attributes:
+            old["last_reported"] = now
             return None
-        now = _now().isoformat()
         self.states[entity_id] = new = {
             "entity_id": entity_id,
             "state": state,
@@ -186,6 +245,7 @@ class SimState:
             "last_changed": old["last_changed"]
             if old is not None and old["state"] == state
             else now,
+            "last_reported": now,
             "last_updated": now,
             "context": context,
         }
@@ -195,9 +255,10 @@ class SimState:
         self, entity_id: str, state: str, attributes: JSON, context: JSON | None = None
     ) -> JSON:
         """Write a state, fire ``state_changed`` if it changed and return the current state."""
-        context = context or _context()
+        context = context or self.context()
         if (data := self._write(entity_id, state, attributes, context)) is not None:
-            await self.fire("state_changed", data, context)
+            # Core stamps the event with the time of the new state.
+            await self.fire("state_changed", data, context, data["new_state"]["last_updated"])
         return self.states[entity_id]
 
     async def remove_state(self, entity_id: str) -> None:
@@ -217,12 +278,6 @@ class SimState:
             raise HTTPException(404, f"unknown registry entry {entity_id}")
         return entry
 
-    async def merge(self, entity_id: str, state: str | None, attributes: JSON) -> JSON:
-        """New state (None keeps it) and attributes merged into the current ones."""
-        old = self.state(entity_id)
-        new_state = old["state"] if state is None else state
-        return await self.set_state(entity_id, new_state, {**old["attributes"], **attributes})
-
     async def handle(self, conn: Connection, msg: JSON) -> JSON:
         """Answer one command whose ``id`` and ``type`` are already checked."""
         msg_id = msg["id"]
@@ -236,14 +291,14 @@ class SimState:
                 case "get_config":
                     result = self.config
                 case "subscribe_events":
-                    conn.subscriptions[msg_id] = msg.get("event_type")
+                    conn.subscriptions[msg_id] = msg.get("event_type", "*")
                 case "unsubscribe_events":
                     subscription = msg.get("subscription")
                     if not isinstance(subscription, int) or subscription not in conn.subscriptions:
                         raise CommandError("not_found", "Subscription not found.")
                     del conn.subscriptions[subscription]
                 case "call_service":
-                    result = await self.call_service(msg)
+                    result = await self.call_service(conn, msg)
                 case "config/entity_registry/list":
                     result = list(self.entities.values())
                 case "config/device_registry/list":
@@ -256,6 +311,9 @@ class SimState:
                     raise CommandError("unknown_command", "Unknown command.")
         except CommandError as exc:
             return _error(msg_id, exc.code, exc.message)
+        except Exception as exc:  # like Core: answer, log and keep the connection
+            logger.exception("command %s failed", msg["type"])
+            return _error(msg_id, "unknown_error", str(exc))
         return {"id": msg_id, "type": "result", "success": True, "result": result}
 
     def auth_list(self, conn: Connection) -> list[JSON]:
@@ -267,45 +325,68 @@ class SimState:
             return [{k: v for k, v in user.items() if k != "group_ids"} for user in self.users]
         return self.users
 
-    async def call_service(self, msg: JSON) -> JSON:
+    async def call_service(self, conn: Connection, msg: JSON) -> JSON:
+        """Run a call like Core; every attempt lands in the service-call log."""
+        target, data = msg.get("target"), msg.get("service_data", {})
+        entity_id = target.get("entity_id") if isinstance(target, dict) else None
+        domain, service = msg.get("domain"), msg.get("service")
+        record = {
+            "domain": domain,
+            "service": service,
+            "entity_id": entity_id,
+            "data": data,
+            "context_id": None,
+            "error": "unknown_error",  # until the call ends otherwise
+            "ts": self.now().isoformat(),
+        }
+        self.service_calls.append(record)
+        try:
+            context = await self._run_service(conn, f"{domain}.{service}", entity_id, data)
+        except CommandError as exc:
+            record["error"] = exc.code
+            raise
+        record.update(context_id=context["id"], error=None)
+        return {"context": context}
+
+    async def _run_service(self, conn: Connection, name: str, entity_id: Any, data: Any) -> JSON:
         if self.fail_next is not None:
             code, self.fail_next = self.fail_next, None
             raise CommandError(code, "Simulated service failure")
-        domain, service = msg.get("domain"), msg.get("service")
-        name = f"{domain}.{service}"
         if (handler := SERVICES.get(name)) is None:
-            raise CommandError("service_not_found", f"Service {name} not found.")
-        target, data = msg.get("target"), msg.get("service_data", {})
-        entity_id = target.get("entity_id") if isinstance(target, dict) else None
-        if (
-            not isinstance(entity_id, str)
-            or not entity_id.startswith(f"{domain}.")
-            or entity_id not in self.states
-        ):
-            raise CommandError("not_found", f"Entity {entity_id} not found.")
+            raise CommandError("not_found", f"Service {name} not found.")
         if not isinstance(data, dict):
-            raise CommandError("invalid_format", "service_data must be an object")
-        old, context = self.states[entity_id], _context()
-        if old["state"] != "unavailable":  # Home Assistant skips it, the call still succeeds
+            raise CommandError("invalid_format", "expected a dictionary for data['service_data']")
+        context = self.context(conn.user_id)
+        known = isinstance(entity_id, str) and entity_id.startswith(f"{name.split('.')[0]}.")
+        old = self.states.get(entity_id) if known else None
+        if old is None:
+            logger.warning("%s: no entity %s", name, entity_id)  # Core only warns as well
+        elif old["state"] != "unavailable":  # Core skips it as well; the call still succeeds
             attrs = dict(old["attributes"])
             state = handler(old["state"], attrs, data)
-            if name == "climate.set_hvac_mode" and (entity_id, state) in self.mode_setpoints:
-                attrs["temperature"] = self.mode_setpoints[(entity_id, state)]
+            jump = self.mode_setpoints.get((entity_id, state))
+            if name == "climate.set_hvac_mode" and state != old["state"] and jump is not None:
+                attrs["temperature"] = jump
             await self.set_state(entity_id, state, attrs, context)
-        call = {"domain": domain, "service": service, "entity_id": entity_id, "data": data}
-        self.service_calls.append(call | {"context_id": context["id"], "ts": _now().isoformat()})
-        return {"context": context}
+        return context
 
     async def set_offline(self, entity_id: str) -> JSON:
-        self.offline.setdefault(entity_id, self.state(entity_id)["state"])
-        return await self.merge(entity_id, "unavailable", {})
+        """``unavailable``; like Core, only capability and static attributes remain."""
+        old = self.offline.setdefault(entity_id, self.state(entity_id))
+        attributes = {k: v for k, v in old["attributes"].items() if k in KEPT_WHEN_UNAVAILABLE}
+        return await self.set_state(entity_id, "unavailable", attributes)
 
     async def set_online(self, entity_id: str) -> JSON:
-        return await self.merge(entity_id, self.offline.pop(entity_id, None), {})
+        """Back to the state and attributes from before ``set_offline``."""
+        if (old := self.offline.pop(entity_id, None)) is None:
+            return self.state(entity_id)
+        return await self.set_state(entity_id, old["state"], dict(old["attributes"]))
 
     async def rename(self, entity_id: str, new_entity_id: str) -> None:
-        """Same registry entry and ``unique_id`` under a new entity id."""
+        """Same registry entry and ``unique_id`` under a new entity id of the same domain."""
         entry = self.entry(entity_id)
+        if new_entity_id.split(".")[0] != entity_id.split(".")[0]:
+            raise HTTPException(422, "the domain must stay the same")
         if new_entity_id in self.entities or new_entity_id in self.states:
             raise HTTPException(409, f"{new_entity_id} exists")
         # shortcut: offline/mode-setpoint entries keep the old id, move them when a test needs it
@@ -356,12 +437,18 @@ class SimState:
             ("device_registry_updated", "device_id", old_devices, self.devices),
         ):
             for item_id in [*old, *(item_id for item_id in new if item_id not in old)]:
-                if old.get(item_id) == new.get(item_id):
+                before, after = old.get(item_id), new.get(item_id)
+                data: JSON
+                if before == after:
                     continue
-                action = (
-                    "remove" if item_id not in new else "update" if item_id in old else "create"
-                )
-                await self.fire(event_type, {"action": action, key: item_id})
+                if before is None:
+                    data = {"action": "create", key: item_id}
+                elif after is None:
+                    data = {"action": "remove", key: item_id}
+                else:
+                    changes = {k: v for k, v in before.items() if after.get(k) != v}
+                    data = {"action": "update", key: item_id, "changes": changes}
+                await self.fire(event_type, data)
         specs = {spec["entity_id"]: spec for spec in self.fixture.entities}
         for entity_id in [entity_id for entity_id in self.states if entity_id not in specs]:
             await self.remove_state(entity_id)
@@ -376,12 +463,12 @@ class _Body(BaseModel):
 
 class StateBody(_Body):
     state: str | None = None
-    attributes: JSON = {}
+    attributes: JSON = {}  # merged into the current ones
 
 
 class EntityAttributes(_Body):
     entity_id: str
-    attributes: JSON
+    attributes: JSON  # merged into the current ones; null removes an attribute
 
 
 class ServiceFailure(_Body):
@@ -412,7 +499,7 @@ class ModeSetpoint(_Body):
 
 class Rename(_Body):
     entity_id: str
-    new_entity_id: str
+    new_entity_id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
 
 
 class Replace(_Body):
@@ -425,12 +512,13 @@ class AreaChange(_Body):
     area_id: str | None
 
 
-def _supervisor(authorization: str | None, data: JSON, *, forbidden: bool = False) -> JSONResponse:
-    """A Supervisor answer: 401 without the token, 403 if forbidden, else ``data``."""
-    if authorization != f"Bearer {fixtures.ADMIN_TOKEN}":
-        return JSONResponse({"result": "error", "message": "Unauthorized"}, status_code=401)
-    if forbidden:
-        return JSONResponse({"result": "error", "message": "Forbidden"}, status_code=403)
+def _supervisor(authorization: str | None, data: JSON, *, forbidden: bool = False) -> Response:
+    """A Supervisor answer; errors in aiohttp's plain-text form."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme != "Bearer" or not token:
+        return PlainTextResponse("401: Unauthorized", status_code=401)
+    if token != fixtures.ADMIN_TOKEN or forbidden:
+        return PlainTextResponse("403: Forbidden", status_code=403)
     return JSONResponse({"result": "ok", "data": data})
 
 
@@ -446,55 +534,52 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
         sim.connections.add(conn)
         try:
             await conn.send({"type": "auth_required", "ha_version": fixtures.HA_VERSION})
-            auth = await ws.receive_json()
-            if (
-                not isinstance(auth, dict)
-                or auth.get("type") != "auth"
-                or auth.get("access_token") not in TOKENS
-            ):
-                await conn.send({"type": "auth_invalid", "message": "Invalid access token"})
+            auth = await conn.receive()
+            is_auth = isinstance(auth, dict) and auth.get("type") == "auth"
+            token = auth.get("access_token") if is_auth else None
+            if not isinstance(token, str) or token not in fixtures.TOKEN_USERS:
+                message = "Invalid access token or password"
+                await conn.send({"type": "auth_invalid", "message": message})
                 await conn.close()
                 return
-            conn.is_admin = auth["access_token"] == fixtures.ADMIN_TOKEN
+            conn.user_id, conn.is_admin = fixtures.TOKEN_USERS[token], token == fixtures.ADMIN_TOKEN
             await conn.send({"type": "auth_ok", "ha_version": fixtures.HA_VERSION})
             last_id = 0
             while True:
-                msg = await ws.receive_json()
-                msg_id = msg.get("id") if isinstance(msg, dict) else None
-                if type(msg_id) is not int or not isinstance(msg.get("type"), str):
-                    await conn.send(
-                        _error(msg_id, "invalid_format", "Message incorrectly formatted.")
-                    )
+                msg = await conn.receive()
+                msg_id = msg.get("id") if isinstance(msg, dict) else 0
+                kind = msg.get("type") if isinstance(msg, dict) else None
+                if type(msg_id) is not int or msg_id <= 0 or not isinstance(kind, str) or not kind:
+                    reply = _error(msg_id, "invalid_format", "Message incorrectly formatted.")
                 elif msg_id <= last_id:
-                    await conn.send(
-                        _error(msg_id, "id_reuse", "Identifier values have to increase.")
-                    )
+                    reply = _error(msg_id, "id_reuse", "Identifier values have to increase.")
                 else:
-                    last_id = msg_id
-                    await conn.send(await sim.handle(conn, msg))
+                    reply = await sim.handle(conn, msg)
+                    if reply.get("error", {}).get("code") != "unknown_command":  # like Core
+                        last_id = msg_id
+                await conn.send(reply)
         except (WebSocketDisconnect, WebSocketDisconnected):
-            pass  # closed by the client or by /_sim/drop-connections
+            pass  # closed by the client, after bad data or by /_sim/drop-connections
         finally:
             sim.connections.discard(conn)
 
     @app.get("/info")
-    async def info(authorization: AuthHeader = None) -> JSONResponse:
+    async def info(authorization: AuthHeader = None) -> Response:
         data = {
             "supervisor": sim.supervisor_version,
             "channel": "stable",
             "arch": "amd64",
-            "healthy": True,
             "supported": True,
         }
         return _supervisor(authorization, data)
 
     @app.get("/host/info")
-    async def host_info(authorization: AuthHeader = None) -> JSONResponse:
+    async def host_info(authorization: AuthHeader = None) -> Response:
         data = {"dt_synchronized": True, "operating_system": "Home Assistant OS 18.3"}
         return _supervisor(authorization, data, forbidden=sim.host_info_mode == "forbidden")
 
     @app.get("/addons/self/info")
-    async def addon_info(authorization: AuthHeader = None) -> JSONResponse:
+    async def addon_info(authorization: AuthHeader = None) -> Response:
         data = {
             "ingress_entry": "/api/hassio_ingress/simtoken",
             "ingress_url": "/api/hassio_ingress/simtoken/",
@@ -509,7 +594,9 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
 
     @app.post("/_sim/state/{entity_id}")
     async def set_state(entity_id: str, body: StateBody) -> JSON:
-        return await sim.merge(entity_id, body.state, body.attributes)
+        old = sim.state(entity_id)
+        state = old["state"] if body.state is None else body.state
+        return await sim.set_state(entity_id, state, {**old["attributes"], **body.attributes})
 
     @app.post("/_sim/offline/{entity_id}")
     async def offline(entity_id: str) -> JSON:
@@ -532,6 +619,7 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
 
     @app.post("/_sim/clock-skew")
     async def clock_skew(body: ClockSkew) -> None:
+        """A wrong Home Assistant clock: every timestamp it sends moves by ``seconds``."""
         sim.clock_skew = body.seconds
 
     @app.get("/_sim/service-calls")
@@ -577,7 +665,10 @@ def create_app(fixture: Fixture = fixtures.DEFAULT) -> FastAPI:
 
     @app.post("/_sim/entity/attributes")
     async def entity_attributes(body: EntityAttributes) -> JSON:
-        return await sim.merge(body.entity_id, None, body.attributes)
+        old, new = sim.state(body.entity_id), body.attributes
+        merged = {**old["attributes"], **new}
+        attributes = {k: v for k, v in merged.items() if k not in new or v is not None}
+        return await sim.set_state(body.entity_id, old["state"], attributes)
 
     @app.get("/_sim/connections")
     async def connections() -> dict[str, int]:

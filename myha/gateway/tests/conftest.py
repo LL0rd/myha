@@ -1,13 +1,13 @@
 import asyncio
+import contextlib
 import os
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import Any
 
 import httpx
 import pytest
 
 from myha_simulator.server import create_app, make_server
+from tests.helpers import SimControl, SimHandle
 
 
 @pytest.fixture(autouse=True)
@@ -18,34 +18,11 @@ def hermetic_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(key)
 
 
-@dataclass(frozen=True)
-class SimControl:
-    """Client for the simulator's ``/_sim`` control API; error answers raise."""
-
-    client: httpx.AsyncClient  # base URL is the simulator, usable for the Supervisor API too
-
-    async def get(self, path: str) -> Any:
-        response = await self.client.get(f"/_sim/{path}")
-        response.raise_for_status()
-        return response.json()
-
-    async def post(self, path: str, body: Any = None) -> Any:
-        response = await self.client.post(f"/_sim/{path}", json=body)
-        response.raise_for_status()
-        return response.json()
-
-
-@dataclass(frozen=True)
-class SimHandle:
-    http_url: str  # Supervisor base URL (MYHA_SUPERVISOR_URL)
-    ws_url: str  # Core WebSocket URL (MYHA_HA_WS_URL)
-    control: SimControl
-
-
 @pytest.fixture
 async def sim() -> AsyncIterator[SimHandle]:
     """The HA simulator served on a free port of 127.0.0.1 for one test."""
     server = make_server(create_app(), "127.0.0.1", 0)
+    server.capture_signals = contextlib.nullcontext  # Ctrl+C stays with pytest
     task = asyncio.create_task(server.serve())
     try:
         async with asyncio.timeout(5):

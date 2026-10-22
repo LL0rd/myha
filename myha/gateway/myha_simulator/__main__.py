@@ -9,7 +9,12 @@ from myha_simulator.server import create_app, make_server
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point of the ``myha-simulator`` command."""
-    parser = argparse.ArgumentParser(prog="myha-simulator")
+    parser = argparse.ArgumentParser(
+        prog="myha-simulator",
+        description="Fake Home Assistant Core and Supervisor for development and tests. The /_sim "
+        "control API has no authentication; binding to 127.0.0.1 (the default) is its only "
+        "protection.",
+    )
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args(argv)

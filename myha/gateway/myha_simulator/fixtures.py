@@ -7,6 +7,8 @@ HA_VERSION = "2026.10.2"
 SUPERVISOR_VERSION = "2026.10.3"
 ADMIN_TOKEN = "sim-token"  # noqa: S105 (fake credential, also the Supervisor token)
 USER_TOKEN = "sim-user-token"  # noqa: S105 (fake credential of a non-admin user)
+# Whose calls a token makes (context.user_id). The Supervisor reaches Core as its own user.
+TOKEN_USERS = {ADMIN_TOKEN: "sup", USER_TOKEN: "user1"}
 
 AREAS: list[dict[str, Any]] = [
     {"area_id": "area_203", "name": "Room 203"},
@@ -188,7 +190,7 @@ ENTITIES: list[dict[str, Any]] = [
         None,
         "person",
         "home",
-        {"friendly_name": "Owner", "latitude": 0.0, "longitude": 0.0},
+        {"friendly_name": "Owner", "latitude": 42.6977, "longitude": 23.3219},
     ),
 ]
 
@@ -209,11 +211,10 @@ USERS: list[dict[str, Any]] = [
         "name": "Owner",
         "is_owner": True,
         "is_active": True,
-        "is_admin": True,
         "system_generated": False,
         "local_only": False,
         "group_ids": ["system-admin"],
-        "credentials": [],
+        "credentials": [{"type": "homeassistant"}],
     },
     {
         "id": "user1",
@@ -221,11 +222,10 @@ USERS: list[dict[str, Any]] = [
         "name": "Regular user",
         "is_owner": False,
         "is_active": True,
-        "is_admin": False,
         "system_generated": False,
         "local_only": False,
         "group_ids": ["system-users"],
-        "credentials": [],
+        "credentials": [{"type": "homeassistant"}],
     },
     {
         "id": "sup",
@@ -233,7 +233,6 @@ USERS: list[dict[str, Any]] = [
         "name": "Supervisor",
         "is_owner": False,
         "is_active": True,
-        "is_admin": True,
         "system_generated": True,
         "local_only": False,
         "group_ids": ["system-admin"],
