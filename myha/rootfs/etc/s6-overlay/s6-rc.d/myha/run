@@ -4,4 +4,4 @@
 export MYHA_DATA_DIR=/data
 bashio::log.info "Starting myHA gateway"
 umask 077  # database and secrets under /data readable by the app user only
-exec /opt/myha/venv/bin/myha-gateway serve
+exec /opt/myha/venv/bin/python -m myha_gateway serve  # PYTHONPATH from the image

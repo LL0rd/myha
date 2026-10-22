@@ -24,9 +24,9 @@ fail() { docker logs "$1" 2>&1 || true; echo "smoke test failed: $2" >&2; exit 1
 
 # 1. Gateway alone: --entrypoint bypasses /init (s6). Created before the start so the trap
 # removes it even if the start fails; no --rm, so a crashed container keeps its logs.
-gw=$(docker create --entrypoint /opt/myha/venv/bin/myha-gateway \
+gw=$(docker create --entrypoint /opt/myha/venv/bin/python \
   -e MYHA_DATA_DIR=/data -e MYHA_PUBLIC_ENABLED=1 -e MYHA_PUBLIC_ORIGIN="http://127.0.0.1:$port" \
-  --tmpfs /data -p "127.0.0.1:$port:8443" "$image" serve)
+  --tmpfs /data -p "127.0.0.1:$port:8443" "$image" -m myha_gateway serve)
 trap 'docker rm -f "$gw" >/dev/null 2>&1 || true' EXIT
 docker start "$gw" >/dev/null
 for _ in $(seq 1 30); do
@@ -50,7 +50,10 @@ docker exec "$gw" "$py" -c "import myha_gateway" || fail "$gw" "myha_gateway not
 if docker exec "$gw" "$py" -c "import myha_simulator" 2>/dev/null; then
   fail "$gw" "myha_simulator is in the image"
 fi
-echo "image: myha_gateway imports, myha_simulator does not"
+# The gateway is not installed: no myha distribution and no launcher in the venv.
+docker exec "$gw" sh -c '! ls /opt/myha/venv/bin/myha-* /opt/myha/venv/lib/python3.13/site-packages/myha* 2>/dev/null' \
+  || fail "$gw" "the venv contains an installed myha package or launcher"
+echo "image: myha_gateway imports from the source, myha_simulator does not, nothing myha installed"
 
 # 2. Through /init: s6 starts the service, the gateway comes up, docker stop ends with exit 0.
 # Waits for the gateway itself: s6 reports "successfully started" as soon as run is spawned.
