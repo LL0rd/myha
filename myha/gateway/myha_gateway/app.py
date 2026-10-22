@@ -116,9 +116,10 @@ def create_public_app(ctx: AppContext) -> FastAPI:
     app = _app(ctx, validation_details=False)
     app.include_router(health.router)
     serve_bundle(app, settings.web_dist / "guest", "index.html")
-    # Plain ws: only for a plain http origin, which only the dev/test override allows.
-    allow_ws = (ctx.public_origin or "").startswith("http://")
-    csp = content_security_policy(frame_ancestors="'none'", allow_ws=allow_ws)
+    # WebSockets only to the public origin itself: wss://host, ws://host for the http override.
+    origin = ctx.public_origin
+    connect = "'self'" if origin is None else f"'self' {origin.replace('http', 'ws', 1)}"
+    csp = content_security_policy(frame_ancestors="'none'", connect=connect)
     app.add_middleware(SecurityHeadersMiddleware, csp=csp)
     return app
 
@@ -131,7 +132,7 @@ def create_admin_app(ctx: AppContext) -> FastAPI:
     app.include_router(session.router)
     serve_bundle(app, ctx.settings.web_dist / "admin", "admin.html")
     # Ingress frames the page under the HA origin, which may be plain http.
-    csp = content_security_policy(frame_ancestors="'self'", allow_ws=True)
+    csp = content_security_policy(frame_ancestors="'self'", connect="'self' wss: ws:")
     app.add_middleware(SecurityHeadersMiddleware, csp=csp)
     # Keep this the last add_middleware call: the last one added is the outermost.
     app.add_middleware(PeerGuardMiddleware, trusted_peer=ctx.settings.trusted_ingress_peer)

@@ -1,5 +1,6 @@
 import logging
 
+import aiosqlite
 import pytest
 
 from myha_gateway.logsetup import RedactionFilter, setup_logging
@@ -40,6 +41,33 @@ def test_redaction_rules(message: str, expected: str) -> None:
     assert redact(message) == expected
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ('body {\\"poll_token\\": \\"abc\\"}', 'body {\\"poll_token\\": \\"<redacted>'),
+        ('{\\"csrf\\":\\"abc\\",\\"x\\":1}', '{\\"csrf\\":\\"<redacted>'),
+        ("GET /pair?code%3D482913", "GET /pair?code%3D<redacted>"),
+        ("cookie%3Aabc", "cookie%3A<redacted>"),
+        ("SESSION%3dabc", "SESSION%3d<redacted>"),
+        (
+            "pairing code=482913 pin: 1234 csrf=abc session: s1 poll=p1 secret=s",
+            "pairing code=<redacted> pin: <redacted> csrf=<redacted> session: <redacted> "
+            "poll=<redacted> secret=<redacted>",
+        ),
+        ("invite_code=482913", "invite_code=<redacted>"),
+        ("pairing_code: 123456 code=482913", "pairing_code: <redacted> code=<redacted>"),
+        ("barcode: 4006381333931 spin: 3", "barcode: 4006381333931 spin: 3"),
+        (
+            "status_code=200 error_code: E1 reason_code=supervisor_version public_code=CONFLICT",
+            "status_code=200 error_code: E1 reason_code=supervisor_version public_code=CONFLICT",
+        ),
+        ("HTTP code=404, code: 503", "HTTP code=404, code: 503"),
+    ],
+)
+def test_redaction_corpus(message: str, expected: str) -> None:
+    assert redact(message) == expected
+
+
 def test_redacts_format_args() -> None:
     assert redact("token=%s", "xyz") == "token=<redacted>"
 
@@ -60,6 +88,23 @@ def test_setup_logging_redacts_records_from_child_loggers(
         root.handlers[:] = handlers
         root.setLevel(level)
     assert "token=<redacted>" in capsys.readouterr().err
+
+
+async def test_debug_logging_never_shows_bound_database_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, driver = logging.getLogger(), logging.getLogger("aiosqlite")
+    handlers, level, driver_level = root.handlers[:], root.level, driver.level
+    driver.setLevel(logging.NOTSET)
+    try:
+        setup_logging("debug")
+        async with aiosqlite.connect(":memory:") as db:  # what SQLAlchemy drives below
+            await db.execute("SELECT ?", ("hunter2",))  # too short for the redaction rules
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)
+        driver.setLevel(driver_level)
+    assert "hunter2" not in capsys.readouterr().err
 
 
 def test_setup_logging_redacts_exception_text(capsys: pytest.CaptureFixture[str]) -> None:

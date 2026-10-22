@@ -31,6 +31,14 @@ def _server(
         ssl_keyfile=keyfile,
         proxy_headers=False,
         server_header=False,
+        # h11 caps an incomplete header block at 16 KiB: 400 and a close.
+        # shortcut: a block that arrives complete in one read (up to 256 KiB) still passes,
+        # there is no deadline for a slowly sent block (slowloris) and no JSON body cap yet;
+        # Plan 2 adds the deadline and the body cap
+        http="h11",
+        h11_max_incomplete_event_size=16 * 1024,
+        limit_concurrency=200,  # beyond: 503 instead of unbounded tasks
+        timeout_keep_alive=5,
         ws_max_size=65536,
         log_config=None,
         access_log=True,

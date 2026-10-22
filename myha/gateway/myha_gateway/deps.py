@@ -131,9 +131,9 @@ class AppContext:
                 tls = (cert, key)
             elif instance.tls_mode != "proxy":
                 return f"TLS mode {instance.tls_mode!r} is neither tls nor proxy"
-            # shortcut: proxy CIDRs are only checked for presence; parsing them
-            # (ipaddress.ip_network) and the proxy peer guard come with Plan 3
-            elif not instance.proxy_cidrs:
-                return "proxy mode without proxy CIDRs"
+            else:
+                # shortcut: without the CIDR peer guard a proxy-mode listener would answer
+                # everyone, so it stays closed; Plan 3 Task 11.2 adds the guard and opens it
+                return "proxy mode is not available yet"
         self.public_ready, self.public_origin, self.public_tls = True, origin, tls
         return None

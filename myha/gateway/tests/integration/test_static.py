@@ -16,7 +16,7 @@ from tests.helpers import TRUSTED, call
 Factory = Callable[[AppContext], FastAPI]
 IMMUTABLE = "public, max-age=31536000, immutable"
 CSP = (
-    "default-src 'self'; connect-src 'self' wss:{ws}; img-src 'self' data:; "
+    "default-src 'self'; connect-src {connect}; img-src 'self' data:; "
     "style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors {frame}; "
     "base-uri 'self'; form-action 'self'"
 )
@@ -232,7 +232,8 @@ async def test_every_response_carries_csp_and_hardening_headers(
     dist: Path, factory: Factory, frame: str, path: str
 ) -> None:
     r = await call(await make(factory), "GET", path)
-    assert r.headers["content-security-policy"] == CSP.format(ws=" ws:", frame=frame)
+    connect = "'self' ws://testserver" if frame == "'none'" else "'self' wss: ws:"
+    assert r.headers["content-security-policy"] == CSP.format(connect=connect, frame=frame)
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["referrer-policy"] == "no-referrer"
 
@@ -242,16 +243,16 @@ async def test_json_responses_are_never_cached(dist: Path) -> None:
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
 
 
-async def test_public_csp_drops_plain_ws_for_https_origin(
+async def test_public_csp_connects_only_to_its_own_origin(
     dist: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "https://guest.example")
+    monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "https://guest.example:8443")
     public, admin = await make(create_public_app), await make(create_admin_app)
     csp = (await call(public, "GET", "/")).headers["content-security-policy"]
-    assert csp == CSP.format(ws="", frame="'none'") and " ws:" not in csp
+    assert csp == CSP.format(connect="'self' wss://guest.example:8443", frame="'none'")
     # Ingress may serve the admin page over plain http whatever the public origin is.
     admin_csp = (await call(admin, "GET", "/")).headers["content-security-policy"]
-    assert admin_csp == CSP.format(ws=" ws:", frame="'self'")
+    assert admin_csp == CSP.format(connect="'self' wss: ws:", frame="'self'")
 
 
 @pytest.mark.parametrize("path", ["/", "/admin.html", "/assets/a.js", "/api/v1/admin/nope"])

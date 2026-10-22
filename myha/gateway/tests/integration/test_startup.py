@@ -198,6 +198,35 @@ async def test_settings_override_opens_plain_http_with_its_origin(
         assert r.status_code == 200 and r.json()["client_ip"] == "127.0.0.1"
 
 
+async def test_public_listener_refuses_an_oversized_header_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with serving(local(tmp_path, **OVERRIDE), monkeypatch) as servers:
+        await until(lambda: len(servers) == 2 and servers[1].started)
+        port = port_of(servers[1])
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        answer = bytearray()
+
+        async def read_to_the_end() -> None:  # alongside the writes: a reset drops unread data
+            with contextlib.suppress(ConnectionError):
+                while chunk := await reader.read(4096):
+                    answer.extend(chunk)
+
+        reading = asyncio.create_task(read_to_the_end())
+        big = b"GET /healthz HTTP/1.1\r\nHost: x\r\nX-Big: " + b"a" * 64 * 1024 + b"\r\n\r\n"
+        with contextlib.suppress(ConnectionError):  # the server closes before it has all
+            for start in range(0, len(big), 1024):  # in pieces, as a network delivers it
+                writer.write(big[start : start + 1024])
+                await writer.drain()
+                await asyncio.sleep(0.001)
+        async with asyncio.timeout(5):
+            await reading  # ends at EOF: the server closed the connection
+        writer.close()
+        assert bytes(answer).startswith(b"HTTP/1.1 400 Bad Request\r\n"), bytes(answer[:80])
+        r = await healthz(f"http://127.0.0.1:{port}")  # a normal request still works
+        assert r.status_code == 200
+
+
 async def test_restore_export_keeps_public_closed_and_creates_no_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -285,24 +314,23 @@ async def test_tls_mode_with_unusable_key_keeps_public_closed(
 @pytest.mark.parametrize(
     ("origin", "mode", "cidrs", "reason"),
     [
-        ("https://guest.example", "proxy", CIDRS, None),
-        ("https://guest.example:8443", "proxy", CIDRS, None),
+        # Closed until Plan 3 guards the proxy peers: open, it would answer everyone.
+        ("https://guest.example", "proxy", CIDRS, "proxy mode is not available yet"),
+        ("https://guest.example:8443", "proxy", [], "proxy mode is not available yet"),
         (None, "proxy", CIDRS, "no public origin configured"),
-        ("https://guest.example", "proxy", [], "proxy mode without proxy CIDRs"),
         ("https://guest.example", None, CIDRS, "TLS mode None is neither tls nor proxy"),
         ("https://guest.example", "tls", CIDRS, "certificate or key path missing"),
         ("http://guest.example", "proxy", CIDRS, "is not https://host[:port] as browsers"),
     ],
 )
 async def test_public_decision_from_the_instance(
-    origin: str | None, mode: str | None, cidrs: list[str], reason: str | None, tmp_path: Path
+    origin: str | None, mode: str | None, cidrs: list[str], reason: str, tmp_path: Path
 ) -> None:
     ctx = await AppContext.create(Settings(data_dir=tmp_path))
     ctx.instance = Instance(public_origin=origin, tls_mode=mode, proxy_cidrs=cidrs)
     got = ctx.refresh_public()
-    assert got is None if reason is None else got is not None and reason in got
-    assert ctx.public_ready is (reason is None) and ctx.public_tls is None
-    assert ctx.public_origin == (origin if reason is None else None)
+    assert got is not None and reason in got
+    assert not ctx.public_ready and ctx.public_origin is None and ctx.public_tls is None
 
 
 @pytest.mark.parametrize(

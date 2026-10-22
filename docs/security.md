@@ -56,6 +56,13 @@ against:
   origin and never follows redirects, because a redirect to another host name or an IP address
   would escape the pin.
 
+## Known gaps
+
+- **Request limits on the public listener are partial.** It caps an incomplete header block at
+  16 KiB and concurrent connections at 200, but a complete oversized header block that arrives
+  in one read, a slowly sent header block (slowloris) and oversized JSON bodies stay unlimited
+  until Plan 2 Task 5a.1.
+
 ## Argon2id parameters
 
 Resident passwords will be hashed with Argon2id (`argon2-cffi`). The parameters are chosen so

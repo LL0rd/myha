@@ -11,7 +11,14 @@ from starlette.exceptions import HTTPException
 
 # Below 500 the framework raises HTTPException for routing (404, 405), unparsable bodies (400)
 # and its security helpers (401); every other client error maps to INVALID_PARAMETERS.
-_HTTP_CODES = {401: "UNAUTHENTICATED", 404: "NOT_FOUND", 405: "ACTION_NOT_ALLOWED"}
+_HTTP_CODES = {
+    401: "UNAUTHENTICATED",
+    403: "UNAUTHENTICATED",
+    404: "NOT_FOUND",
+    405: "ACTION_NOT_ALLOWED",
+    409: "CONFLICT",
+    429: "RATE_LIMITED",
+}
 # On every response: the header middleware adds them inside the apps, the responses sent from
 # outside it (the peer guard's 403, the 500 below) carry them explicitly.
 SAFETY_HEADERS = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}

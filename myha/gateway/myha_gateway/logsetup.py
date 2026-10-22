@@ -7,13 +7,18 @@ _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _RULES = (
     # Must run first: in odd formats like "authorization=[Bearer x]" the key rule alone leaks x.
     (re.compile(r"(bearer\s+)\S+", re.IGNORECASE), r"\1<redacted>"),
-    # key=value, key: value, key = value, quoted keys, Bearer/Basic scheme; key and scheme stay.
+    # key=value, key: value, key = value, quoted or JSON-escaped keys, URL-encoded = and :
+    # (%3D, %3A), Bearer/Basic scheme; key and scheme stay. code and pin only as whole words
+    # or after "_", so that "barcode: x" or "spin: x" stay readable; diagnostic codes
+    # (status_, error_, reason_, public_code, or code= with a 3-digit HTTP status) stay too.
     # shortcut: only the first token of a value is redacted ("a=1; b=2" keeps b=2);
     # widen the value pattern once cookie headers get logged
     (
         re.compile(
-            r"""((?:secret|token|password|authorization|ticket|cookie)["']?\s*[=:]\s*["']?"""
-            r"(?:(?:bearer|basic)\s+)?)\S+",
+            r"((?:secret|token|password|authorization|ticket|cookie|csrf|session|poll"
+            r"|(?<![a-z])pin|(?<![a-z])(?<!status_)(?<!error_)(?<!reason_)(?<!public_)code"
+            r"""(?!\\?["']?\s*(?:[=:]|%3[ad])\s*\\?["']?\d{3}(?!\d)))"""
+            r"""\\?["']?\s*(?:[=:]|%3[ad])\s*\\?["']?(?:(?:bearer|basic)\s+)?)\S+""",
             re.IGNORECASE,
         ),
         r"\1<redacted>",
@@ -54,3 +59,5 @@ def setup_logging(level: str) -> None:
     # On the handler, because logger filters never see records propagated from child loggers.
     handler.addFilter(RedactionFilter())
     logging.basicConfig(level=level.upper(), format=_FORMAT, handlers=[handler], force=True)
+    # aiosqlite logs every statement with its bound values at debug, past hide_parameters.
+    logging.getLogger("aiosqlite").setLevel(logging.INFO)

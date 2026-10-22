@@ -104,6 +104,28 @@ async def test_server_side_http_error_maps_to_upstream_unavailable(ctx: AppConte
     assert r.json() == {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Service Unavailable"}}
 
 
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (403, "UNAUTHENTICATED"),
+        (409, "CONFLICT"),
+        (429, "RATE_LIMITED"),
+        (418, "INVALID_PARAMETERS"),
+    ],
+)
+async def test_framework_http_errors_map_to_public_codes(
+    ctx: AppContext, status: int, code: str
+) -> None:
+    async def refused() -> None:
+        raise HTTPException(status, "Refused")
+
+    app = create_public_app(ctx)
+    app.get("/api/v1/refused")(refused)
+    r = await call(app, "GET", "/api/v1/refused")
+    assert r.status_code == status
+    assert r.json() == {"error": {"code": code, "message": "Refused"}}
+
+
 async def test_http_401_maps_to_unauthenticated(ctx: AppContext) -> None:
     async def unauthorized() -> None:  # what FastAPI's security helpers raise
         raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})

@@ -20,9 +20,8 @@ mimetypes.add_type("font/woff", ".woff")
 _IMMUTABLE = "public, max-age=31536000, immutable"  # Vite puts a content hash in asset names
 
 
-def content_security_policy(*, frame_ancestors: str, allow_ws: bool) -> str:
-    """No external resources; plain ``ws:`` only where the page itself may come over http."""
-    connect = "'self' wss: ws:" if allow_ws else "'self' wss:"
+def content_security_policy(*, frame_ancestors: str, connect: str) -> str:
+    """No external resources; ``connect`` lists where fetch and WebSockets may go."""
     return (
         f"default-src 'self'; connect-src {connect}; img-src 'self' data:; "
         f"style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors {frame_ancestors}; "
