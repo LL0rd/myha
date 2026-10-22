@@ -4,8 +4,8 @@ import { INGRESS, PUBLIC_ORIGIN } from "./helpers/constants.mjs";
 import { stackState } from "./helpers/gateway";
 
 const ROOM_203 = ["Room 203 bedside", "Room 203 blind", "Room 203 ceiling", "Room 203 humidity", "Room 203 radiator"];
-// shortcut: phase 1 of Task 8.5; MYHA_E2E_PHASE_2=1 runs these early, drop the skips once 6.3, 6.4 and 7.1 are on main.
-const PHASE_2 = "needs the event stream, actions and admin preview (Tasks 6.3, 6.4, 7.1)";
+// shortcut: MYHA_E2E_PHASE_2=1 runs the skipped cases early; drop the skips once 6.4 and 7.1 are on main.
+const PHASE_2 = "needs actions and the admin preview (Tasks 6.4, 7.1)";
 
 const { joinUrls, guestState } = stackState();
 
@@ -157,14 +157,16 @@ test.describe("as the joined guest", () => {
   });
 
   test("(5) revoking the session ends the guest page within 5 s", async ({ page }) => {
-    test.skip(!process.env.MYHA_E2E_PHASE_2, PHASE_2);
+    await expect(page.getByText("Connected")).toBeVisible(); // the push path: the open event socket
     const { api, headers } = await admin();
+    // Shapes from myha_gateway/api/admin/sessions.py.
     const { sessions } = (await (await api.get("/api/v1/admin/sessions")).json()) as {
-      sessions: { id: string; revoked_at: string | null }[];
+      sessions: { id: string; purpose: string; revoked_at: string | null; principal: { type: string } | null }[];
     };
-    const live = sessions.filter((s) => s.revoked_at === null);
+    const live = sessions.filter((s) => s.revoked_at === null && s.purpose === "access" && s.principal?.type === "guest");
     expect(live).toHaveLength(1);
     expect((await api.post(`/api/v1/admin/sessions/${live[0]!.id}/revoke`, { headers })).status()).toBe(204);
     await expect(page.getByRole("heading", { name: "Access ended" })).toBeVisible({ timeout: 5_000 });
+    await expect(page).toHaveURL(`${PUBLIC_ORIGIN}/ended`);
   });
 });
