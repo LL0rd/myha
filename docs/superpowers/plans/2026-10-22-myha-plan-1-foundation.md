@@ -355,7 +355,7 @@ Der `--entrypoint` umgeht `/init` (s6) absichtlich; der s6-Pfad wird in WP1 auf 
 **Files:**
 - Create: `scripts/install-on-ha.py` (PEP-723-Header: `# /// script\n# dependencies = ["websockets>=15", "httpx>=0.28"]\n# ///`; Aufruf `uv run scripts/install-on-ha.py <cmd>`)
 
-- [ ] **Step 1: Verhalten.** Liest `~/.claude.json`, findet den MCP-Eintrag `homeassistant` (`url`, `headers.Authorization`); leitet daraus `ws://<host>/api/websocket` und `http://<host>` ab; Token nie ausgeben. WS-Hilfsfunktion:
+- [ ] **Step 1: Verhalten.** Generisches Entwicklerwerkzeug: liest `HA_URL` (z. B. `http://homeassistant.local:8123`) und `HA_TOKEN` (langlebiger Zugriffstoken eines HA-Admins) aus der Umgebung, optional `--repo` (Default `https://github.com/LL0rd/myha`); leitet `ws://<host>/api/websocket` ab; Token nie ausgeben. Nichts im Skript verweist auf eine bestimmte Installation; Fable setzt die Variablen lokal aus einer ungetrackten Datei `.dev/ha.env` (im `.gitignore`). WS-Hilfsfunktion:
 
 ```python
 async def sup(ws, i, endpoint, method="get", data=None, timeout=None):

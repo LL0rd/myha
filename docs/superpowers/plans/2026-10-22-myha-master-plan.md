@@ -19,8 +19,12 @@ Das Design umfasst vier Phasen und 17 Arbeitspakete. Ein einzelner Plan mit voll
 | 1 Fundament | `2026-10-22-myha-plan-1-foundation.md` | WP0, WP1, WP2, WP3, WP4 | Repos, Tooling, CI, Add-on-Gerüst auf Dimitris HA, S0-Bericht, Simulator, HAClient, Datenmodell, Policy mit A06–A18, Ingress-Guard mit A01–A05 |
 | 2 Vertikaler Kern | `2026-10-22-myha-plan-2-vertical-core.md` | WP5a, WP6, WP7, WP8 | Gast-Redeem, Sessions, Projektion, Live-Events, Befehle, Preview, Gast-Web-UI; E2E Join → Aktion |
 | 3 Webpilot | `2026-10-22-myha-plan-3-webpilot.md` (folgt) | WP5b, WP9a, WP9b, WP10, WP11, WP12, WP13, WP14 | Admin-UI komplett, Aufenthalte, Setup, Backup/Restore, Paketierung, Installation auf dem echten HA, Doku |
-| 4 Native | `2026-10-22-myha-plan-4-native.md` (folgt) | WP15 | Android/Fire-App, iOS-Gerüst |
+| 4 Native | `2026-10-22-myha-plan-4-native.md` (folgt) | WP15 | Android-, Fire-OS- und iOS-App für den öffentlichen Store-Vertrieb: Capacitor-Shell, native Transport-Plugins, Scanner, sichere Ablage, Wandmodus, store-fertige Release-Pipelines (Android/Fire signiert auf Linux-Runnern, iOS auf GitHub-macOS-Runnern), Store-Metadaten, Datenschutzerklärung, Review-Demo. Vorbedingungen: Entwicklerkonten bei Apple, Google und Amazon |
 | Abschluss | dieser Masterplan, Abschnitt „WP16“ | WP16 | Fable-Review und Bericht |
+
+## Produktrahmen
+
+myHA ist ein Produkt für beliebige Betreiber und wird öffentlich vertrieben: der Kern als offenes HA-App-Repository, die Begleitapps über App Store, Google Play und Amazon Appstore (Design §1 „Produktrahmen“, §9). Daraus folgt für jeden Task: keine betreiberspezifischen Defaults, Pfade, Namen oder Zugangsdaten im Code; alle Texte in DE und EN; Dokumentation richtet sich an Betreiber, nicht an eine Person. Dimitris Home Assistant ist die Referenzinstallation Nr. 1 für Nachweise gegen echte Hardware, sonst nichts.
 
 ## Orchestrierung
 
