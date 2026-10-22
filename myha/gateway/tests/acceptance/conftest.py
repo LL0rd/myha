@@ -1,5 +1,6 @@
 """The admin app wired to the simulator and started with its real lifespan, seen from ingress."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -61,6 +62,18 @@ async def admin_app(ctx: AppContext, clocks: Clocks) -> AsyncIterator[FastAPI]:
     async with app.router.lifespan_context(app):
         assert ctx.ha.connected
         yield app
+
+
+@pytest.fixture
+async def quiet_timeguard(admin_app: FastAPI) -> None:
+    """Cancel the lifespan's time guard, so a hand-set ``instance.time_trusted`` stays.
+
+    Request it in tests that set the flag or the mark themselves: the running guard writes
+    the flag back on its next transition or mark write (real wall clock, every 60 s).
+    """
+    for task in asyncio.all_tasks():
+        if task.get_name() == "timeguard":
+            task.cancel()
 
 
 @pytest.fixture
