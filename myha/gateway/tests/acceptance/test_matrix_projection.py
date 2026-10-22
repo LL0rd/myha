@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from myha_gateway.adapters.base import WRITE_ACTIONS, Action, StateView
@@ -30,6 +31,7 @@ from myha_gateway.projection.dashboard import (
 )
 from myha_gateway.projection.schema import DashboardView
 from myha_simulator import fixtures
+from tests import policy_world, public_helpers
 from tests.helpers import (
     DURING_STAY,
     ROOM_GUEST_GRANTS,
@@ -42,8 +44,10 @@ from tests.helpers import (
     resident_context,
     room203_index,
 )
-from tests.policy_world import GUEST_SESSION, NOW, world
+from tests.policy_world import GUEST_SESSION, NOW
+from tests.public_helpers import World, browser_guest, new_stay, rows
 
+ctx, world = public_helpers.ctx, public_helpers.world  # the public app fixtures
 LAYOUT = tuple(
     UnitLayout(unit, f"Name {unit}", tuple(Card(res, f"Label {res}", None) for res in members))
     for unit, members in UNITS.items()
@@ -94,7 +98,7 @@ def assert_no_ha_detail(text: str) -> None:
 
 @pytest.fixture
 async def app_ctx(sim: SimHandle, tmp_path: Path) -> AsyncIterator[AppContext]:
-    async with world(sim, tmp_path) as ctx:
+    async with policy_world.world(sim, tmp_path) as ctx:
         yield ctx
 
 
@@ -318,7 +322,7 @@ def test_needs_review_is_read_only_and_blocked_is_hidden() -> None:
     assert set(found["res_203_trv"]) == {"id", "kind", "label", "icon", "state"}
 
 
-def test_a24_waiting_dashboard_is_empty() -> None:
+def test_status_waiting_and_expired_show_no_rooms() -> None:
     before = project(now=STAY_START - timedelta(minutes=1))
     assert public(before) == {"status": "waiting", "rooms": []}
     assert public(project(now=STAY_START))["status"] == "online"
@@ -365,3 +369,91 @@ def test_state_decimals_never_use_exponents() -> None:
     view = project_dashboard(guest_context(), room203_index(), views, LAYOUT, DURING_STAY)
     state = resources(view)["res_203_trv"]["state"]
     assert (state["target_c"], state["current_c"]) == ("100", "0.0000001")
+
+
+# --- GET /api/v1/dashboard on the public app, as a redeemed guest ---
+
+
+async def get_dashboard(world: World, secret: str) -> httpx.Response:
+    async with world.client() as client:
+        guest = await browser_guest(world, client, secret)
+        return await client.get("/api/v1/dashboard", headers={"Cookie": guest.cookie})
+
+
+def nulls(value: Any, key: str = "") -> set[str]:
+    """The keys anywhere in ``value`` whose value is null."""
+    if isinstance(value, dict):
+        return {k for k, v in value.items() if v is None} | {
+            found for k, v in value.items() for found in nulls(v, k)
+        }
+    if isinstance(value, list):
+        return {found for item in value for found in nulls(item, key)}
+    return set()
+
+
+async def test_dashboard_endpoint_projects_the_guest_session(world: World) -> None:
+    r = await get_dashboard(world, world.secrets[0])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"status", "rooms", "policy_version"}
+    assert body["status"] == "online"
+    assert isinstance(body["policy_version"], int)
+    assert [room["id"] for room in body["rooms"]] == ["unit_203"]
+    found = {res["id"]: res for res in body["rooms"][0]["resources"]}
+    assert set(found["res_203_trv"]["state"]) == {
+        "availability",
+        "observed_at",
+        "current_c",
+        "target_c",
+        "hvac_mode",
+    }
+    assert found["res_203_trv"]["capabilities"]["climate.set_mode"] == {"allowed": ["heat", "off"]}
+    assert found["res_203_light"]["capabilities"]["light.on"] == {}
+    # no "state": null, "intervals": null and the like: unset fields stay away
+    assert not nulls(body) & {"state", "capabilities", "intervals", "allowed", "rooms"}
+    assert '"intervals":null' not in r.text and '"state":null' not in r.text
+    assert_no_ha_detail(r.text)
+
+
+async def test_a24_waiting_dashboard_is_empty(world: World) -> None:
+    starts = public_helpers.now() + timedelta(days=2)
+    _, secrets = await new_stay(world.ctx, starts_at=starts, ends_at=starts + timedelta(days=3))
+    r = await get_dashboard(world, secrets[0])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["status"], body["rooms"]) == ("waiting", [])
+    assert isinstance(body["policy_version"], int)
+
+
+async def test_dashboard_needs_a_session(world: World) -> None:
+    async with world.client() as client:
+        r = await client.get("/api/v1/dashboard")
+        forged = await client.get("/api/v1/dashboard", headers={"Cookie": f"{world.cookie_name}=x"})
+    for answer in (r, forged):
+        assert (answer.status_code, answer.json()["error"]["code"]) == (401, "UNAUTHENTICATED")
+
+
+async def test_decide_error_is_upstream_unavailable_and_audited(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: Any) -> DashboardView:
+        raise ValueError("unknown role version room_guest@9")
+
+    monkeypatch.setattr("myha_gateway.api.public.dashboard.project_dashboard", broken)
+    r = await get_dashboard(world, world.secrets[0])
+    assert (r.status_code, r.json()["error"]["code"]) == (500, "UPSTREAM_UNAVAILABLE")
+    assert "room_guest" not in r.text
+    events = [e for e in await rows(world.ctx, db.AuditEvent) if e.operation == "decide_error"]
+    assert [(e.result, e.policy_version is not None) for e in events] == [("error", True)]
+    assert events[0].session_id is not None
+
+
+async def test_session_gone_since_the_check_is_unauthenticated(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def gone(*args: Any) -> None:
+        return None
+
+    monkeypatch.setattr(world.ctx.policy, "context_for_session", gone)
+    r = await get_dashboard(world, world.secrets[0])
+    assert (r.status_code, r.json()["error"]["code"]) == (401, "UNAUTHENTICATED")
