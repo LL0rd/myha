@@ -3,7 +3,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from starlette.types import Message
 
 from myha_gateway.app import create_admin_app, create_public_app
@@ -28,8 +28,11 @@ async def call(
     *,
     peer: str = TRUSTED,
     headers: dict[str, str] | None = None,
+    raise_app_exceptions: bool = True,
 ) -> httpx.Response:
-    transport = httpx.ASGITransport(app=app, client=(peer, 1))
+    transport = httpx.ASGITransport(
+        app=app, raise_app_exceptions=raise_app_exceptions, client=(peer, 1)
+    )
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         return await client.request(method, path, headers=headers)
 
@@ -64,6 +67,7 @@ async def test_admin_probe_shows_only_identity_and_forwarding_headers(ctx: AppCo
         "X-Real-IP": "192.168.1.20",
         "Authorization": "Bearer abc",
         "Cookie": "session=abc",
+        "X-Ingress-Path-Foo": "/not/echoed",
     }
     r = await call(create_admin_app(ctx), "GET", "/api/v1/admin/probe", headers=headers)
     assert r.json()["headers"] == {
@@ -97,6 +101,44 @@ async def test_wrong_method_keeps_error_shape(ctx: AppContext) -> None:
     r = await call(create_public_app(ctx), "POST", "/healthz")
     assert r.status_code == 405 and r.headers["allow"] == "GET"
     assert r.json()["error"]["code"] == "ACTION_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    ("factory", "path"),
+    [(create_public_app, "/healthz/"), (create_admin_app, "/api/v1/admin/probe/")],
+)
+async def test_trailing_slash_is_not_found_instead_of_redirect(
+    ctx: AppContext, factory: Callable[[AppContext], FastAPI], path: str
+) -> None:
+    r = await call(factory(ctx), "GET", path)
+    assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def crash() -> None:
+    raise RuntimeError("Bearer sup-secret")
+
+
+@pytest.mark.parametrize("factory", [create_public_app, create_admin_app])
+async def test_unhandled_error_is_json_500_without_internals(
+    ctx: AppContext, factory: Callable[[AppContext], FastAPI]
+) -> None:
+    app = factory(ctx)
+    app.get("/api/v1/crash")(crash)
+    r = await call(app, "GET", "/api/v1/crash", raise_app_exceptions=False)
+    assert r.status_code == 500
+    assert r.json() == {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Internal error"}}
+    assert "sup-secret" not in r.text
+
+
+async def test_server_side_http_error_maps_to_upstream_unavailable(ctx: AppContext) -> None:
+    async def unavailable() -> None:
+        raise HTTPException(503)
+
+    app = create_public_app(ctx)
+    app.get("/api/v1/unavailable")(unavailable)
+    r = await call(app, "GET", "/api/v1/unavailable")
+    assert r.status_code == 503
+    assert r.json() == {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Service Unavailable"}}
 
 
 async def echo(n: int) -> int:
@@ -159,4 +201,4 @@ async def test_peer_guard_denies_websocket_handshake(ctx: AppContext) -> None:
 
     scope = {"type": "websocket", "path": "/ws", "headers": [], "client": ("10.0.0.5", 1)}
     await create_admin_app(ctx)(scope, receive, send)
-    assert sent[0]["type"] == "websocket.http.response.start" and sent[0]["status"] == 403
+    assert sent == [{"type": "websocket.close", "code": 1008}]  # uvicorn answers HTTP 403

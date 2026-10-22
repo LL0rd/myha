@@ -10,7 +10,7 @@ from myha_gateway.errors import add_error_handlers, error_response
 
 
 class PeerGuardMiddleware:
-    """Pure ASGI guard: 403 for every HTTP or WebSocket request not sent by the trusted peer."""
+    """Pure ASGI guard: rejects every HTTP request and WebSocket not sent by the trusted peer."""
 
     def __init__(self, app: ASGIApp, trusted_peer: str) -> None:
         self.app = app
@@ -18,29 +18,34 @@ class PeerGuardMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         client = scope.get("client")
-        if scope["type"] in ("http", "websocket") and (
-            client is None or client[0] != self.trusted_peer
-        ):
-            response = error_response(
-                403, "UNAUTHENTICATED", "Only reachable through Home Assistant ingress"
-            )
-            await response(scope, receive, send)  # a WebSocket gets an HTTP denial response
-            return
-        await self.app(scope, receive, send)
+        trusted = client is not None and client[0] == self.trusted_peer
+        if scope["type"] == "http" and not trusted:
+            message = "Only reachable through Home Assistant ingress"
+            await error_response(403, "UNAUTHENTICATED", message)(scope, receive, send)
+        elif scope["type"] == "websocket" and not trusted:
+            # Closing before accept makes the server reject the handshake with HTTP 403.
+            await send({"type": "websocket.close", "code": 1008})
+        else:
+            await self.app(scope, receive, send)
+
+
+def _app(*, validation_details: bool) -> FastAPI:
+    """What both apps share: no docs, no slash redirects, one error shape."""
+    app = FastAPI(openapi_url=None, redirect_slashes=False)
+    add_error_handlers(app, validation_details=validation_details)
+    return app
 
 
 def create_public_app(ctx: AppContext) -> FastAPI:
-    """Guest-facing app: no admin route, no docs, never trusts forwarding headers."""
-    app = FastAPI(openapi_url=None)
-    add_error_handlers(app, validation_details=False)
+    """Guest-facing app: no admin route, never trusts forwarding headers."""
+    app = _app(validation_details=False)
     app.include_router(health.router)
     return app
 
 
 def create_admin_app(ctx: AppContext) -> FastAPI:
     """Admin app behind the Supervisor ingress proxy, reachable only from its peer address."""
-    app = FastAPI(openapi_url=None)
-    add_error_handlers(app, validation_details=True)
+    app = _app(validation_details=True)
     app.include_router(probe.router)
     # Keep this the last add_middleware call: the last one added is the outermost.
     app.add_middleware(PeerGuardMiddleware, trusted_peer=ctx.settings.trusted_ingress_peer)
