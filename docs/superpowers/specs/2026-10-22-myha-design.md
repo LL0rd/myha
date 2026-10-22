@@ -129,7 +129,7 @@ Die gemeinsame Web-UI wird **nicht** kopiert, sondern aus dem Submodule gebaut (
 |---|---|---|
 | `settings` | Pydantic-Settings aus Env/`/data/options.json`, Pfade, Defaults | `Settings` |
 | `app` | Erzeugt `AdminApp`, `PublicApp`, Lifespan (Migration → Restore-Check → HAClient → Listener) | `create_admin_app()`, `create_public_app()`, `main()` |
-| `db` | SQLAlchemy 2 (async, `aiosqlite`), WAL, `foreign_keys=ON`, `secure_delete=ON`, Alembic | `Session`, Modelle |
+| `db` | SQLAlchemy 2 (async, `aiosqlite`), WAL mit `synchronous=FULL` (ein Stromausfall darf keinen Widerruf, Checkout, Redeem oder Refresh-Wechsel zurückrollen; ein fsync je Schreib-Commit), `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout` 5 s, Schreibtransaktionen `BEGIN IMMEDIATE`, Alembic (App und CLI migrieren mit derselben Engine, atomar) | `Session`, Modelle |
 | `ha.client` | WS-Verbindung, Reconnect mit Backoff, `get_states`, Registries, `subscribe_events`, `call_service`, `get_config`, Zeitplausibilität, `adapter_locked` | `HAClient`, `HAState`, `ServiceResult(context_id)` |
 | `ha.supervisor` | `GET http://supervisor/info`, Versionsvergleich, `addons/self/info` (Ingress-URL) | `SupervisorInfo` |
 | `adapters` | Je Kind (`light`, `switch`, `climate`, `cover`, `sensor`): Fähigkeiten aus HA-Attributen ableiten, Aktion → expliziter HA-Aufruf, Erwartung für Zustandsbestätigung, `StateView` aus HA-Zustand | `Adapter.capabilities(state, registry)`, `Adapter.translate(action, params)`, `Adapter.expectation(...)`, `Adapter.state_view(state)` |
