@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Literal, get_args
 
 from myha_gateway.adapters.base import WRITE_ACTIONS, Action, DeviceCapabilities
+from myha_gateway.policy.codes import DecisionCode
 from myha_gateway.policy.context import EffectiveContext, RoleBinding
 from myha_gateway.policy.model import Bound, Fence, Grant, Interval, Mode, RoleRules, parameter_name
 
@@ -23,6 +24,7 @@ _FAR = 1_000_000  # rule decimals have at most six integer digits ...
 _MICRO = 1_000_000  # ... and six decimals, so each is a whole number of millionths
 _CONTEXT = Context(prec=28)  # independent of the caller's decimal context
 _NOTHING = (Decimal(1), Decimal(0))  # an empty check range: low > high, no target passes
+_ENDS: Mapping[Action, Decimal] = {Action.COVER_OPEN: Decimal(100), Action.COVER_CLOSE: Decimal(0)}
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,8 @@ class PolicyIndex:
         grants = self.grants(ctx, resource_id, action)
         if not grants or self.denied(ctx, resource_id, action):
             return None
+        if self.end_code(ctx, resource_id, action) is not None:  # a button that always fails
+            return None
         matched = tuple(grants)
         fences = self.fences(ctx, resource_id, action)
         name = parameter_name(action)
@@ -208,28 +212,34 @@ class PolicyIndex:
         return result
 
     def check_ranges(
-        self, ctx: EffectiveContext, resource_id: str
+        self,
+        ctx: EffectiveContext,
+        resource_id: str,
+        action: Action = Action.CLIMATE_SET_TEMPERATURE,
     ) -> tuple[tuple[Decimal, Decimal], ...] | None:
-        """The ranges a reported target may lie in for ``climate.set_mode`` cool or heat (E7).
+        """The unsnapped ranges a reported value may lie in for the action's number.
 
-        Unsnapped: a device's setpoint need not lie on the grid (design §4.1). With
-        ``climate.set_temperature`` granted and not denied: each grant interval's part inside
-        the device limits and every fence (a grant without a rule: the request schema range),
-        also while the resource cannot offer the action. Otherwise the fences cut to the
-        device limits, as one range. Neither grant nor fence: ``None``, no check. An empty
-        tuple lets no target pass.
+        For ``climate.set_temperature`` these are the E7 ranges before ``climate.set_mode`` cool
+        or heat: a device's setpoint need not lie on the grid (design §4.1). With the action
+        granted: each grant interval's part inside the device limits and every fence (a grant
+        without a rule: the request schema range), also while the resource cannot offer the
+        action and also when a deny takes it, since a deny never widens a check. Otherwise
+        the fences cut to the device limits, as one range. Neither grant nor fence: ``None``,
+        no check. An empty tuple lets no value pass. Raises ``ValueError`` for an action
+        without a number.
         """
-        action = Action.CLIMATE_SET_TEMPERATURE
+        name = parameter_name(action)
+        if name is None or name == "mode":
+            raise ValueError(f"{action} takes no number")
         resource = self.resource(resource_id)
         if resource is None:
             return None
-        denied = self.denied(ctx, resource_id, action)
-        grants = {} if denied else self.grants(ctx, resource_id, action)
+        grants = self.grants(ctx, resource_id, action)  # a deny removes the action, not limits
         fences = self.fences(ctx, resource_id, action)
-        bounds = [b for fence in fences if (b := fence.parameters.target_c) is not None]
+        bounds = [b for fence in fences if (b := getattr(fence.parameters, name)) is not None]
         if not grants and not bounds:
             return None
-        limits = _limits("target_c", resource.capabilities)
+        limits = _limits(name, resource.capabilities)
         if limits is None:
             return ()
         low, high = limits
@@ -237,12 +247,33 @@ class PolicyIndex:
             low, high = max(low, bound.min), min(high, bound.max)
         if not grants:
             return ((low, high),) if low <= high else ()
-        ranges: list[tuple[Decimal, Decimal]] = []
-        for grant in grants.values():
-            rule = grant.parameters.target_c
-            spans = [(low, high)] if rule is None else [(i.min, i.max) for i in rule.intervals]
-            ranges += [(max(a, low), min(b, high)) for a, b in spans]
-        return tuple(dict.fromkeys((a, b) for a, b in ranges if a <= b))
+        return tuple(dict.fromkeys(_cut(grants, name, low, high)))
+
+    def end_code(
+        self, ctx: EffectiveContext, resource_id: str, action: Action
+    ) -> DecisionCode | None:
+        """Whether ``cover.open`` (position 100) or ``cover.close`` (0) runs past a position rule.
+
+        The end must lie in a ``cover.set_position`` grant's unsnapped range, else
+        ``PARAM_OUT_OF_RANGE``, and inside every position fence, else ``FENCE_VIOLATION``;
+        the grant comes first, as in decide's order. A deny on set_position never widens the
+        check. ``None``: no rule stands in the way, as for every other action (design §4.1).
+        """
+        end = _ENDS.get(action)
+        resource = self.resource(resource_id)
+        if end is None or resource is None:
+            return None
+        position = Action.COVER_SET_POSITION
+        grants = self.grants(ctx, resource_id, position)  # a deny removes the action, not limits
+        low, high, _ = _SCHEMA["position_pct"]
+        if grants and not any(a <= end <= b for a, b in _cut(grants, "position_pct", low, high)):
+            return DecisionCode.PARAM_OUT_OF_RANGE
+        bounds = [
+            fence.parameters.position_pct for fence in self.fences(ctx, resource_id, position)
+        ]
+        if any(bound is not None and not bound.contains(end) for bound in bounds):
+            return DecisionCode.FENCE_VIOLATION
+        return None
 
     def check_range(
         self, ctx: EffectiveContext, resource_id: str
@@ -257,6 +288,19 @@ class PolicyIndex:
         if not ranges:
             return _NOTHING
         return min(low for low, _ in ranges), max(high for _, high in ranges)
+
+
+def _cut(
+    grants: Mapping[str, Grant], name: str, low: Decimal, high: Decimal
+) -> list[tuple[Decimal, Decimal]]:
+    """Each grant interval for ``name`` inside ``[low, high]``, unsnapped and in grant order; a
+    grant without a rule spans it all."""
+    spans: list[tuple[Decimal, Decimal]] = []
+    for grant in grants.values():
+        rule = getattr(grant.parameters, name)
+        parts = [(low, high)] if rule is None else [(i.min, i.max) for i in rule.intervals]
+        spans += [(max(a, low), min(b, high)) for a, b in parts]
+    return [(a, b) for a, b in spans if a <= b]
 
 
 def _offered(resource: ResourceRef, action: Action) -> bool:

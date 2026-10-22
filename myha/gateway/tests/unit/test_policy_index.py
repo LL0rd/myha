@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from myha_gateway.adapters.base import Action, DeviceCapabilities
 from myha_gateway.db import models as db
+from myha_gateway.policy.codes import DecisionCode
 from myha_gateway.policy.context import (
     EffectiveContext,
     RoleBinding,
@@ -1177,7 +1178,8 @@ def test_check_ranges_count_a_grant_the_device_cannot_offer_now() -> None:
     assert index.check_ranges(fenced, review.id) == ((Decimal(19), Decimal(22)),)  # not 8..22
 
 
-def test_a_denied_temperature_grant_leaves_the_check_to_the_fences() -> None:
+def test_a_deny_on_set_temperature_never_widens_the_check() -> None:
+    """A deny takes the action away, not the limits of its grants (design §4.1)."""
     grant = {
         "resources": ["res_203_trv"],
         "actions": ["climate.set_temperature"],
@@ -1186,11 +1188,11 @@ def test_a_denied_temperature_grant_leaves_the_check_to_the_fences() -> None:
     deny = {"resources": ["res_203_trv"], "actions": ["climate.set_temperature"]}
     rules = RoleRules.model_validate({"grants": [grant], "denies": [deny]})
     index = trv_index(rules, climate())
-    assert index.check_ranges(ctx(STAY_BINDING), "res_203_trv") is None
+    assert index.check_ranges(ctx(STAY_BINDING), "res_203_trv") == ((Decimal(19), Decimal(24)),)
     fenced = ctx(STAY_BINDING, fences=(fence(),))
-    assert index.check_ranges(fenced, "res_203_trv") == ((Decimal(8), Decimal(22)),)
+    assert index.check_ranges(fenced, "res_203_trv") == ((Decimal(19), Decimal(22)),)
     below = ctx(STAY_BINDING, fences=(fence(parameters={"target_c": {"min": "0", "max": "5"}}),))
-    assert index.check_ranges(below, "res_203_trv") == ()  # the device starts at 8
+    assert index.check_ranges(below, "res_203_trv") == ()  # the grant starts at 19
 
 
 def test_check_range_is_the_hull_of_the_check_ranges() -> None:
@@ -1226,3 +1228,101 @@ def test_check_ranges_write_device_limits_plainly(low: str, high: str, written: 
     index = PolicyIndex({("room_guest", 1): ROOM_GUEST}, {ref.id: ref}, {"unit_lr": {ref.id}})
     ranges = index.check_ranges(wide, ref.id)
     assert ranges is not None and [str(limit) for limit in ranges[0]] == written
+
+
+BLIND = "res_203_blind"
+COVER = DeviceCapabilities(
+    "cover",
+    frozenset(
+        {Action.COVER_OPEN, Action.COVER_CLOSE, Action.COVER_STOP, Action.COVER_SET_POSITION}
+    ),
+)
+OPEN_CLOSE = {"resources": [BLIND], "actions": ["cover.open", "cover.close"]}
+ANY_POSITION = {"resources": [BLIND], "actions": ["cover.set_position"]}
+
+
+def positions(*ranges: tuple[str, str, str]) -> dict[str, Any]:
+    intervals = [{"min": low, "max": high, "step": step} for low, high, step in ranges]
+    rule = {"position_pct": {"intervals": intervals}}
+    return {"resources": [BLIND], "actions": ["cover.set_position"], "parameters": rule}
+
+
+def blind_index(*grants: dict[str, Any], denies: tuple[dict[str, Any], ...] = ()) -> PolicyIndex:
+    ref = ResourceRef(BLIND, "unit_203", "cover", "confirmed", COVER)
+    rules = RoleRules.model_validate({"grants": [OPEN_CLOSE, *grants], "denies": list(denies)})
+    return PolicyIndex({("room_guest", 1): rules}, {ref.id: ref}, {"unit_203": {ref.id}})
+
+
+def position_fence(low: str, high: str) -> dict[str, Any]:
+    bound = {"position_pct": {"min": low, "max": high}}
+    return fence(action="cover.set_position", parameters=bound)
+
+
+def ends(index: PolicyIndex, *fences: dict[str, Any]) -> tuple[DecisionCode | None, ...]:
+    """The end codes of cover.open and cover.close."""
+    context = ctx(STAY_BINDING, fences=fences)
+    return tuple(index.end_code(context, BLIND, a) for a in (Action.COVER_OPEN, Action.COVER_CLOSE))
+
+
+OUT, FENCED = DecisionCode.PARAM_OUT_OF_RANGE, DecisionCode.FENCE_VIOLATION
+
+
+def test_check_ranges_take_any_number_unsnapped() -> None:
+    index = blind_index(positions(("20", "80", "3")))
+    action = Action.COVER_SET_POSITION
+    assert index.check_ranges(ctx(STAY_BINDING), BLIND, action) == ((Decimal(20), Decimal(80)),)
+    fenced = ctx(STAY_BINDING, fences=(position_fence("0", "70"),))
+    assert index.check_ranges(fenced, BLIND, action) == ((Decimal(20), Decimal(70)),)
+    free = blind_index(ANY_POSITION)
+    assert free.check_ranges(ctx(STAY_BINDING), BLIND, action) == ((Decimal(0), Decimal(100)),)
+    with pytest.raises(ValueError, match="takes no number"):
+        index.check_ranges(ctx(STAY_BINDING), BLIND, Action.COVER_OPEN)
+
+
+def test_without_a_position_rule_open_and_close_are_not_checked() -> None:
+    assert ends(blind_index()) == (None, None)
+    assert ends(blind_index(ANY_POSITION)) == (None, None)
+    assert blind_index().end_code(ctx(STAY_BINDING), BLIND, Action.COVER_STOP) is None
+    assert blind_index().end_code(ctx(STAY_BINDING), "res_unknown", Action.COVER_OPEN) is None
+
+
+def test_a_position_grant_without_the_end_refuses_open_or_close() -> None:
+    assert ends(blind_index(positions(("20", "80", "1")))) == (OUT, OUT)
+    assert ends(blind_index(positions(("20", "100", "1")))) == (None, OUT)
+    # unsnapped: 100 is an end of 0..100 although the steps of 3 stop at 99
+    assert ends(blind_index(positions(("0", "100", "3")))) == (None, None)
+    # grants are a union: another grant may hold the end
+    assert ends(blind_index(positions(("20", "80", "1")), positions(("90", "100", "1")))) == (
+        None,
+        OUT,
+    )
+    assert ends(blind_index(positions(("20", "80", "1")), ANY_POSITION)) == (None, None)
+
+
+def test_a_position_fence_without_the_end_refuses_open_or_close() -> None:
+    assert ends(blind_index(), position_fence("0", "80")) == (FENCED, None)
+    assert ends(blind_index(), position_fence("0", "50"), position_fence("0", "80")) == (
+        FENCED,
+        None,
+    )
+    assert ends(blind_index(), position_fence("20", "100")) == (None, FENCED)
+    # each end fails on the one fence that excludes it
+    both = (position_fence("0", "80"), position_fence("20", "100"))
+    assert ends(blind_index(), *both) == (FENCED, FENCED)
+    # the grant first, as in decide's order
+    grant = positions(("20", "80", "1"))
+    assert ends(blind_index(grant), position_fence("0", "50")) == (OUT, OUT)
+
+
+def test_a_deny_on_set_position_never_widens_the_end_check() -> None:
+    deny = {"resources": [BLIND], "actions": ["cover.set_position"]}
+    assert ends(blind_index(positions(("20", "80", "1")), denies=(deny,))) == (OUT, OUT)
+
+
+def test_the_capability_offers_no_end_its_check_refuses() -> None:
+    index = blind_index(positions(("0", "80", "1")))
+    context = ctx(STAY_BINDING)
+    assert index.effective_capability(context, BLIND, Action.COVER_OPEN) is None
+    assert index.effective_capability(context, BLIND, Action.COVER_CLOSE) == EffectiveCapability(
+        matched=("room_guest@1:0",)
+    )
