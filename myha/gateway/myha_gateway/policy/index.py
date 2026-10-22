@@ -14,7 +14,7 @@ _MODES: frozenset[str] = frozenset(get_args(Mode))
 _PERCENT = Interval(min=Decimal("0"), max=Decimal("100"), step=Decimal("1"))
 _TARGET_C_MIN, _TARGET_C_MAX = Decimal("-99.9"), Decimal("99.9")  # all TargetCParams accepts
 _HALF, _CENT = Decimal("0.5"), Decimal("0.01")
-_FAR = Decimal("1000000")  # beyond every rule value (six integer digits)
+_FAR = Decimal("1000000")  # rule decimals have at most six integer digits
 _ROUNDING = Context(prec=28)  # independent of the caller's decimal context
 
 
@@ -134,7 +134,10 @@ class PolicyIndex:
             confirmed = resource.capabilities.confirmed_modes
             return EffectiveCapability(allowed=allowed & confirmed, matched=matched)
         capabilities = resource.capabilities
-        low, high = _device_limits(name, capabilities)
+        limits = _device_limits(name, capabilities)
+        if limits is None:  # a device limit beyond the rule format: offer nothing (fail closed)
+            return EffectiveCapability(matched=matched)
+        low, high = limits
         bounds: list[Bound] = [b for fence in fences if (b := getattr(fence.parameters, name))]
         intervals: dict[Interval, None] = {}  # ordered set: identical intervals appear once
         for grant in grants.values():
@@ -158,26 +161,26 @@ def _full_range(name: str, capabilities: DeviceCapabilities) -> Interval:
 
 def _device_limits(
     name: str, capabilities: DeviceCapabilities
-) -> tuple[Decimal | None, Decimal | None]:
-    """The device range rounded inwards to cents; ``None`` where the device names no limit.
+) -> tuple[Decimal | None, Decimal | None] | None:
+    """The device range rounded inwards to cents, ``None`` for a limit the device does not name.
 
     Raw device numbers need not fit a rule decimal: they are compared, and a limit becomes an
-    interval bound only where it lies inside a grant, whose values do fit.
+    interval bound only inside a grant, whose values do fit. A limit of 1e6 or more fits no
+    rule decimal at all, so the whole result is ``None``.
     """
     if name != "target_c":
         return _PERCENT.min, _PERCENT.max
-    return (
-        _cents(capabilities.target_c_min, ROUND_CEILING),
-        _cents(capabilities.target_c_max, ROUND_FLOOR),
-    )
+    low, high = capabilities.target_c_min, capabilities.target_c_max
+    if any(limit is not None and not -_FAR < limit < _FAR for limit in (low, high)):
+        return None
+    return _cents(low, ROUND_CEILING), _cents(high, ROUND_FLOOR)
 
 
 def _cents(value: Decimal | None, rounding: str) -> Decimal | None:
     if value is None:
         return None
-    near = min(max(value, -_FAR), _FAR)  # cuts nothing a rule can reach, keeps rounding cheap
     # normalize: 8.000000000 is 8 again and fits a rule decimal once inside a grant
-    return near.quantize(_CENT, rounding=rounding, context=_ROUNDING).normalize(_ROUNDING)
+    return value.quantize(_CENT, rounding=rounding, context=_ROUNDING).normalize(_ROUNDING)
 
 
 def _within(interval: Interval, low: Decimal | None, high: Decimal | None) -> Interval | None:

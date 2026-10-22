@@ -715,13 +715,28 @@ def test_raw_device_limits_are_rounded_inwards_to_cents() -> None:
     )
 
 
-def test_far_device_limits_clip_nothing_or_everything() -> None:
-    assert living_temperatures(climate(low="-1E+40", high="1E+40")) == (
+@pytest.mark.parametrize(
+    ("low", "high"),
+    [
+        ("-1E+40", "1E+40"),
+        ("8", "1E+40"),
+        ("-1E+40", "30"),
+        ("1E+40", None),
+        ("8", "1000000"),
+        ("-1000000", "30"),
+    ],
+)
+def test_a_device_limit_the_rule_format_cannot_hold_offers_nothing(
+    low: str | None, high: str | None
+) -> None:
+    assert living_temperatures(climate(low=low, high=high)) == ()
+
+
+def test_a_device_limit_just_inside_the_rule_format_still_clips() -> None:
+    assert living_temperatures(climate(low="-999999.99", high="999999.99")) == (
         interval("-99.9", "99.9"),
         interval("5", "40", "1"),
     )
-    assert living_temperatures(climate(low="1E+40", high="2E+40")) == ()
-    assert living_temperatures(climate(low="-2E+40", high="-1E+40")) == ()
 
 
 def test_a_device_range_that_rounding_empties_offers_nothing() -> None:
