@@ -1,4 +1,4 @@
-"""Limits of the public listener that uvicorn lacks: a request body cap and a header deadline.
+"""Limits of the public listener that uvicorn lacks: a request body cap and a request deadline.
 
 Both keep a stranger from holding one of the listener's ``limit_concurrency`` slots, or memory,
 for as long as they like; the admin listener is reachable only by the ingress peer and runs
@@ -19,6 +19,9 @@ MAX_BODY = 64 * 1024  # far above any JSON request of the public API
 _TOO_LARGE = "Request body too large"
 # h11 then marks the connection MUST_CLOSE: uvicorn closes it instead of draining the body.
 _CLOSE = {"Connection": "close"}
+# h11 states in which the peer's request is still due; any other means it sent the whole
+# request or no longer speaks HTTP/1.1 (error, close, protocol switch).
+_PENDING = (h11.IDLE, h11.SEND_BODY)
 
 
 class BodyLimitMiddleware:
@@ -26,7 +29,8 @@ class BodyLimitMiddleware:
 
     A ``Content-Length`` over the cap is refused before any of the body is read. A chunked body
     is counted while the app reads it; crossing the cap raises ``HTTPException``, which FastAPI
-    passes through its body parsing to the error handlers.
+    passes through its body parsing to the error handlers. A client still writing its body may
+    see the close as ECONNRESET instead of the 413, which is acceptable for a JSON API.
     """
 
     def __init__(self, app: ASGIApp, max_body: int = MAX_BODY) -> None:
@@ -55,31 +59,45 @@ class BodyLimitMiddleware:
         await self.app(scope, limited, send)
 
 
-class HeaderDeadlineProtocol(H11Protocol):
-    """uvicorn's h11 protocol, closing a connection whose request head is late (slowloris).
+class RequestDeadlineProtocol(H11Protocol):
+    """uvicorn's h11 protocol, dropping a connection whose request is late (slowloris).
 
-    The deadline starts when the connection opens and when a further request begins on a
-    kept-alive one; it ends once h11 has parsed the head. Data arriving in between does not
-    extend it. uvicorn itself only times out the idle gap between requests.
+    The deadline starts when the connection opens and when a kept-alive one waits for its
+    next request (uvicorn's shorter keep-alive timeout usually ends that wait first); it ends
+    once h11 has the whole request, head and body (with the body cap, 10 s is ample), or once
+    the connection became a WebSocket. Data arriving in between does
+    not extend it. Expiry aborts the transport: a graceful TLS close would wait up to 30 s for
+    the client's close_notify. uvicorn's keep-alive timeout aborts the same way.
+
+    TLS connections stuck in the handshake never reach ``connection_made``: they count neither
+    here nor against ``limit_concurrency``, but hold a descriptor until asyncio's 60 s
+    handshake timeout.
     """
 
-    header_timeout = 10.0  # seconds
+    request_timeout = 10.0  # seconds
     _deadline: asyncio.TimerHandle | None = None
 
     def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
         super().connection_made(transport)
-        self._deadline = self.loop.call_later(self.header_timeout, self._expired)
+        self._deadline = self.loop.call_later(self.request_timeout, self._expired)
 
-    def data_received(self, data: bytes) -> None:
-        super().data_received(data)
-        if self.conn.their_state is not h11.IDLE:  # the head is complete (or invalid)
-            self._cancel()
-        elif self._deadline is None:  # the first bytes of the next request
-            self._deadline = self.loop.call_later(self.header_timeout, self._expired)
+    def handle_events(self) -> None:
+        # Runs for new data and after each response (pipelined requests), so it sees every
+        # change of their_state.
+        super().handle_events()
+        if self.transport.get_protocol() is not self or self.conn.their_state not in _PENDING:
+            self._cancel()  # after a WebSocket upgrade, connection_lost no longer reaches us
+        elif self.conn.their_state is h11.IDLE and self._deadline is None:
+            self._deadline = self.loop.call_later(self.request_timeout, self._expired)
 
     def connection_lost(self, exc: Exception | None) -> None:
         self._cancel()
         super().connection_lost(exc)
+
+    def timeout_keep_alive_handler(self) -> None:
+        if not self.transport.is_closing():
+            self.conn.send(h11.ConnectionClosed())
+            self.transport.abort()
 
     def _cancel(self) -> None:
         if self._deadline is not None:
@@ -88,4 +106,4 @@ class HeaderDeadlineProtocol(H11Protocol):
 
     def _expired(self) -> None:
         self._deadline = None
-        self.transport.close()
+        self.transport.abort()

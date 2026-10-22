@@ -2,13 +2,17 @@
 
 import asyncio
 import json
+import shutil
+import subprocess
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import pytest
 import websockets
 from fastapi import FastAPI
 from pydantic import SecretStr
@@ -56,6 +60,25 @@ def fake_supervisor(*, reachable: bool = True) -> SupervisorClient:
 
     transport = httpx.MockTransport(handler)
     return SupervisorClient("http://supervisor", SecretStr("sup-secret"), transport=transport)
+
+
+def self_signed(
+    directory: Path, name: str = "guest", passphrase: str | None = None
+) -> tuple[Path, Path]:
+    """A throwaway certificate and key from the openssl command line tool."""
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl not installed")
+    cert, key = directory / f"{name}.crt", directory / f"{name}.key"
+    protection = ["-nodes"] if passphrase is None else ["-passout", f"pass:{passphrase}"]
+    subprocess.run(  # noqa: S603 (fixed arguments)
+        [openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
+        + [*protection, "-subj", "/CN=guest.test", "-days", "1"]
+        + ["-keyout", str(key), "-out", str(cert)],
+        check=True,
+        capture_output=True,
+    )
+    return cert, key
 
 
 async def call(

@@ -14,7 +14,7 @@ from myha_gateway.app import create_admin_app, create_public_app
 from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.deps import AppContext
 from myha_gateway.devseed import seed_room203
-from myha_gateway.limits import HeaderDeadlineProtocol
+from myha_gateway.limits import RequestDeadlineProtocol
 from myha_gateway.logsetup import setup_logging
 from myha_gateway.settings import Settings
 
@@ -63,14 +63,14 @@ def _public_server(ctx: AppContext) -> uvicorn.Server:
     app = create_public_app(ctx)
     # Public only: on the admin listener, foreign peers could fill the limit with half-open
     # connections and lock the ingress out with 503 before the peer guard runs. Here the
-    # header deadline frees the slots that half-open connections take.
+    # request deadline frees the slots that half-open connections take.
     return _server(
         app,
         settings.public_bind,
         settings.public_port,
         ctx.public_tls,
         limit_concurrency=200,
-        http=HeaderDeadlineProtocol,
+        http=RequestDeadlineProtocol,
     )
 
 

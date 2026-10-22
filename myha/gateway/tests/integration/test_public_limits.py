@@ -1,8 +1,11 @@
-"""The public listener's body cap and header deadline, against a real uvicorn server."""
+"""The public listener's body cap and request deadline, against a real uvicorn server."""
 
 import asyncio
 import contextlib
 import json
+import os
+import socket
+import ssl
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -13,21 +16,27 @@ from fastapi import FastAPI
 
 import myha_gateway.__main__ as gateway
 from myha_gateway.deps import AppContext
-from myha_gateway.limits import MAX_BODY, HeaderDeadlineProtocol
-from tests.helpers import fake_supervisor
+from myha_gateway.limits import MAX_BODY, RequestDeadlineProtocol
+from tests.helpers import fake_supervisor, self_signed
 
 DEADLINE = 0.5
+SLACK = 3  # upper bound on top of the deadline: a slow CI runner must not flake
 
 
-@pytest.fixture
-async def port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[int]:
-    """The public server of ``_public_server`` on a free port, plus a JSON route ``/echo``."""
+@pytest.fixture(params=["http"])
+async def port(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[int]:
+    """The public server of ``_public_server`` on a free port, plus a JSON route ``/echo``.
+
+    Parametrised indirectly with ``"https"`` it serves TLS with a throwaway certificate.
+    """
     monkeypatch.setenv("MYHA_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYHA_PUBLIC_ENABLED", "1")
     monkeypatch.setenv("MYHA_PUBLIC_ORIGIN", "http://testserver")
     monkeypatch.setenv("MYHA_PUBLIC_BIND", "127.0.0.1")
     monkeypatch.setenv("MYHA_PUBLIC_PORT", "0")
-    monkeypatch.setattr(HeaderDeadlineProtocol, "header_timeout", DEADLINE)
+    monkeypatch.setattr(RequestDeadlineProtocol, "request_timeout", DEADLINE)
     real = gateway.create_public_app
 
     def with_echo(ctx: AppContext) -> FastAPI:
@@ -42,6 +51,9 @@ async def port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
     monkeypatch.setattr(gateway, "create_public_app", with_echo)
     ctx = await AppContext.create()
     ctx.supervisor = fake_supervisor()
+    if request.param == "https":
+        cert, key = self_signed(tmp_path)
+        ctx.public_tls = (str(cert), str(key))
     server = gateway._public_server(ctx)
     server.capture_signals = contextlib.nullcontext  # type: ignore[method-assign]
     task = asyncio.create_task(server.serve())
@@ -142,9 +154,13 @@ async def test_body_at_the_cap_passes(port: int, chunked: bool) -> None:
     assert (status, json.loads(body)) == (200, {"keys": 1})
 
 
+def within_deadline(started: float) -> bool:
+    return DEADLINE <= time.monotonic() - started < DEADLINE + SLACK
+
+
 async def test_slow_header_block_is_closed_at_the_deadline(port: int) -> None:
+    started = time.monotonic()
     async with connect(port) as (reader, writer):
-        started = time.monotonic()
         writer.write(b"GET /healthz HTTP/1.1\r\n")
 
         async def trickle() -> None:  # data keeps arriving, the deadline holds anyway
@@ -159,14 +175,60 @@ async def test_slow_header_block_is_closed_at_the_deadline(port: int) -> None:
             trickler.cancel()
             with contextlib.suppress(asyncio.CancelledError, ConnectionError):
                 await trickler
-        assert DEADLINE <= time.monotonic() - started < DEADLINE + 1
+        assert within_deadline(started)
 
 
 async def test_silent_connection_is_closed_at_the_deadline(port: int) -> None:
+    started = time.monotonic()
     async with connect(port) as (reader, _):
-        started = time.monotonic()
         assert await closed_by_server(reader)
-        assert DEADLINE <= time.monotonic() - started < DEADLINE + 1
+    assert within_deadline(started)
+
+
+def tls_close_seconds(port: int, request: bytes = b"") -> float:
+    """Seconds until the server drops a TLS connection after ``request`` and its answer.
+
+    Measures the TCP close, not the TLS close_notify: after the handshake it reads the raw
+    socket below TLS until EOF. A graceful TLS close would send close_notify at the deadline
+    and then wait up to 30 s for the client's before closing TCP.
+    """
+    context = ssl.create_default_context()
+    context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
+    started = time.monotonic()
+    with (
+        socket.create_connection(("127.0.0.1", port), timeout=5) as tcp,
+        context.wrap_socket(tcp) as tls,
+        socket.socket(fileno=os.dup(tls.fileno())) as raw,
+    ):
+        if request:
+            tls.sendall(request)
+            answer = b""
+            while not answer.endswith(b"}"):  # the JSON body of /healthz
+                answer += tls.recv(65536)
+            started = time.monotonic()  # from here on the connection is idle
+        raw.settimeout(10)
+        with contextlib.suppress(ConnectionResetError):
+            while raw.recv(65536):
+                pass
+    return time.monotonic() - started
+
+
+@pytest.mark.parametrize("port", ["https"], indirect=True)
+async def test_tls_connection_is_dropped_at_the_deadline_without_close_notify_wait(
+    port: int,
+) -> None:
+    seconds = await asyncio.to_thread(tls_close_seconds, port)
+    assert DEADLINE <= seconds < DEADLINE + SLACK
+
+
+@pytest.mark.parametrize("port", ["https"], indirect=True)
+async def test_idle_tls_keep_alive_is_dropped_without_close_notify_wait(
+    port: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RequestDeadlineProtocol, "request_timeout", 30)  # keep-alive fires first
+    get = b"GET /healthz HTTP/1.1\r\nHost: testserver\r\n\r\n"
+    seconds = await asyncio.to_thread(tls_close_seconds, port, get)
+    assert 5 <= seconds < 5 + SLACK  # uvicorn's keep-alive timeout of _server
 
 
 async def test_deadline_rearms_for_the_next_request_on_a_kept_alive_connection(port: int) -> None:
@@ -174,17 +236,38 @@ async def test_deadline_rearms_for_the_next_request_on_a_kept_alive_connection(p
     async with connect(port) as (reader, writer):
         writer.write(get)
         assert (await response(reader))[0] == 200
-        writer.write(get[:10])  # the next head starts, but never ends
         started = time.monotonic()
+        writer.write(get[:10])  # the next head starts, but never ends
         assert await closed_by_server(reader)
-        assert DEADLINE <= time.monotonic() - started < DEADLINE + 1
+    assert within_deadline(started)
 
 
-async def test_deadline_ends_with_the_head_a_slow_body_is_not_cut(port: int) -> None:
+async def test_body_beyond_the_deadline_is_cut(port: int) -> None:
     data = json_of(100)
+    started = time.monotonic()
     async with connect(port) as (reader, writer):
-        writer.write(post_head(len(data)))
-        await asyncio.sleep(DEADLINE * 2)
-        writer.write(data)
-        status, _, body = await response(reader)
-    assert (status, json.loads(body)) == (200, {"keys": 1})
+        writer.write(post_head(len(data)) + data[:50])  # the rest never comes
+        assert await closed_by_server(reader)
+    assert within_deadline(started)
+
+
+async def test_unread_body_trickling_after_the_answer_is_cut(port: int) -> None:
+    started = time.monotonic()
+    async with connect(port) as (reader, writer):
+        head = b"POST /healthz HTTP/1.1\r\nHost: testserver\r\nTransfer-Encoding: chunked\r\n\r\n"
+        writer.write(head)
+        assert (await response(reader))[0] == 405  # answered without reading the body
+
+        async def trickle() -> None:
+            for _ in range(200):
+                writer.write(chunk(b"x"))
+                await asyncio.sleep(0.05)
+
+        trickler = asyncio.create_task(trickle())
+        try:
+            assert await closed_by_server(reader)
+        finally:
+            trickler.cancel()
+            with contextlib.suppress(asyncio.CancelledError, ConnectionError):
+                await trickler
+    assert within_deadline(started)

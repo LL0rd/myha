@@ -5,7 +5,6 @@ import contextlib
 import logging
 import os
 import re
-import shutil
 import signal
 import socket
 import sqlite3
@@ -28,7 +27,7 @@ from myha_gateway.db import ensure_instance, run_migrations, write_session
 from myha_gateway.db.models import Instance
 from myha_gateway.deps import AppContext, _is_origin
 from myha_gateway.settings import Settings
-from tests.helpers import fake_supervisor
+from tests.helpers import fake_supervisor, self_signed
 
 OVERRIDE = {"public_enabled": True, "public_origin": "http://guest.test:8443"}
 CIDRS = ["10.0.0.0/8"]
@@ -68,25 +67,6 @@ def gateway_env(data_dir: Path, **variables: str) -> dict[str, str]:
         "MYHA_SUPERVISOR_URL": "http://127.0.0.1:1",
         **variables,
     }
-
-
-def self_signed(
-    directory: Path, name: str = "guest", passphrase: str | None = None
-) -> tuple[Path, Path]:
-    """A throwaway certificate and key from the openssl command line tool."""
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        pytest.skip("openssl not installed")
-    cert, key = directory / f"{name}.crt", directory / f"{name}.key"
-    protection = ["-nodes"] if passphrase is None else ["-passout", f"pass:{passphrase}"]
-    subprocess.run(  # noqa: S603 (fixed arguments)
-        [openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]
-        + [*protection, "-subj", "/CN=guest.test", "-days", "1"]
-        + ["-keyout", str(key), "-out", str(cert)],
-        check=True,
-        capture_output=True,
-    )
-    return cert, key
 
 
 async def configure(settings: Settings, **fields: Any) -> None:
