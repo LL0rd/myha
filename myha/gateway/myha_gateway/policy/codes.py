@@ -66,17 +66,6 @@ PUBLIC_CODE: Mapping[DecisionCode, PublicError] = {
     DecisionCode.TIME_UNTRUSTED: PublicError.UPSTREAM_UNAVAILABLE,
 }
 
-HTTP_STATUS: Mapping[PublicError, int] = {
-    PublicError.UNAUTHENTICATED: 401,
-    PublicError.NOT_FOUND: 404,
-    PublicError.ACTION_NOT_ALLOWED: 403,
-    PublicError.INVALID_PARAMETERS: 400,
-    PublicError.ACCESS_EXPIRED: 403,
-    PublicError.UPSTREAM_UNAVAILABLE: 503,
-    PublicError.RATE_LIMITED: 429,
-    PublicError.CONFLICT: 409,
-}
-
 
 def public_error(code: DecisionCode) -> PublicError | None:
     """The public error for a denial; ``None`` for ``GRANTED``."""
