@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800;1,6..12,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;--bg:#F7F5F0;--surface:#FFFFFF;--ink:#1F1D19;--muted:#6B665C;--line:rgba(31,29,25,.14);--accent:#C8A24A;--accent-ink:#7A5E12;--accent-soft:rgba(200,162,74,.18);--ok:#3F8F5E;--ok-soft:rgba(63,143,94,.14);--warn:#B9742B;--warn-soft:rgba(185,116,43,.14);--err:#C64B3C;--err-soft:rgba(198,75,60,.14);--info:#2C8C86;--info-soft:rgba(44,140,134,.14);--muted-soft:rgba(31,29,25,.08);--font:'Nunito Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;background:var(--bg)}
+body[data-theme="dark"]{--bg:#1B1A17;--surface:#26241F;--ink:#F3EFE6;--muted:#A8A295;--line:rgba(243,239,230,.16);--accent:#D9B35C;--accent-ink:#E8C976;--accent-soft:rgba(217,179,92,.2);--ok:#6CC08B;--ok-soft:rgba(108,192,139,.16);--warn:#E0A05A;--warn-soft:rgba(224,160,90,.16);--err:#EF7B6D;--err-soft:rgba(239,123,109,.16);--info:#5FC0B9;--info-soft:rgba(95,192,185,.16);--muted-soft:rgba(243,239,230,.1)}
+body[data-theme="contrast"]{--bg:#FFFFFF;--surface:#FFFFFF;--ink:#000000;--muted:#2B2B2B;--line:#000000;--accent:#F2C94C;--accent-ink:#5C4100;--accent-soft:#FFF1C2;--ok:#006B2E;--ok-soft:#D9F2E2;--warn:#7A4A00;--warn-soft:#FFE8C2;--err:#B00020;--err-soft:#FFD9DE;--info:#004F8C;--info-soft:#D6E9FA;--muted-soft:#E6E6E6}
+a{color:var(--accent-ink)}a:hover{color:var(--ink)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent-ink);outline-offset:2px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</helmet>
+<div style="min-height:100vh;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.4">
+
+  <div style="position:sticky;top:0;z-index:55;background:#1F1D19;color:#F3EFE6;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:8px 16px;font-family:var(--mono);font-size:12px">
+    <div style="display:flex;align-items:center;gap:8px;font-weight:500"><span style="width:10px;height:10px;border-radius:3px;background:#C8A24A"></span>HA ACCESS UI · clickable mockup</div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap">
+      <sc-for list="{{surfaces}}" as="s" hint-placeholder-count="4"><button onClick="{{s.go}}" style="{{s.style}}"><span aria-hidden="true" style="display:inline-block;width:15px;height:15px;flex:none;background:currentColor;-webkit-mask:{{s.mask}};mask:{{s.mask}};"></span>{{s.label}}</button></sc-for>
+    </div>
+    <div style="flex:1"></div>
+    <sc-if value="{{showLayoutSeg}}" hint-placeholder-val="{{false}}"><div style="display:flex;align-items:center;gap:6px"><span style="opacity:.6">guest layout</span><sc-for list="{{layoutSeg}}" as="o" hint-placeholder-count="3"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div></sc-if>
+    <sc-if value="{{showEditorSeg}}" hint-placeholder-val="{{false}}"><div style="display:flex;align-items:center;gap:6px"><span style="opacity:.6">editor</span><sc-for list="{{editorSeg}}" as="o" hint-placeholder-count="2"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div></sc-if>
+    <div style="display:flex;align-items:center;gap:6px"><span style="opacity:.6">theme</span><sc-for list="{{themeSeg}}" as="o" hint-placeholder-count="3"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div>
+  </div>
+
+  <sc-if value="{{isAdmin}}" hint-placeholder-val="{{true}}">
+  <div style="display:flex;min-height:calc(100vh - 42px)">
+    <nav aria-label="Admin" style="width:224px;flex:none;border-right:1px solid var(--line);background:var(--surface);padding:14px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:42px;height:calc(100vh - 42px);box-sizing:border-box">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);padding:2px 10px 10px">Home Assistant › Apps › HA Access UI</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:4px 10px 14px">
+        <div style="width:34px;height:34px;border-radius:10px;background:var(--accent);display:grid;place-items:center;color:#1F1D19"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;"></span></div>
+        <div><div style="font-weight:800;font-size:15px;line-height:1.1">HA Access UI</div><div style="font-size:12px;color:var(--muted)">Admin · Lena (HA admin ✓)</div></div>
+      </div>
+      <sc-for list="{{nav}}" as="n" hint-placeholder-count="8"><button onClick="{{n.go}}" aria-current="{{n.current}}" style="{{n.style}}"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{n.mask}};mask:{{n.mask}};"></span><span style="flex:1;text-align:left">{{n.label}}</span><sc-if value="{{n.badge}}" hint-placeholder-val="{{false}}"><span style="font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent-ink)">{{n.badge}}</span></sc-if></button></sc-for>
+      <div style="flex:1"></div>
+      <div style="font-size:12px;color:var(--muted);padding:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:3px">
+        <div style="display:flex;justify-content:space-between"><span>Supervisor</span><span style="font-family:var(--mono)">2026.10.3 ✓</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Policy</span><span style="font-family:var(--mono)">v{{policyVersion}}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Guest listener</span><span style="font-family:var(--mono)">:8443 on</span></div>
+      </div>
+    </nav>
+    <main style="flex:1;min-width:0;padding:24px 28px 48px;display:flex;flex-direction:column;gap:20px;position:relative">
+
+      <sc-if value="{{isRooms}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Rooms &amp; devices</h1><p style="margin:4px 0 0;color:var(--muted)">Bind HA entities to rooms. Only confirmed bindings can be granted. New devices in an HA area are never released automatically.</p></div>
+        <div style="display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:20px;align-items:start">
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:8px;display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{units}}" as="u" hint-placeholder-count="6"><button onClick="{{u.go}}" style="{{u.style}}"><span style="flex:1;text-align:left"><span style="display:block;font-weight:700">{{u.name}}</span><span style="display:block;font-size:12px;color:var(--muted)">{{u.meta}}</span></span><sc-if value="{{u.alert}}" hint-placeholder-val="{{false}}"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/alert-triangle.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/alert-triangle.svg) center/contain no-repeat;color:var(--warn);"></span></sc-if></button></sc-for>
+            <button onClick="{{noop}}" style="margin-top:6px;min-height:40px;border-radius:12px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:600 13px var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px"><span aria-hidden="true" style="display:inline-block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/plus.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/plus.svg) center/contain no-repeat;"></span>New room</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+            <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px">
+              <div><div style="font-size:18px;font-weight:800">{{unit.name}}</div><div style="font-family:var(--mono);font-size:12px;color:var(--muted)">{{unit.id}} · template {{unit.template}}</div></div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap"><button onClick="{{noop}}" style="min-height:40px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/map-pin.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/map-pin.svg) center/contain no-repeat;"></span>Add from HA area…</button><button onClick="{{noop}}" style="min-height:40px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/search.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/search.svg) center/contain no-repeat;"></span>Add entity…</button></div>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+              <div style="display:grid;grid-template-columns:minmax(140px,1.3fr) minmax(150px,1.4fr) 90px minmax(140px,1fr) 150px;gap:12px;padding:10px 16px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line)"><span>Label</span><span>HA entity</span><span>Kind</span><span>Confirmed abilities</span><span>Status</span></div>
+              <sc-for list="{{unit.resources}}" as="r" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:minmax(140px,1.3fr) minmax(150px,1.4fr) 90px minmax(140px,1fr) 150px;gap:12px;padding:12px 16px;align-items:center;border-bottom:1px solid var(--line)">
+                  <div style="display:flex;align-items:center;gap:10px;min-width:0"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{r.mask}};mask:{{r.mask}};color:var(--accent-ink);flex:none;"></span><div style="min-width:0"><div style="font-weight:700">{{r.label}}</div><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">{{r.pid}}</div></div></div>
+                  <div style="font-family:var(--mono);font-size:12px;overflow-wrap:anywhere">{{r.entity}}</div>
+                  <div style="color:var(--muted)">{{r.kind}}</div>
+                  <div style="font-size:12px;color:var(--muted)">{{r.abilities}}</div>
+                  <div><span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;background:{{r.soft}};color:{{r.color}}"><span aria-hidden="true" style="display:inline-block;width:14px;height:14px;flex:none;background:currentColor;-webkit-mask:{{r.smask}};mask:{{r.smask}};"></span>{{r.status}}</span><sc-if value="{{r.note}}" hint-placeholder-val="{{false}}"><div style="font-size:11px;color:var(--muted);margin-top:3px">{{r.note}}</div></sc-if></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:flex-start"><span aria-hidden="true" style="display:inline-block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/shield-lock.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/shield-lock.svg) center/contain no-repeat;flex:none;margin-top:1px;"></span><span>Grants reference product IDs, not entity IDs. A renamed entity with a stable registry ID follows automatically; a replaced device, changed area or changed abilities needs your review and blocks new actions until then.</span></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isRoles}}" hint-placeholder-val="{{false}}">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Role: Room guest</h1><span style="font-family:var(--mono);font-size:12px;padding:3px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent-ink)">{{roleVersionLabel}}</span></div><p style="margin:4px 0 0;color:var(--muted)">Grants add permissions. Fences are hard limits that can only narrow. Denies always win. Everything is enforced on the server.</p></div>
+          <div style="display:flex;gap:8px"><button onClick="{{discard}}" style="min-height:40px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer">Discard draft</button><button onClick="{{goDiff}}" style="min-height:40px;padding:0 16px;border-radius:12px;border:none;background:var(--accent);color:#1F1D19;font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px">Review &amp; publish<span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/arrow-right.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/arrow-right.svg) center/contain no-repeat;"></span></button></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:20px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+            <sc-if value="{{isMatrix}}" hint-placeholder-val="{{true}}">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:auto">
+                <div style="display:grid;grid-template-columns:{{matrixCols}};gap:0;min-width:560px">
+                  <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line)">Resource · Room 203</div>
+                  <sc-for list="{{matrixHead}}" as="h" hint-placeholder-count="9"><div style="padding:12px 6px;font-size:12px;font-weight:700;text-align:center;border-bottom:1px solid var(--line);color:{{h.color}}">{{h.label}}</div></sc-for>
+                  <sc-for list="{{matrixRows}}" as="row" hint-placeholder-count="5">
+                    <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{row.mask}};mask:{{row.mask}};color:var(--accent-ink);"></span><div><div style="font-weight:700">{{row.label}}</div><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">{{row.pid}}</div></div></div>
+                    <sc-for list="{{row.cells}}" as="c" hint-placeholder-count="9">
+                      <div style="display:grid;place-items:center;border-bottom:1px solid var(--line);padding:6px">
+                        <sc-if value="{{c.isCheck}}" hint-placeholder-val="{{true}}"><input type="checkbox" aria-label="{{c.aria}}" checked="{{c.checked}}" onChange="{{c.toggle}}" style="width:22px;height:22px;margin:0;cursor:pointer;accent-color:{{c.accent}}"></sc-if>
+                        <sc-if value="{{c.isNone}}" hint-placeholder-val="{{false}}"><span style="color:var(--line);font-size:16px" aria-hidden="true">—</span></sc-if>
+                      </div>
+                    </sc-for>
+                  </sc-for>
+                </div>
+                <div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 16px;font-size:12px;color:var(--muted)"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--accent)"></span>Grant</span><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--err)"></span>Explicit deny (wins over any grant)</span><span>— not applicable to this kind</span></div>
+              </div>
+            </sc-if>
+            <sc-if value="{{isCards}}" hint-placeholder-val="{{false}}">
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+                <sc-for list="{{cardRows}}" as="row" hint-placeholder-count="5">
+                  <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;align-items:center;gap:10px"><div style="width:36px;height:36px;border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{row.mask}};mask:{{row.mask}};"></span></div><div><div style="font-weight:700">{{row.label}}</div><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">{{row.pid}}</div></div></div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px"><sc-for list="{{row.chips}}" as="ch" hint-placeholder-count="3"><button onClick="{{ch.toggle}}" aria-pressed="{{ch.on}}" style="{{ch.style}}"><span aria-hidden="true" style="display:inline-block;width:14px;height:14px;flex:none;background:currentColor;-webkit-mask:{{ch.mask}};mask:{{ch.mask}};"></span>{{ch.label}}</button></sc-for></div>
+                    <sc-if value="{{row.hasTemp}}" hint-placeholder-val="{{false}}">
+                      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding-top:4px;border-top:1px dashed var(--line)">
+                        <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Min °C<input type="number" step="0.5" value="{{role.tMin}}" onChange="{{setTMin}}" style="min-height:38px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"></label>
+                        <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Max °C<input type="number" step="0.5" value="{{role.tMax}}" onChange="{{setTMax}}" style="min-height:38px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"></label>
+                        <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Step<select value="{{role.tStep}}" onChange="{{setTStep}}" style="min-height:38px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"><option value="0.5">0.5</option><option value="1">1.0</option></select></label>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{isMatrix}}" hint-placeholder-val="{{true}}">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end">
+                <div style="flex:1;min-width:200px"><div style="font-weight:700">Parameter · climate.set_temperature</div><div style="font-size:12px;color:var(--muted)">Values outside the range are rejected, never clamped. The device range is 7–30 °C.</div></div>
+                <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Min °C<input type="number" step="0.5" value="{{role.tMin}}" onChange="{{setTMin}}" style="width:84px;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"></label>
+                <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Max °C<input type="number" step="0.5" value="{{role.tMax}}" onChange="{{setTMax}}" style="width:84px;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"></label>
+                <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Step<select value="{{role.tStep}}" onChange="{{setTStep}}" style="min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"><option value="0.5">0.5 °C</option><option value="1">1.0 °C</option></select></label>
+              </div>
+            </sc-if>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/fence.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/fence.svg) center/contain no-repeat;color:var(--warn);"></span><div style="font-weight:700">Fences · hard limits</div><span style="font-size:12px;color:var(--muted)">A fence can only narrow. A wider group grant never lifts it.</span></div>
+              <label style="display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px;cursor:pointer">
+                <input type="checkbox" checked="{{role.fenceMia}}" onChange="{{toggleFence}}" style="width:22px;height:22px;margin:0;accent-color:var(--warn)">
+                <span style="flex:1"><span style="display:block;font-weight:700">Mia (resident) · target_c ≤ 22 °C</span><span style="display:block;font-size:12px;color:var(--muted)">Group "Family kids" grants 19–23 °C. With this fence Mia's effective range is 19–22 °C. Visible in the preview for target "Mia".</span></span>
+                <span style="font-family:var(--mono);font-size:12px;padding:3px 9px;border-radius:999px;background:var(--warn-soft);color:var(--warn)">fence</span>
+              </label>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;max-width:420px;width:100%;justify-self:start">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-weight:700;display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;"></span>Live preview · Guest · Room 203</div><label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" checked="{{explainOn}}" onChange="{{toggleExplain}}" style="accent-color:var(--accent);width:16px;height:16px;margin:0">Explain rules</label></div>
+            <div style="padding:8px 12px;border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:12px;font-weight:700;display:flex;gap:8px;align-items:center"><span aria-hidden="true" style="display:inline-block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/flask.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/flask.svg) center/contain no-repeat;"></span>Simulation · taps show the decision, nothing is executed</div>
+            <div style="border:1px solid var(--line);border-radius:22px;overflow:hidden;background:var(--bg);max-height:calc(100vh - 170px);overflow-y:auto">
+              <dc-import name="GuestPanel" rooms="{{editorPreview.rooms}}" layout="{{guestLayout}}" simulate="{{true}}" explain="{{explainOn}}" status="online" title="Room 203" subtitle="Draft role · as the guest would see it" on-decision="{{onDecision}}" hint-size="100%,520px"></dc-import>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isPreview}}" hint-placeholder-val="{{false}}">
+        <div role="status" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:14px;background:var(--accent);color:#1F1D19;font-weight:700;font-size:15px"><span aria-hidden="true" style="display:inline-block;width:22px;height:22px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;"></span><span>Preview as {{preview.who}} · Simulation · Actions are not executed.</span><span style="flex:1"></span><span style="font-family:var(--mono);font-size:12px;font-weight:500;opacity:.8">purpose=preview · expires in 14:52</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end">
+          <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Target<select value="{{previewTarget}}" onChange="{{setPreviewTarget}}" style="min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 14px var(--font);min-width:260px"><option value="guest203">Guest · Room 203 · invite draft (not redeemed)</option><option value="mia">Mia · resident · group Family kids</option><option value="display">Living room tablet · display profile</option></select></label>
+          <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Session / stay<select style="min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 14px var(--font)"><option>{{preview.session}}</option></select></label>
+          <div style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Viewport<div style="display:flex;gap:4px"><sc-for list="{{widthSeg}}" as="o" hint-placeholder-count="3"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div></div>
+          <div style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Evaluate at<div style="display:flex;gap:4px"><sc-for list="{{timeSeg}}" as="o" hint-placeholder-count="3"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div></div>
+          <label style="font-size:13px;display:flex;align-items:center;gap:8px;min-height:40px;cursor:pointer"><input type="checkbox" checked="{{explainOn}}" onChange="{{toggleExplain}}" style="accent-color:var(--accent);width:18px;height:18px;margin:0">Explain each card</label>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);gap:20px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;font-size:13px">
+              <div style="font-weight:700;font-size:14px">Effective context</div>
+              <sc-for list="{{preview.ctx}}" as="k" hint-placeholder-count="5"><div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);padding-bottom:6px"><span style="color:var(--muted)">{{k.k}}</span><span style="text-align:right;font-weight:600;overflow-wrap:anywhere">{{k.v}}</span></div></sc-for>
+              <div style="font-size:12px;color:var(--muted)">{{preview.hidden}}</div>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-weight:700">Simulated taps</div><button onClick="{{clearDecisions}}" style="border:none;background:transparent;color:var(--muted);font:600 12px var(--font);cursor:pointer">Clear</button></div>
+              <sc-if value="{{noDecisions}}" hint-placeholder-val="{{true}}"><div style="font-size:12px;color:var(--muted)">Tap a control in the preview. You'll see would_allow / would_deny and the rule that decided.</div></sc-if>
+              <sc-for list="{{decisions}}" as="d" hint-placeholder-count="0"><div style="display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.35"><span aria-hidden="true" style="display:inline-block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:{{d.mask}};mask:{{d.mask}};color:{{d.color}};flex:none;margin-top:1px;"></span><div><div><strong>{{d.resource}}</strong> · <span style="font-family:var(--mono)">{{d.action}}</span></div><div style="color:{{d.color}};font-weight:700">{{d.verdict}}</div><div style="color:var(--muted)">{{d.reason}}</div></div></div></sc-for>
+            </div>
+          </div>
+          <div style="overflow-x:auto;padding-bottom:8px">
+            <div style="width:{{previewWidth}}px;max-width:100%;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:var(--bg);box-shadow:0 10px 30px rgba(31,29,25,.08)">
+              <dc-import name="GuestPanel" rooms="{{preview.rooms}}" layout="{{previewLayout}}" wall="{{preview.wall}}" simulate="{{true}}" explain="{{explainOn}}" status="{{preview.status}}" title="{{preview.title}}" subtitle="{{preview.subtitle}}" on-decision="{{onDecision}}" hint-size="100%,560px"></dc-import>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isStays}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Stays &amp; invites</h1><p style="margin:4px 0 0;color:var(--muted)">One invite per guest device. Each QR is random, shown once, expires on its own, and never outlives the stay.</p></div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:20px;align-items:start">
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:minmax(110px,1fr) minmax(150px,1.3fr) minmax(110px,1fr) minmax(120px,1fr) auto;gap:12px;padding:10px 16px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line)"><span>Unit</span><span>Stay</span><span>Role</span><span>Devices</span><span></span></div>
+            <sc-for list="{{stays}}" as="st" hint-placeholder-count="3">
+              <div style="display:grid;grid-template-columns:minmax(110px,1fr) minmax(150px,1.3fr) minmax(110px,1fr) minmax(120px,1fr) auto;gap:12px;padding:12px 16px;align-items:center;border-bottom:1px solid var(--line)">
+                <div style="font-weight:700">{{st.unit}}</div>
+                <div><div>{{st.dates}}</div><span style="display:inline-flex;align-items:center;gap:6px;margin-top:3px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:{{st.soft}};color:{{st.color}}">{{st.status}}</span></div>
+                <div style="font-family:var(--mono);font-size:12px">{{st.role}}</div>
+                <div style="font-size:13px">{{st.devices}}</div>
+                <div style="display:flex;gap:6px"><button onClick="{{st.preview}}" title="Preview as this guest" style="width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;"></span></button><button onClick="{{st.sessions}}" title="Sessions & checkout" style="width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/devices.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/devices.svg) center/contain no-repeat;"></span></button></div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px">
+            <div style="font-weight:800;font-size:16px">New stay</div>
+            <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Unit<select style="min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"><option>Room 203</option><option>Room 204</option><option>Seeblick flat</option></select></label>
+            <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px">Role template<select style="min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"><option>Room guest · {{publishedLabel}}</option><option>Housekeeping · v1</option></select></label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px">
+              <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:0">Check-in<input type="datetime-local" value="2026-11-01T14:00" style="min-width:0;width:100%;box-sizing:border-box;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 13px var(--font)"></label>
+              <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:0">Check-out<input type="datetime-local" value="2026-11-04T10:00" style="min-width:0;width:100%;box-sizing:border-box;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 13px var(--font)"></label>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px">
+              <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:0">Guest devices<input type="number" min="1" max="6" value="2" style="min-width:0;width:100%;box-sizing:border-box;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"></label>
+              <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:0">Redeem within<select style="min-width:0;width:100%;box-sizing:border-box;min-height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 14px var(--font)"><option>15 min (default)</option><option>1 hour</option><option>24 hours (max)</option></select></label>
+            </div>
+            <div style="font-size:12px;color:var(--muted)">Times are stored in UTC and shown in Europe/Berlin. A redeem window never extends past check-out.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap"><button onClick="{{previewInvite}}" style="flex:1;min-height:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;"></span>Preview first</button><button onClick="{{openQr}}" style="flex:1;min-height:44px;padding:0 14px;border-radius:12px;border:none;background:var(--accent);color:#1F1D19;font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/qrcode.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/qrcode.svg) center/contain no-repeat;"></span>Issue QR</button></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isSessions}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Sessions &amp; checkout</h1><p style="margin:4px 0 0;color:var(--muted)">Revoke one device, or end a whole stay. Both take effect on open connections within seconds; new commands are refused immediately.</p></div>
+        <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:16px;border-bottom:1px solid var(--line)">
+            <div><div style="font-weight:800;font-size:16px">Room 203 · Nov 1, 14:00 → Nov 4, 10:00</div><div style="font-size:12px;color:var(--muted);font-family:var(--mono)">stay_7f3a · role room_guest {{publishedLabel}}</div></div>
+            <sc-if value="{{notCheckedOut}}" hint-placeholder-val="{{true}}"><button onClick="{{openConfirm}}" style="min-height:44px;padding:0 18px;border-radius:12px;border:none;background:var(--err);color:#fff;font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/door-exit.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/door-exit.svg) center/contain no-repeat;"></span>Checkout Room 203</button></sc-if>
+            <sc-if value="{{checkedOut}}" hint-placeholder-val="{{false}}"><span style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;font-weight:700;background:var(--ok-soft);color:var(--ok)"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/circle-check.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/circle-check.svg) center/contain no-repeat;"></span>Checked out · all access ended</span></sc-if>
+          </div>
+          <sc-for list="{{sessions}}" as="s" hint-placeholder-count="3">
+            <div style="display:grid;grid-template-columns:40px minmax(0,1.4fr) minmax(0,1.6fr) 160px auto;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
+              <div style="width:40px;height:40px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{s.mask}};mask:{{s.mask}};"></span></div>
+              <div><div style="font-weight:700">{{s.name}}</div><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">{{s.id}}</div></div>
+              <div style="font-size:13px;color:var(--muted)">{{s.detail}}</div>
+              <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;background:{{s.soft}};color:{{s.color}};justify-self:start"><span style="width:7px;height:7px;border-radius:50%;background:{{s.color}}"></span>{{s.status}}</span>
+              <div style="display:flex;gap:6px"><sc-if value="{{s.active}}" hint-placeholder-val="{{true}}"><button onClick="{{s.revoke}}" style="min-height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--err);background:transparent;color:var(--err);font:700 13px var(--font);cursor:pointer">{{s.revokeLabel}}</button></sc-if><sc-if value="{{s.replace}}" hint-placeholder-val="{{false}}"><button onClick="{{openQr}}" style="min-height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 13px var(--font);cursor:pointer">Issue replacement</button></sc-if></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--line);font-weight:800">Displays</div>
+          <div style="display:grid;grid-template-columns:40px minmax(0,1.4fr) minmax(0,1.6fr) 160px auto;gap:12px;align-items:center;padding:12px 16px">
+            <div style="width:40px;height:40px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/device-tablet.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/device-tablet.svg) center/contain no-repeat;"></span></div>
+            <div><div style="font-weight:700">Living room tablet</div><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">display_lr · Fire HD 10 (2023)</div></div>
+            <div style="font-size:13px;color:var(--muted)">Paired Sep 12 by Lena · long-lived, operator-managed · last seen just now</div>
+            <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;background:var(--ok-soft);color:var(--ok);justify-self:start"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span>Online</span>
+            <button onClick="{{noop}}" style="min-height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--err);background:transparent;color:var(--err);font:700 13px var(--font);cursor:pointer">Revoke device</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isSetup}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Setup assistant</h1><p style="margin:4px 0 0;color:var(--muted)">Each check is separate. A test from the HA server does not prove that a phone on the guest Wi-Fi can reach you.</p></div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,320px);gap:20px;align-items:start">
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+            <sc-for list="{{setupSteps}}" as="s" hint-placeholder-count="6">
+              <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border-bottom:1px solid var(--line)">
+                <div style="width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex:none;background:{{s.soft}};color:{{s.color}}"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:{{s.mask}};mask:{{s.mask}};{{s.iconStyle}};"></span></div>
+                <div style="flex:1;min-width:0"><div style="font-weight:700">{{s.title}}</div><div style="font-size:13px;color:var(--muted);margin-top:2px">{{s.detail}}</div></div>
+                <sc-if value="{{s.action}}" hint-placeholder-val="{{false}}"><button onClick="{{s.run}}" disabled="{{s.running}}" style="min-height:38px;padding:0 14px;border-radius:10px;border:none;background:var(--accent);color:#1F1D19;font:700 13px var(--font);cursor:pointer;white-space:nowrap">{{s.action}}</button></sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px">
+              <div style="font-weight:700">Public origin</div>
+              <div style="font-family:var(--mono);font-size:13px;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);overflow-wrap:anywhere">https://panel.seeblick.example:8443</div>
+              <div style="font-size:12px;color:var(--muted)">Set explicitly. Never derived from Host or Forwarded headers. Credentials are bound to this origin including the port.</div>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px">
+              <div style="font-weight:700">TLS mode</div>
+              <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px"><input type="radio" name="tls" checked style="accent-color:var(--accent);margin-top:2px">Own HTTPS listener · cert from allowed path <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">/ssl/panel.pem</span></label>
+              <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--muted)"><input type="radio" name="tls" style="accent-color:var(--accent);margin-top:2px">Reverse proxy · trusted peers only</label>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isAudit}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Audit &amp; diagnostics</h1><p style="margin:4px 0 0;color:var(--muted)">Actual actor and effective principal are always both recorded. No tokens, raw QR secrets or full HA payloads are ever logged.</p></div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,300px);gap:20px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{auditSeg}}" as="o" hint-placeholder-count="4"><button onClick="{{o.go}}" style="{{o.style}}">{{o.label}}</button></sc-for></div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:auto">
+              <div style="min-width:760px">
+                <div style="display:grid;grid-template-columns:72px 110px 130px minmax(150px,1.3fr) 110px minmax(150px,1fr);gap:12px;padding:10px 16px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line)"><span>Time</span><span>Actor</span><span>Effective</span><span>Operation</span><span>Result</span><span>Reason · resource</span></div>
+                <sc-for list="{{auditRows}}" as="a" hint-placeholder-count="6">
+                  <div style="display:grid;grid-template-columns:72px 110px 130px minmax(150px,1.3fr) 110px minmax(150px,1fr);gap:12px;padding:10px 16px;align-items:center;border-bottom:1px solid var(--line);font-size:13px">
+                    <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">{{a.t}}</span><span>{{a.actor}}</span><span>{{a.eff}}</span><span style="font-family:var(--mono);font-size:12px">{{a.op}}</span>
+                    <span style="display:inline-flex;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:{{a.soft}};color:{{a.color}};justify-self:start">{{a.result}}</span>
+                    <span style="font-family:var(--mono);font-size:11px;color:var(--muted);overflow-wrap:anywhere">{{a.reason}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px;font-size:13px">
+              <div style="font-weight:700;font-size:14px">Diagnostics (redacted)</div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Gateway</span><span style="font-family:var(--mono)">0.4.1 · aarch64</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">HA Core</span><span style="font-family:var(--mono)">2026.10.2</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Supervisor</span><span style="font-family:var(--mono)">2026.10.3 ✓ min</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Temperature unit</span><span style="font-family:var(--mono)">°C · adapter ok</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Live clients</span><span style="font-family:var(--mono)">3 · 1 display</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Policy decision p95</span><span style="font-family:var(--mono)">6 ms</span></div>
+              <button onClick="{{noop}}" style="margin-top:6px;min-height:38px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 13px var(--font);cursor:pointer">Review &amp; export…</button>
+            </div>
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px;font-size:13px">
+              <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/database-export.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/database-export.svg) center/contain no-repeat;color:var(--ok);"></span>App backup</div>
+              <div>Last clean export <strong>today 03:00</strong> · 2.1 MB</div>
+              <div style="font-size:12px;color:var(--muted)">Live state, password hashes, sessions and invites are excluded by design. A restore always needs an admin review and issues new access.</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isDiff}}" hint-placeholder-val="{{false}}">
+        <div><h1 style="margin:0;font-size:24px;font-weight:800;letter-spacing:-0.01em">Review changes · Room guest {{publishedLabel}} → {{draftLabel}}</h1><p style="margin:4px 0 0;color:var(--muted)">What guests gain or lose if you publish. Existing stays keep {{publishedLabel}} until you roll out explicitly.</p></div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:20px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden">
+              <sc-if value="{{noDiff}}" hint-placeholder-val="{{false}}"><div style="padding:24px;text-align:center;color:var(--muted)">No differences to {{publishedLabel}}. Edit the role to see a diff here.</div></sc-if>
+              <sc-for list="{{diffs}}" as="d" hint-placeholder-count="2">
+                <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:14px;padding:14px 16px;border-bottom:1px solid var(--line);align-items:start">
+                  <span style="display:inline-flex;justify-content:center;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;background:{{d.soft}};color:{{d.color}}">{{d.type}}</span>
+                  <div><div style="font-weight:700">{{d.title}}</div><div style="font-size:13px;color:var(--muted);margin-top:2px">{{d.text}}</div></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px"><div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Before · {{publishedLabel}}</div><div style="margin-top:6px;font-size:13px;line-height:1.5">{{summaryBefore}}</div></div>
+              <div style="background:var(--surface);border:2px solid var(--accent);border-radius:16px;padding:14px"><div style="font-size:12px;color:var(--accent-ink);text-transform:uppercase;letter-spacing:.06em;font-weight:700">After · {{draftLabel}}</div><div style="margin-top:6px;font-size:13px;line-height:1.5">{{summaryAfter}}</div></div>
+            </div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px">
+            <div style="font-weight:800;font-size:16px">Publish</div>
+            <div style="font-size:13px;display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Affected active stays</span><strong>1 · Room 203</strong></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Open guest sessions</span><strong>1 device</strong></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Editor based on</span><span style="font-family:var(--mono)">{{publishedLabel}} · policy v{{policyVersion}}</span></div>
+            </div>
+            <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;padding:10px;border:1px solid var(--line);border-radius:12px;cursor:pointer"><input type="checkbox" checked="{{rollout}}" onChange="{{toggleRollout}}" style="accent-color:var(--accent);width:18px;height:18px;margin:1px 0 0">Also roll out to existing assignments now (logged). Open clients receive a new filtered snapshot.</label>
+            <sc-if value="{{notPublished}}" hint-placeholder-val="{{true}}"><button onClick="{{publish}}" disabled="{{noDiff}}" style="min-height:46px;border-radius:12px;border:none;background:var(--accent);color:#1F1D19;font:800 15px var(--font);cursor:pointer;opacity:{{publishOpacity}}">Publish {{draftLabel}}</button></sc-if>
+            <sc-if value="{{justPublished}}" hint-placeholder-val="{{false}}"><div style="display:flex;gap:10px;align-items:center;padding:12px;border-radius:12px;background:var(--ok-soft);color:var(--ok);font-weight:700"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/circle-check.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/circle-check.svg) center/contain no-repeat;"></span>Published · policy version is now v{{policyVersion}}</div></sc-if>
+            <button onClick="{{goRoles}}" style="min-height:40px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer">Back to editor</button>
+            <div style="font-size:12px;color:var(--muted)">If someone published a newer version meanwhile, this publish is refused as a conflict instead of overwriting.</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{qrOpen}}" hint-placeholder-val="{{false}}">
+        <div role="dialog" aria-modal="true" aria-label="Invite QR" style="position:fixed;inset:0;z-index:60;background:rgba(31,29,25,.5);display:grid;place-items:center;padding:20px">
+          <div style="background:var(--surface);color:var(--ink);border-radius:22px;padding:24px;width:min(560px,100%);display:flex;flex-direction:column;gap:16px;box-shadow:0 30px 80px rgba(0,0,0,.3)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px"><div><div style="font-weight:800;font-size:18px">Invite {{qrIndex}} of 2 · Room 203</div><div style="font-size:13px;color:var(--muted)">Show this to the guest now. It is displayed exactly once.</div></div><button onClick="{{closeQr}}" aria-label="Close" style="width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:grid;place-items:center"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/x.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/x.svg) center/contain no-repeat;"></span></button></div>
+            <div style="display:grid;grid-template-columns:200px minmax(0,1fr);gap:18px;align-items:start">
+              <div style="width:200px;height:200px;border-radius:14px;border:1px solid var(--line);background:repeating-linear-gradient(45deg,var(--bg) 0 6px,var(--surface) 6px 12px);display:grid;place-items:center;text-align:center;padding:14px;box-sizing:border-box"><span style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.4">QR · generated locally<br>256-bit one-time secret<br>scan from the guest phone</span></div>
+              <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;min-width:0">
+                <div style="font-family:var(--mono);font-size:12px;padding:8px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--line);overflow-wrap:anywhere">https://panel.seeblick.example:8443/join#i=•••••••••••••••</div>
+                <div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:6px"><span style="color:var(--muted)">Redeem by</span><strong>today 14:30 · 15 min</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:6px"><span style="color:var(--muted)">Usable until</span><strong>Nov 4, 10:00 · checkout</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding-bottom:6px"><span style="color:var(--muted)">Role</span><span style="font-family:var(--mono)">room_guest {{publishedLabel}}</span></div>
+                <div style="display:flex;gap:8px;align-items:flex-start;color:var(--warn);font-size:12px"><span aria-hidden="true" style="display:inline-block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/alert-triangle.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/alert-triangle.svg) center/contain no-repeat;flex:none;margin-top:1px;"></span><span>Until redeemed, this image is an access credential. Don't paste it into chats or screenshots.</span></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button onClick="{{previewInvite}}" style="min-height:42px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/eye.svg) center/contain no-repeat;"></span>Preview this invite</button><button onClick="{{nextQr}}" style="min-height:42px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer">Next device</button><button onClick="{{closeQr}}" style="min-height:42px;padding:0 18px;border-radius:12px;border:none;background:var(--accent);color:#1F1D19;font:700 14px var(--font);cursor:pointer">Done</button></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{confirmOpen}}" hint-placeholder-val="{{false}}">
+        <div role="dialog" aria-modal="true" aria-label="Confirm checkout" style="position:fixed;inset:0;z-index:60;background:rgba(31,29,25,.5);display:grid;place-items:center;padding:20px">
+          <div style="background:var(--surface);color:var(--ink);border-radius:22px;padding:24px;width:min(460px,100%);display:flex;flex-direction:column;gap:14px;box-shadow:0 30px 80px rgba(0,0,0,.3)">
+            <div style="font-weight:800;font-size:18px">End stay in Room 203?</div>
+            <div style="font-size:14px;color:var(--muted)">This ends everything that belongs to the stay, including open connections:</div>
+            <ul style="margin:0;padding-left:20px;font-size:14px;line-height:1.7"><li>1 active device session (iPhone · Safari)</li><li>1 refresh family</li><li>1 pending invite (not redeemed)</li></ul>
+            <div style="font-size:12px;color:var(--muted)">The next guest will not see any history from this stay. Already delivered commands cannot be taken back.</div>
+            <div style="display:flex;gap:8px;justify-content:flex-end"><button onClick="{{closeConfirm}}" style="min-height:42px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 14px var(--font);cursor:pointer">Cancel</button><button onClick="{{doCheckout}}" style="min-height:42px;padding:0 18px;border-radius:12px;border:none;background:var(--err);color:#fff;font:700 14px var(--font);cursor:pointer">Checkout</button></div>
+          </div>
+        </div>
+      </sc-if>
+    </main>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{isGuest}}" hint-placeholder-val="{{false}}">
+    <div style="display:flex;flex-wrap:wrap;gap:32px;justify-content:center;align-items:flex-start;padding:32px 20px 60px">
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{isDark}}" hint-size="402px,874px">
+        <sc-if value="{{isJoin}}" hint-placeholder-val="{{true}}">
+          <div style="font-family:var(--font);color:var(--ink);background:var(--bg);min-height:100%;box-sizing:border-box;padding:80px 24px 40px;display:flex;flex-direction:column;gap:20px">
+            <div style="width:64px;height:64px;border-radius:20px;background:var(--accent);display:grid;place-items:center;color:#1F1D19"><span aria-hidden="true" style="display:inline-block;width:34px;height:34px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;"></span></div>
+            <div><div style="font-size:30px;font-weight:800;letter-spacing:-0.02em;line-height:1.1">You're invited</div><div style="font-size:17px;color:var(--muted);margin-top:6px">Room 203 · Nov 1 – Nov 4<br>Seeblick Apartments</div></div>
+            <div style="padding:14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font-size:14px;line-height:1.45;display:flex;gap:10px"><span aria-hidden="true" style="display:inline-block;width:22px;height:22px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/shield-check.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/shield-check.svg) center/contain no-repeat;color:var(--ok);flex:none;"></span><span>Your access code was read from the link and removed from the address bar. No account, no app store, no tracking.</span></div>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted)">Name on this device (optional)<input placeholder="e.g. Sam's phone" style="min-height:48px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 16px var(--font)"></label>
+            <button onClick="{{joinNow}}" style="min-height:56px;border-radius:16px;border:none;background:var(--accent);color:#1F1D19;font:800 18px var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px">Open my room<span aria-hidden="true" style="display:inline-block;width:22px;height:22px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/arrow-right.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/arrow-right.svg) center/contain no-repeat;"></span></button>
+            <div style="font-size:12px;color:var(--muted);text-align:center;line-height:1.5">Code valid until 14:30 · Access ends Nov 4, 10:00<br>Problems? Reception: +49 30 000000</div>
+          </div>
+        </sc-if>
+        <sc-if value="{{isDash}}" hint-placeholder-val="{{false}}">
+          <div style="padding-top:54px;min-height:100%;background:var(--bg);box-sizing:border-box">
+            <dc-import name="GuestPanel" rooms="{{guestRooms}}" layout="{{guestLayout}}" status="{{guestStatus}}" title="Room 203" subtitle="Seeblick Apartments · access ends Nov 4, 10:00" footer="Need help? Reception +49 30 000000 · Sign out" hint-size="100%,700px"></dc-import>
+          </div>
+        </sc-if>
+      </x-import>
+      <div style="width:300px;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;font-size:13px">
+        <div style="font-weight:800;font-size:15px">Guest · browser, no install</div>
+        <div style="color:var(--muted);line-height:1.5">The guest opens the one-time link from the QR. After redeeming, the browser holds a host-bound cookie; the dashboard shows only Room 203 and only the granted actions of the published role.</div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;font-weight:700">Try</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button onClick="{{resetJoin}}" style="min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px var(--font);cursor:pointer;text-align:left;padding:0 12px">Back to the join page</button>
+          <button onClick="{{guestStale}}" style="min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px var(--font);cursor:pointer;text-align:left;padding:0 12px">Simulate connection loss (stale ≤ 30 s)</button>
+          <button onClick="{{guestOnline}}" style="min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px var(--font);cursor:pointer;text-align:left;padding:0 12px">Back online</button>
+        </div>
+        <div style="color:var(--muted);line-height:1.5">Tap a card to see the command states: checking → accepted by hub → confirmed by device. Checkout in Admin › Sessions ends this view.</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isTablet}}" hint-placeholder-val="{{false}}">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:18px;padding:32px 20px 60px">
+      <div style="width:min(1180px,100%);aspect-ratio:16/10;background:#111;border-radius:28px;padding:16px;box-sizing:border-box;box-shadow:0 30px 80px rgba(0,0,0,.25)">
+        <div style="width:100%;height:100%;border-radius:14px;overflow:auto;background:var(--bg)">
+          <dc-import name="GuestPanel" rooms="{{displayRooms}}" layout="tiles" wall="{{true}}" status="{{displayStatus}}" title="Living room &amp; kitchen" subtitle="{{clock}} · Display profile · no editing on this device" hint-size="100%,100%"></dc-import>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;font-size:13px;color:var(--muted)">
+        <span>Wall display · 64 px targets · own paired identity (not an admin, not a shared resident login)</span>
+        <button onClick="{{displayStaleToggle}}" style="min-height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px var(--font);cursor:pointer">{{displayToggleLabel}}</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isNative}}" hint-placeholder-val="{{false}}">
+    <div style="display:flex;flex-wrap:wrap;gap:32px;justify-content:center;align-items:flex-start;padding:32px 20px 60px">
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{isDark}}" hint-size="402px,874px">
+        <div style="font-family:var(--font);color:var(--ink);background:var(--bg);min-height:100%;box-sizing:border-box;display:flex;flex-direction:column">
+          <div style="padding:64px 20px 10px;display:flex;justify-content:space-between;align-items:center"><div style="font-size:26px;font-weight:800;letter-spacing:-0.02em">{{nativeTitle}}</div><div style="width:36px;height:36px;border-radius:12px;background:var(--accent);display:grid;place-items:center;color:#1F1D19"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/key.svg) center/contain no-repeat;"></span></div></div>
+          <div style="flex:1;padding:6px 20px 20px;display:flex;flex-direction:column;gap:12px">
+            <sc-if value="{{nInstances}}" hint-placeholder-val="{{true}}">
+              <sc-for list="{{instances}}" as="i" hint-placeholder-count="2">
+                <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:8px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div style="font-weight:800;font-size:17px">{{i.name}}</div><span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;background:{{i.soft}};color:{{i.color}}"><span style="width:7px;height:7px;border-radius:50%;background:{{i.color}}"></span>{{i.status}}</span></div>
+                  <div style="font-family:var(--mono);font-size:12px;color:var(--muted)">{{i.host}}</div>
+                  <div style="font-size:13px;color:var(--muted)">{{i.who}}</div>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:8px;font-size:12px;background:var(--bg);border:1px solid var(--line)"><span aria-hidden="true" style="display:inline-block;width:14px;height:14px;flex:none;background:currentColor;-webkit-mask:{{i.pinMask}};mask:{{i.pinMask}};"></span>{{i.pin}}</span><span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:8px;font-size:12px;background:var(--bg);border:1px solid var(--line)"><span aria-hidden="true" style="display:inline-block;width:14px;height:14px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/lock.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/lock.svg) center/contain no-repeat;"></span>{{i.store}}</span></div>
+                  <button onClick="{{noop}}" style="margin-top:4px;min-height:48px;border-radius:14px;border:none;background:var(--accent);color:#1F1D19;font:700 15px var(--font);cursor:pointer">Open</button>
+                </div>
+              </sc-for>
+              <button onClick="{{goScan}}" style="min-height:52px;border-radius:16px;border:1px dashed var(--line);background:transparent;color:var(--ink);font:700 15px var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/qrcode.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/qrcode.svg) center/contain no-repeat;"></span>Add instance by QR</button>
+            </sc-if>
+            <sc-if value="{{nScan}}" hint-placeholder-val="{{false}}">
+              <div style="flex:1;min-height:360px;border-radius:20px;background:repeating-linear-gradient(135deg,#2a2823 0 10px,#24221d 10px 20px);position:relative;display:grid;place-items:center;color:#F3EFE6">
+                <div style="width:220px;height:220px;border:3px solid var(--accent);border-radius:24px;opacity:.9"></div>
+                <div style="position:absolute;bottom:16px;left:16px;right:16px;text-align:center;font-size:14px;opacity:.85">Point the camera at the invite QR</div>
+                <div style="position:absolute;top:16px;left:16px;right:16px;text-align:center;font-family:var(--mono);font-size:11px;opacity:.7">camera preview · local decoder · nothing uploaded</div>
+              </div>
+              <div style="padding:12px 14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font-size:13px;line-height:1.45;display:flex;gap:10px"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/certificate.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/certificate.svg) center/contain no-repeat;color:var(--ok);flex:none;"></span><span>The code is sent only after the certificate (and pin, if present) has been verified for this instance.</span></div>
+              <button onClick="{{noop}}" style="min-height:48px;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:700 15px var(--font);cursor:pointer">Enter address manually</button>
+            </sc-if>
+            <sc-if value="{{nWall}}" hint-placeholder-val="{{false}}">
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden">
+                <sc-for list="{{wallSettings}}" as="w" hint-placeholder-count="4">
+                  <label style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);min-height:56px;box-sizing:border-box;cursor:pointer"><span aria-hidden="true" style="display:inline-block;width:22px;height:22px;flex:none;background:currentColor;-webkit-mask:{{w.mask}};mask:{{w.mask}};color:var(--accent-ink);"></span><span style="flex:1"><span style="display:block;font-weight:700;font-size:15px">{{w.label}}</span><span style="display:block;font-size:12px;color:var(--muted)">{{w.sub}}</span></span><input type="checkbox" checked="{{w.on}}" onChange="{{w.toggle}}" style="width:24px;height:24px;margin:0;accent-color:var(--accent)"></label>
+                </sc-for>
+              </div>
+              <div style="font-size:12px;color:var(--muted);line-height:1.5">The PIN only locks these settings. A real kiosk lock needs device management on iOS, Android or Fire OS.</div>
+              <button onClick="{{goTabletSurface}}" style="min-height:52px;border-radius:16px;border:none;background:var(--accent);color:#1F1D19;font:800 16px var(--font);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/device-tablet.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/device-tablet.svg) center/contain no-repeat;"></span>Start wall mode</button>
+            </sc-if>
+          </div>
+          <div style="display:flex;border-top:1px solid var(--line);background:var(--surface);padding:8px 10px 30px">
+            <sc-for list="{{nativeTabs}}" as="t" hint-placeholder-count="3"><button onClick="{{t.go}}" style="{{t.style}}"><span aria-hidden="true" style="display:inline-block;width:24px;height:24px;flex:none;background:currentColor;-webkit-mask:{{t.mask}};mask:{{t.mask}};"></span><span style="font-size:11px;font-weight:700">{{t.label}}</span></button></sc-for>
+          </div>
+        </div>
+      </x-import>
+      <div style="width:300px;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;font-size:13px">
+        <div style="font-weight:800;font-size:15px">Native companion app</div>
+        <div style="color:var(--muted);line-height:1.5">Same dashboard as the browser, plus what a browser cannot do: several saved instances with separate sessions, a local QR scanner, Keychain/Keystore token storage, optional certificate pinning, and wall mode.</div>
+        <div style="color:var(--muted);line-height:1.5">UI files ship inside the signed app. The gateway only sends data and a validated dashboard schema.</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{toast}}" hint-placeholder-val="{{false}}"><div role="status" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:70;background:#1F1D19;color:#F3EFE6;padding:12px 18px;border-radius:12px;font-size:13px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.25)">{{toast}}</div></sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startSurface&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;admin&quot;,&quot;guest&quot;,&quot;tablet&quot;,&quot;native&quot;],&quot;default&quot;:&quot;admin&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;rooms&quot;,&quot;roles&quot;,&quot;preview&quot;,&quot;stays&quot;,&quot;sessions&quot;,&quot;setup&quot;,&quot;audit&quot;,&quot;diff&quot;],&quot;default&quot;:&quot;roles&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+class Component extends DCLogic {
+  state = {
+    surface: (this.props && this.props.startSurface) || 'admin', theme: 'light', screen: (this.props && this.props.startScreen) || 'roles', editor: 'matrix', guestLayout: 'tiles',
+    role: { lightRead: true, lightOn: true, lightOff: true, lightDim: true, bedRead: true, bedOn: false, bedOff: true, climRead: true, climSet: true, climMode: false, blindRead: true, blindOpen: true, blindStop: true, blindClose: true, blindPos: false, humRead: true, histDeny: true, tMin: 18, tMax: 24, tStep: '0.5', fenceMia: true },
+    published: { version: 2, role: { lightRead: true, lightOn: true, lightOff: true, lightDim: false, bedRead: true, bedOn: false, bedOff: true, climRead: true, climSet: true, climMode: false, blindRead: true, blindOpen: true, blindStop: true, blindClose: true, blindPos: false, humRead: true, histDeny: true, tMin: 19, tMax: 24, tStep: '0.5', fenceMia: true } },
+    policyVersion: 42, justPublished: false, rollout: false,
+    selectedUnit: 'unit_203', previewTarget: 'guest203', previewWidth: 390, previewTime: 'now', explainOn: true, decisions: [],
+    qrOpen: false, qrIndex: 1, confirmOpen: false, checkedOut: false, revoked: {},
+    setupTest: 'idle', auditFilter: 'all', guestStage: 'join', guestStatus: 'online', displayStatus: 'online', nativeScreen: 'instances',
+    wall: { awake: true, orient: true, night: false, pin: true }, toast: null,
+  };
+  componentDidMount() { this.applyTheme(); }
+  componentDidUpdate() { this.applyTheme(); }
+
+  applyTheme() { if (document.body.dataset.theme !== this.state.theme) document.body.dataset.theme = this.state.theme; }
+  set(patch) { return () => this.setState(patch); }
+  mask(n) { return 'url(https://api.iconify.design/' + String(n || 'tabler:point').replace(':', '/') + '.svg) center/contain no-repeat'; }
+  say(msg) { clearTimeout(this.tt); this.setState({ toast: msg }); this.tt = setTimeout(() => this.setState({ toast: null }), 2600); }
+  setRole(k, v) { this.setState(s => ({ role: { ...s.role, [k]: v }, justPublished: false })); }
+
+  seg(items, current, onPick, dark) {
+    return items.map(it => {
+      const on = it.value === current;
+      const style = dark
+        ? `min-height:28px;padding:0 10px;border-radius:8px;border:1px solid ${on ? '#C8A24A' : 'rgba(243,239,230,.2)'};background:${on ? '#C8A24A' : 'transparent'};color:${on ? '#1F1D19' : '#F3EFE6'};font:500 12px var(--mono);cursor:pointer;display:inline-flex;align-items:center;gap:6px`
+        : `min-height:36px;padding:0 12px;border-radius:10px;border:1px solid ${on ? 'var(--accent)' : 'var(--muted-soft)'};background:${on ? 'var(--accent)' : 'var(--surface)'};color:${on ? '#1F1D19' : 'var(--ink)'};font:700 13px var(--font);cursor:pointer`;
+      return { ...it, mask: this.mask(it.icon), style, go: () => onPick(it.value) };
+    });
+  }
+
+  // Projection: role state -> what a target principal sees. Same function feeds editor preview, admin preview, guest phone and wall display.
+  project(target, time, roleOverride) {
+    const r = roleOverride || this.state.role;
+    const v = roleOverride ? `v${this.state.published.version}` : `v${this.state.published.version + 1} draft`;
+    const g = (a, ok, okText, missText) => ({ action: a, status: ok ? 'allow' : 'missing', text: ok ? okText : missText });
+    const grant = `granted · Room guest ${v}`, none = 'no grant';
+    const deny = { action: 'history.read', status: r.histDeny ? 'deny' : 'missing', text: r.histDeny ? 'explicit deny · wins over any grant' : 'no grant' };
+    const keep = res => res.read || Object.values(res.caps).some(x => x === true);
+    if (target === 'guest203') {
+      const rooms = [{ id: 'unit_203', name: 'Room 203', resources: [
+        { id: 'res_main_light', kind: 'light', label: 'Main light', read: r.lightRead, state: { power: 'on', level: 70, availability: 'online' }, caps: { on: r.lightOn, off: r.lightOff, dim: r.lightDim }, rules: [g('state.read', r.lightRead, grant, none), g('light.on', r.lightOn, grant, none), g('light.off', r.lightOff, grant, none), g('light.set_level', r.lightDim, grant + ' · level_pct 0–100', none + ' · dimmer stays hidden'), deny] },
+        { id: 'res_bedside', kind: 'light', label: 'Bedside lamp', read: r.bedRead, state: { power: 'on', availability: 'online' }, caps: { on: r.bedOn, off: r.bedOff }, rules: [g('state.read', r.bedRead, grant, none), g('light.on', r.bedOn, grant, none + ' · only "Turn off" is shown'), g('light.off', r.bedOff, grant, none), deny] },
+        { id: 'res_thermostat', kind: 'climate', label: 'Room temperature', read: r.climRead, state: { current: '21.0', target: 21.5, availability: 'online' }, caps: { set: r.climSet, min: r.tMin, max: r.tMax, step: r.tStep, mode: r.climMode }, rules: [g('state.read', r.climRead, grant, none), g('climate.set_temperature', r.climSet, `grant target_c ${r.tMin}–${r.tMax} °C · step ${r.tStep} · device 7–30`, none), g('climate.set_mode', r.climMode, grant, 'blocked · adapter semantics not verified'), deny] },
+        { id: 'res_blind', kind: 'cover', label: 'Blind', read: r.blindRead, state: { position: 100, availability: 'online' }, caps: { open: r.blindOpen, stop: r.blindStop, close: r.blindClose, position: r.blindPos }, rules: [g('state.read', r.blindRead, grant, none), g('cover.open', r.blindOpen, grant, none), g('cover.stop', r.blindStop, grant, none), g('cover.close', r.blindClose, grant, none), g('cover.set_position', r.blindPos, grant, none), deny] },
+        { id: 'res_humidity', kind: 'sensor', label: 'Humidity', read: r.humRead, state: { value: '46', unit: '%', availability: 'online' }, caps: {}, rules: [g('state.read', r.humRead, grant, none), deny] },
+      ].filter(keep) }];
+      return { who: 'Guest · Room 203', title: 'Room 203', subtitle: time === 'before' ? 'Evaluated at Nov 1, 13:00 · before check-in' : time === 'after' ? 'Evaluated at Nov 4, 11:00 · after check-out' : 'Seeblick Apartments · access ends Nov 4, 10:00', rooms, wall: false, status: time === 'before' ? 'waiting' : time === 'after' ? 'expired' : 'online', session: 'stay_7f3a · invite draft · 1 of 2 devices',
+        ctx: [{ k: 'Principal', v: 'guest (temporary)' }, { k: 'Role', v: `room_guest ${v}` }, { k: 'Scope', v: 'unit_203 only' }, { k: 'Valid', v: 'Nov 1 14:00 → Nov 4 10:00' }, { k: 'History', v: 'denied' }, { k: 'Policy', v: `v${this.state.policyVersion}` }],
+        hidden: 'Not in this projection: other rooms, cameras, presence, entity IDs, previous guests. The API returns NOT_FOUND for all of them.' };
+    }
+    if (target === 'mia') {
+      const fence = r.fenceMia;
+      const rooms = [{ id: 'unit_mia', name: "Mia's room", resources: [
+        { id: 'res_mia_light', kind: 'light', label: 'Ceiling light', read: true, state: { power: 'off', availability: 'online' }, caps: { on: true, off: true }, rules: [{ action: 'state.read', status: 'allow', text: 'granted · Family kids v4' }, { action: 'light.on', status: 'allow', text: 'granted · Family kids v4' }, { action: 'light.off', status: 'allow', text: 'granted · Family kids v4' }] },
+        { id: 'res_mia_thermo', kind: 'climate', label: 'Thermostat', read: true, state: { current: '20.5', target: 21, availability: 'online' }, caps: { set: true, min: 19, max: fence ? 22 : 23, step: 0.5 }, rules: [{ action: 'state.read', status: 'allow', text: 'granted · Family kids v4' }, { action: 'climate.set_temperature', status: 'allow', text: 'grant target_c 19–23 °C · Family kids v4' }, fence ? { action: 'climate.set_temperature', status: 'fence', text: 'fence ≤ 22 °C (Mia) → effective 19–22 °C' } : { action: 'fence', status: 'missing', text: 'no personal fence · effective 19–23 °C' }] },
+      ] }, { id: 'unit_hall', name: 'Hallway', resources: [
+        { id: 'res_hall_light', kind: 'light', label: 'Hallway light', read: true, state: { power: 'on', availability: 'online' }, caps: { on: false, off: true }, rules: [{ action: 'state.read', status: 'allow', text: 'granted · Family kids v4' }, { action: 'light.off', status: 'allow', text: 'granted · Family kids v4' }, { action: 'light.on', status: 'missing', text: 'no grant · kids only switch the hallway off' }] },
+      ] }];
+      return { who: 'Mia (resident)', title: 'Hi Mia', subtitle: 'Your rooms', rooms, wall: false, status: 'online', session: 'resident session · iPad · 30-day refresh family',
+        ctx: [{ k: 'Principal', v: 'resident · Mia' }, { k: 'Groups', v: 'Family kids v4' }, { k: 'Fence', v: fence ? 'target_c ≤ 22 °C' : 'none' }, { k: 'Scope', v: "Mia's room, Hallway" }, { k: 'Policy', v: `v${this.state.policyVersion}` }],
+        hidden: "Not in this projection: parents' bedroom, cameras, presence sensors. Names of hidden rooms are not sent either." };
+    }
+    const rooms = [{ id: 'unit_lr', name: 'Living room', resources: [
+      { id: 'res_lr_ceiling', kind: 'light', label: 'Ceiling light', read: true, state: { power: 'on', level: 55, availability: 'online' }, caps: { on: true, off: true, dim: true }, rules: [{ action: 'light.*', status: 'allow', text: 'granted · Display living v2' }] },
+      { id: 'res_lr_floor', kind: 'light', label: 'Floor lamp', read: true, state: { power: 'off', availability: 'online' }, caps: { on: true, off: true }, rules: [{ action: 'light.on/off', status: 'allow', text: 'granted · Display living v2' }] },
+      { id: 'res_lr_blind', kind: 'cover', label: 'Blinds', read: true, state: { position: 40, availability: 'online' }, caps: { open: true, stop: true, close: true }, rules: [{ action: 'cover.*', status: 'allow', text: 'granted · Display living v2' }] },
+      { id: 'res_lr_thermo', kind: 'climate', label: 'Temperature', read: true, state: { current: '21.5', target: 22, availability: 'online' }, caps: { set: true, min: 18, max: 25, step: 0.5 }, rules: [{ action: 'climate.set_temperature', status: 'allow', text: 'grant 18–25 °C · Display living v2' }] },
+    ] }, { id: 'unit_kitchen', name: 'Kitchen', resources: [
+      { id: 'res_k_light', kind: 'light', label: 'Kitchen light', read: true, state: { power: 'off', availability: 'online' }, caps: { on: true, off: true }, rules: [{ action: 'light.on/off', status: 'allow', text: 'granted · Display living v2' }] },
+      { id: 'res_k_blind', kind: 'cover', label: 'Kitchen blind', read: true, state: { position: 100, availability: 'offline' }, caps: { open: false, stop: true, close: true }, rules: [{ action: 'cover.close/stop', status: 'allow', text: 'granted · Display living v2' }, { action: 'cover.open', status: 'missing', text: 'no grant' }] },
+      { id: 'res_k_hum', kind: 'sensor', label: 'Humidity', read: true, state: { value: '52', unit: '%', availability: 'online' }, caps: {}, rules: [{ action: 'state.read', status: 'allow', text: 'granted · Display living v2' }] },
+    ] }];
+    return { who: 'Living room tablet (display)', title: 'Living room & kitchen', subtitle: 'Display profile · Fire HD 10', rooms, wall: true, status: 'online', session: 'display_lr · paired Sep 12 · long-lived',
+      ctx: [{ k: 'Principal', v: 'display · Living room tablet' }, { k: 'Role', v: 'Display living v2' }, { k: 'Scope', v: 'Living room, Kitchen' }, { k: 'Session', v: 'operator-managed, revocable' }, { k: 'Policy', v: `v${this.state.policyVersion}` }],
+      hidden: 'The tablet has its own identity: losing it means revoking exactly this device, nothing else.' };
+  }
+
+  diff() {
+    const a = this.state.published.role, b = this.state.role, out = [];
+    const acts = [['lightOn', 'Main light · light.on'], ['lightOff', 'Main light · light.off'], ['lightDim', 'Main light · light.set_level (dimming)'], ['bedOn', 'Bedside lamp · light.on'], ['bedOff', 'Bedside lamp · light.off'], ['climSet', 'Room temperature · climate.set_temperature'], ['climMode', 'Room temperature · climate.set_mode'], ['blindOpen', 'Blind · cover.open'], ['blindStop', 'Blind · cover.stop'], ['blindClose', 'Blind · cover.close'], ['blindPos', 'Blind · cover.set_position'], ['lightRead', 'Main light · state.read'], ['bedRead', 'Bedside lamp · state.read'], ['climRead', 'Room temperature · state.read'], ['blindRead', 'Blind · state.read'], ['humRead', 'Humidity · state.read']];
+    const T = { added: { color: 'var(--ok)', soft: 'var(--ok-soft)' }, removed: { color: 'var(--err)', soft: 'var(--err-soft)' }, widened: { color: 'var(--warn)', soft: 'var(--warn-soft)' }, narrowed: { color: 'var(--info)', soft: 'var(--info-soft)' } };
+    acts.forEach(([k, title]) => { if (a[k] !== b[k]) out.push({ type: b[k] ? 'Added' : 'Removed', title, text: b[k] ? 'Guests gain this action. It appears as a new control on the card.' : 'Guests lose this action. Open clients receive a new snapshot.', ...T[b[k] ? 'added' : 'removed'] }); });
+    if (Number(a.tMin) !== Number(b.tMin) || Number(a.tMax) !== Number(b.tMax)) {
+      const wid = Number(b.tMin) < Number(a.tMin) || Number(b.tMax) > Number(a.tMax);
+      out.push({ type: wid ? 'Widened' : 'Narrowed', title: `Room temperature · target_c ${a.tMin}–${a.tMax} → ${b.tMin}–${b.tMax} °C`, text: wid ? 'Guests can set more values than before. Device range 7–30 °C still applies.' : 'Values outside the new range are refused from the moment of publishing.', ...T[wid ? 'widened' : 'narrowed'] });
+    }
+    if (a.tStep !== b.tStep) out.push({ type: 'Changed', title: `Room temperature · step ${a.tStep} → ${b.tStep}`, text: 'Allowed steps are evaluated from origin 0.', ...T.narrowed });
+    if (a.histDeny !== b.histDeny) out.push({ type: b.histDeny ? 'Added' : 'Removed', title: 'history.read · explicit deny', text: b.histDeny ? 'History stays blocked even if a group grants it.' : 'Without the deny, a future grant could expose history.', ...T[b.histDeny ? 'narrowed' : 'widened'] });
+    if (a.fenceMia !== b.fenceMia) out.push({ type: b.fenceMia ? 'Added' : 'Removed', title: 'Fence · Mia target_c ≤ 22 °C', text: b.fenceMia ? 'Narrows Mia regardless of group grants.' : 'Mia falls back to the group range 19–23 °C.', ...T[b.fenceMia ? 'narrowed' : 'widened'] });
+    return out;
+  }
+
+  renderVals() {
+    const s = this.state, r = s.role;
+    const surf = s.surface, scr = s.screen;
+    const surfaces = this.seg([{ value: 'admin', label: 'Admin (HA)', icon: 'tabler:settings' }, { value: 'guest', label: 'Guest phone', icon: 'tabler:device-mobile' }, { value: 'tablet', label: 'Wall tablet', icon: 'tabler:device-tablet' }, { value: 'native', label: 'Native app', icon: 'tabler:brand-apple' }], surf, v => this.setState({ surface: v }), true);
+    const themeSeg = this.seg([{ value: 'light', label: 'light' }, { value: 'dark', label: 'dark' }, { value: 'contrast', label: 'contrast' }], s.theme, v => this.setState({ theme: v }), true);
+    const layoutSeg = this.seg([{ value: 'tiles', label: 'tiles' }, { value: 'list', label: 'list' }, { value: 'focus', label: 'focus' }], s.guestLayout, v => this.setState({ guestLayout: v }), true);
+    const editorSeg = this.seg([{ value: 'matrix', label: 'matrix' }, { value: 'cards', label: 'per card' }], s.editor, v => this.setState({ editor: v }), true);
+
+    const navItems = [['rooms', 'Rooms & devices', 'tabler:door'], ['roles', 'Roles & rights', 'tabler:lock-access'], ['preview', 'Preview as user', 'tabler:eye'], ['stays', 'Stays & invites', 'tabler:qrcode'], ['sessions', 'Sessions & checkout', 'tabler:devices'], ['setup', 'Setup assistant', 'tabler:checklist'], ['audit', 'Audit & diagnostics', 'tabler:list-search'], ['diff', 'Review & publish', 'tabler:git-compare']];
+    const diffs = this.diff();
+    const nav = navItems.map(([id, label, icon]) => { const on = scr === id; return { id, label, icon, mask: this.mask(icon), current: on ? 'page' : undefined, badge: id === 'diff' && diffs.length && !s.justPublished ? `${diffs.length}` : null, go: () => this.setState({ screen: id }), style: `display:flex;align-items:center;gap:10px;min-height:42px;padding:0 10px;border-radius:12px;border:none;background:${on ? 'var(--accent-soft)' : 'transparent'};color:${on ? 'var(--accent-ink)' : 'var(--ink)'};font:${on ? 800 : 600} 14px var(--font);cursor:pointer;text-align:left;width:100%` }; });
+
+    // Rooms
+    const unitDefs = [
+      { id: 'unit_203', name: 'Room 203', template: 'Hotel room v3', meta: '5 bindings · 1 to review', alert: true, resources: [
+        { label: 'Main light', pid: 'res_main_light', entity: 'light.room_203_ceiling', kind: 'light', abilities: 'on, off, brightness', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+        { label: 'Bedside lamp', pid: 'res_bedside', entity: 'light.room_203_bedside', kind: 'light', abilities: 'on, off', icon: 'tabler:lamp', status: 'Confirmed', st: 'ok' },
+        { label: 'Room temperature', pid: 'res_thermostat', entity: 'climate.room_203_trv', kind: 'climate', abilities: 'single setpoint, °C, 0.5 steps, 7–30', icon: 'tabler:temperature', status: 'Confirmed', st: 'ok' },
+        { label: 'Blind', pid: 'res_blind', entity: 'cover.room_203_blind', kind: 'cover', abilities: 'open, close, stop (position unverified)', icon: 'tabler:window', status: 'Needs review', st: 'warn', note: 'Entity renamed · registry ID stable' },
+        { label: 'Humidity', pid: 'res_humidity', entity: 'sensor.room_203_humidity', kind: 'sensor', abilities: 'read %', icon: 'tabler:droplet', status: 'Confirmed', st: 'ok' },
+      ] },
+      { id: 'unit_204', name: 'Room 204', template: 'Hotel room v3', meta: '4 bindings', resources: [
+        { label: 'Main light', pid: 'res_204_light', entity: 'light.room_204_ceiling', kind: 'light', abilities: 'on, off', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+        { label: 'Room temperature', pid: 'res_204_thermo', entity: 'climate.room_204_trv', kind: 'climate', abilities: 'two setpoints · °F device', icon: 'tabler:temperature', status: 'Blocked', st: 'err', note: 'Dual setpoint · no tested adapter' },
+        { label: 'Blind', pid: 'res_204_blind', entity: 'cover.room_204_group', kind: 'cover', abilities: 'unknown', icon: 'tabler:window', status: 'Blocked', st: 'err', note: 'Group entity · indirect targets' },
+        { label: 'Humidity', pid: 'res_204_hum', entity: 'sensor.room_204_humidity', kind: 'sensor', abilities: 'read %', icon: 'tabler:droplet', status: 'Confirmed', st: 'ok' },
+      ] },
+      { id: 'unit_lr', name: 'Living room', template: 'Display living v2', meta: '4 bindings', resources: [
+        { label: 'Ceiling light', pid: 'res_lr_ceiling', entity: 'light.living_ceiling', kind: 'light', abilities: 'on, off, brightness', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+        { label: 'Floor lamp', pid: 'res_lr_floor', entity: 'switch.living_floor_lamp', kind: 'light', abilities: 'on, off', icon: 'tabler:lamp', status: 'Confirmed', st: 'ok' },
+        { label: 'Blinds', pid: 'res_lr_blind', entity: 'cover.living_blinds', kind: 'cover', abilities: 'open, close, stop', icon: 'tabler:window', status: 'Confirmed', st: 'ok' },
+        { label: 'Temperature', pid: 'res_lr_thermo', entity: 'climate.living_trv', kind: 'climate', abilities: 'single setpoint, °C', icon: 'tabler:temperature', status: 'Confirmed', st: 'ok' },
+      ] },
+      { id: 'unit_kitchen', name: 'Kitchen', template: 'Display living v2', meta: '3 bindings', resources: [
+        { label: 'Kitchen light', pid: 'res_k_light', entity: 'light.kitchen', kind: 'light', abilities: 'on, off', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+        { label: 'Kitchen blind', pid: 'res_k_blind', entity: 'cover.kitchen_blind', kind: 'cover', abilities: 'close, stop', icon: 'tabler:window', status: 'Confirmed', st: 'ok' },
+        { label: 'Humidity', pid: 'res_k_hum', entity: 'sensor.kitchen_humidity', kind: 'sensor', abilities: 'read %', icon: 'tabler:droplet', status: 'Confirmed', st: 'ok' },
+      ] },
+      { id: 'unit_mia', name: "Mia's room", template: 'Kids room v1', meta: '2 bindings', resources: [
+        { label: 'Ceiling light', pid: 'res_mia_light', entity: 'light.mia_ceiling', kind: 'light', abilities: 'on, off', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+        { label: 'Thermostat', pid: 'res_mia_thermo', entity: 'climate.mia_trv', kind: 'climate', abilities: 'single setpoint, °C', icon: 'tabler:temperature', status: 'Confirmed', st: 'ok' },
+      ] },
+      { id: 'unit_hall', name: 'Hallway', template: '—', meta: '1 binding', resources: [
+        { label: 'Hallway light', pid: 'res_hall_light', entity: 'light.hallway', kind: 'light', abilities: 'on, off', icon: 'tabler:bulb', status: 'Confirmed', st: 'ok' },
+      ] },
+    ];
+    const stCol = { ok: ['var(--ok)', 'var(--ok-soft)', 'tabler:circle-check'], warn: ['var(--warn)', 'var(--warn-soft)', 'tabler:alert-triangle'], err: ['var(--err)', 'var(--err-soft)', 'tabler:ban'] };
+    const units = unitDefs.map(u => { const on = u.id === s.selectedUnit; return { ...u, go: () => this.setState({ selectedUnit: u.id }), style: `display:flex;align-items:center;gap:8px;min-height:52px;padding:8px 12px;border-radius:12px;border:none;background:${on ? 'var(--accent-soft)' : 'transparent'};color:var(--ink);font:600 14px var(--font);cursor:pointer;width:100%;text-align:left` }; });
+    const unitRaw = unitDefs.find(u => u.id === s.selectedUnit) || unitDefs[0];
+    const unit = { ...unitRaw, resources: unitRaw.resources.map(x => ({ ...x, mask: this.mask(x.icon), color: stCol[x.st][0], soft: stCol[x.st][1], sicon: stCol[x.st][2], smask: this.mask(stCol[x.st][2]), note: x.note || null })) };
+
+    // Roles editor
+    const cols = [['read', 'Read state'], ['on', 'On'], ['off', 'Off'], ['dim', 'Dim'], ['set', 'Set temp'], ['open', 'Open'], ['stop', 'Stop'], ['close', 'Close'], ['hist', 'History']];
+    const rowDefs = [
+      { label: 'Main light', pid: 'res_main_light', icon: 'tabler:bulb', map: { read: 'lightRead', on: 'lightOn', off: 'lightOff', dim: 'lightDim', hist: 'histDeny' } },
+      { label: 'Bedside lamp', pid: 'res_bedside', icon: 'tabler:lamp', map: { read: 'bedRead', on: 'bedOn', off: 'bedOff', hist: 'histDeny' } },
+      { label: 'Room temperature', pid: 'res_thermostat', icon: 'tabler:temperature', map: { read: 'climRead', set: 'climSet', hist: 'histDeny' }, hasTemp: true },
+      { label: 'Blind', pid: 'res_blind', icon: 'tabler:window', map: { read: 'blindRead', open: 'blindOpen', stop: 'blindStop', close: 'blindClose', hist: 'histDeny' } },
+      { label: 'Humidity', pid: 'res_humidity', icon: 'tabler:droplet', map: { read: 'humRead', hist: 'histDeny' } },
+    ];
+    const chipIcon = { read: 'tabler:eye', on: 'tabler:bulb', off: 'tabler:bulb-off', dim: 'tabler:sun-low', set: 'tabler:temperature', open: 'tabler:arrow-bar-up', stop: 'tabler:player-stop', close: 'tabler:arrow-bar-down', hist: 'tabler:history' };
+    const matrixHead = cols.map(([k, label]) => ({ label, color: k === 'hist' ? 'var(--err)' : 'var(--muted)' }));
+    const matrixRows = rowDefs.map(row => ({ ...row, mask: this.mask(row.icon), cells: cols.map(([k, label]) => { const key = row.map[k]; if (!key) return { isNone: true, isCheck: false }; return { isCheck: true, isNone: false, checked: !!r[key], aria: `${row.label} ${label}`, accent: k === 'hist' ? 'var(--err)' : 'var(--accent)', toggle: () => this.setRole(key, !r[key]) }; }) }));
+    const cardRows = rowDefs.map(row => ({ ...row, mask: this.mask(row.icon), hasTemp: !!row.hasTemp, chips: cols.filter(([k]) => row.map[k]).map(([k, label]) => { const key = row.map[k], on = !!r[key], deny = k === 'hist'; const fill = deny ? 'var(--err)' : 'var(--accent)'; return { label: deny ? 'Deny history' : label, icon: chipIcon[k], mask: this.mask(chipIcon[k]), on, toggle: () => this.setRole(key, !on), style: `display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 12px;border-radius:999px;border:1px solid ${on ? fill : 'var(--muted-soft)'};background:${on ? fill : 'transparent'};color:${on ? (deny ? '#fff' : '#1F1D19') : 'var(--muted)'};font:700 13px var(--font);cursor:pointer` }; }) }));
+
+    // Preview
+    const prevRaw = this.project(s.previewTarget, s.previewTime);
+    const preview = { ...prevRaw };
+    const widthSeg = this.seg([{ value: 390, label: '390' }, { value: 768, label: '768' }, { value: 1180, label: '1180' }], s.previewWidth, v => this.setState({ previewWidth: v }));
+    const timeSeg = this.seg([{ value: 'now', label: 'Now' }, { value: 'before', label: 'Before check-in' }, { value: 'after', label: 'After checkout' }], s.previewTime, v => this.setState({ previewTime: v }));
+    const decisions = s.decisions.map(d => ({ ...d, icon: d.allow ? 'tabler:circle-check' : 'tabler:circle-x', mask: this.mask(d.allow ? 'tabler:circle-check' : 'tabler:circle-x'), color: d.allow ? 'var(--ok)' : 'var(--err)', verdict: d.allow ? 'would_allow' : 'would_deny · ACTION_NOT_ALLOWED' }));
+
+    // Stays & sessions
+    const pubLabel = `v${s.published.version}`;
+    const stays = [
+      { unit: 'Room 203', dates: 'Nov 1, 14:00 → Nov 4, 10:00', role: `room_guest ${pubLabel}`, devices: s.checkedOut ? 'ended' : '1 of 2 redeemed', status: s.checkedOut ? 'Checked out' : 'Active', color: s.checkedOut ? 'var(--muted)' : 'var(--ok)', soft: s.checkedOut ? 'var(--muted-soft)' : 'var(--ok-soft)' },
+      { unit: 'Room 204', dates: 'Nov 2, 15:00 → Nov 6, 10:00', role: `room_guest ${pubLabel}`, devices: '0 of 1 · not issued', status: 'Upcoming', color: 'var(--info)', soft: 'var(--info-soft)' },
+      { unit: 'Seeblick flat', dates: 'Oct 20, 15:00 → Oct 22, 10:00', role: 'room_guest v1', devices: '2 of 2 · ended', status: 'Checked out', color: 'var(--muted)', soft: 'var(--muted-soft)' },
+    ].map(x => ({ ...x, preview: () => this.setState({ screen: 'preview', previewTarget: 'guest203' }), sessions: () => this.setState({ screen: 'sessions' }) }));
+    const sessDefs = [
+      { id: 'sess_9c21 · family rf_02', name: 'iPhone · Safari', icon: 'tabler:device-mobile', detail: 'Redeemed Nov 1, 14:12 · last active 2 min ago · host-bound cookie', kind: 'session' },
+      { id: 'invite_4b · not redeemed', name: 'Invite 2 of 2', icon: 'tabler:qrcode', detail: 'Issued Nov 1, 14:05 · redeem by 14:30 · not yet opened', kind: 'invite' },
+    ];
+    const sessions = sessDefs.map(d => {
+      const ended = s.checkedOut, rev = !!s.revoked[d.id];
+      const status = ended ? 'Ended · checkout' : rev ? (d.kind === 'invite' ? 'Revoked' : 'Revoked · device') : d.kind === 'invite' ? 'Pending' : 'Active';
+      const color = ended || rev ? 'var(--err)' : d.kind === 'invite' ? 'var(--warn)' : 'var(--ok)', soft = ended || rev ? 'var(--err-soft)' : d.kind === 'invite' ? 'var(--warn-soft)' : 'var(--ok-soft)';
+      return { ...d, mask: this.mask(d.icon), status, color, soft, active: !ended && !rev, replace: !ended && rev && d.kind === 'session', revokeLabel: d.kind === 'invite' ? 'Revoke invite' : 'Revoke device', revoke: () => { this.setState(st => ({ revoked: { ...st.revoked, [d.id]: true } })); this.say(d.kind === 'invite' ? 'Invite revoked · code is now useless' : 'Device revoked · session and refresh family ended · other devices unaffected'); } };
+    });
+
+    // Setup
+    const t = s.setupTest;
+    const setupSteps = [
+      { title: 'Gateway running', detail: 'Single worker · SQLite WAL · migrations applied', st: 'ok' },
+      { title: 'Home Assistant connection', detail: 'Core 2026.10.2 via Supervisor · Supervisor 2026.10.3 (minimum met) · temperature unit °C', st: 'ok' },
+      { title: 'Admin identity verified', detail: 'Ingress peer 172.30.32.2 · X-Remote-User-Id matched · owner', st: 'ok' },
+      { title: 'Public origin & TLS', detail: 'https://panel.seeblick.example:8443 · certificate valid until Jan 14, 2027', st: 'ok' },
+      { title: 'WebSocket (WSS) reachable', detail: 'Ticket exchange ok · origin check strict', st: 'ok' },
+      { title: 'Real guest device test', detail: t === 'ok' ? 'Passed · a phone on "Seeblick Guest" Wi-Fi redeemed a test code at 13:58' : t === 'running' ? 'Waiting for a phone on the guest Wi-Fi to scan the test QR…' : 'Scan a test QR from a phone on the guest Wi-Fi. Only then is reachability proven.', st: t === 'ok' ? 'ok' : t === 'running' ? 'run' : 'todo', action: t === 'ok' ? null : t === 'running' ? 'Testing…' : 'Start test', running: t === 'running', run: () => { this.setState({ setupTest: 'running' }); setTimeout(() => this.setState({ setupTest: 'ok' }), 2200); } },
+    ].map(x => ({ ...x, action: x.action || null, color: x.st === 'ok' ? 'var(--ok)' : x.st === 'run' ? 'var(--info)' : 'var(--muted)', soft: x.st === 'ok' ? 'var(--ok-soft)' : x.st === 'run' ? 'var(--info-soft)' : 'var(--muted-soft)', icon: x.st === 'ok' ? 'tabler:check' : x.st === 'run' ? 'tabler:loader-2' : 'tabler:circle-dashed', mask: this.mask(x.st === 'ok' ? 'tabler:check' : x.st === 'run' ? 'tabler:loader-2' : 'tabler:circle-dashed'), iconStyle: x.st === 'run' ? 'animation:spin 1s linear infinite' : '' }));
+
+    // Audit
+    const R = { ok: ['allowed', 'var(--ok)', 'var(--ok-soft)'], deny: ['denied', 'var(--err)', 'var(--err-soft)'], sim: ['would_allow', 'var(--info)', 'var(--info-soft)'], simd: ['would_deny', 'var(--err)', 'var(--err-soft)'], adm: ['ok', 'var(--accent-ink)', 'var(--accent-soft)'], unk: ['unknown', 'var(--warn)', 'var(--warn-soft)'] };
+    const base = [
+      { t: '14:21', actor: 'guest · sess_9c21', eff: 'guest · stay_7f3a', op: 'climate.set_temperature 21.5', res: 'ok', reason: 'grant room_guest v2 · res_thermostat', cat: 'guest' },
+      { t: '14:20', actor: 'guest · sess_9c21', eff: 'guest · stay_7f3a', op: 'climate.set_temperature 24.1', res: 'deny', reason: 'INVALID_PARAMETERS · out of range · res_thermostat', cat: 'denied' },
+      { t: '14:19', actor: 'guest · sess_9c21', eff: 'guest · stay_7f3a', op: 'GET resource res_cam_lobby', res: 'deny', reason: 'NOT_FOUND (not in scope)', cat: 'denied' },
+      { t: '14:12', actor: 'guest · invite_4a', eff: 'guest · stay_7f3a', op: 'auth.redeem', res: 'ok', reason: 'invite consumed atomically · session created', cat: 'guest' },
+      { t: '14:05', actor: 'admin · Lena', eff: 'admin · Lena', op: 'invite.issue ×2 stay_7f3a', res: 'adm', reason: 'redeem 15 min · usable until stay end', cat: 'admin' },
+      { t: '13:58', actor: 'display · display_lr', eff: 'display · display_lr', op: 'cover.close res_k_blind', res: 'unk', reason: 'accepted by HA · no state observed · device offline', cat: 'guest' },
+      { t: '13:40', actor: 'admin · Lena', eff: 'admin · Lena', op: 'role.publish room_guest v2', res: 'adm', reason: 'policy_version 41 → 42', cat: 'admin' },
+    ];
+    const simRows = s.decisions.map(d => ({ t: 'now', actor: 'admin · Lena', eff: `preview · ${s.previewTarget}`, op: `preview.simulate ${d.action}`, res: d.allow ? 'sim' : 'simd', reason: d.reason, cat: 'preview' }));
+    const all = [...simRows, ...base];
+    const auditRows = all.filter(a => s.auditFilter === 'all' || a.cat === s.auditFilter || (s.auditFilter === 'denied' && (a.res === 'deny' || a.res === 'simd'))).map(a => ({ ...a, result: R[a.res][0], color: R[a.res][1], soft: R[a.res][2] }));
+    const auditSeg = this.seg([{ value: 'all', label: 'All' }, { value: 'denied', label: 'Denied' }, { value: 'admin', label: 'Admin' }, { value: 'preview', label: 'Preview' }], s.auditFilter, v => this.setState({ auditFilter: v }));
+
+    // Diff summaries
+    const sum = x => `Light on/off${x.lightDim ? ' + dimming' : ''} · bedside ${x.bedOn ? 'on/off' : 'off only'} · temperature ${x.climSet ? `${x.tMin}–${x.tMax} °C` : 'read-only'} · blind ${[x.blindOpen && 'open', x.blindStop && 'stop', x.blindClose && 'close'].filter(Boolean).join('/') || 'none'} · history ${x.histDeny ? 'denied' : 'not denied'}`;
+
+    // Guest / display / native
+    const guestRooms = this.project('guest203', 'now', s.published.role).rooms;
+    const displayRooms = this.project('display', 'now').rooms;
+    const nativeTabs = [['instances', 'Instances', 'tabler:home'], ['scan', 'Scan', 'tabler:qrcode'], ['wall', 'Wall mode', 'tabler:device-tablet']].map(([id, label, icon]) => { const on = s.nativeScreen === id; return { id, label, icon, mask: this.mask(icon), go: () => this.setState({ nativeScreen: id }), style: `flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-height:52px;border:none;background:transparent;color:${on ? 'var(--accent-ink)' : 'var(--muted)'};cursor:pointer;font-family:var(--font)` }; });
+    const instances = [
+      { name: 'Home', host: 'panel.home.example:8443', who: 'Signed in as Lena · resident · session renews until Nov 20', status: 'Connected', color: 'var(--ok)', soft: 'var(--ok-soft)', pin: 'Pinned · SPKI + backup pin', pinIcon: 'tabler:certificate', store: 'Keychain' },
+      { name: 'Seeblick flat', host: 'panel.seeblick.example:8443', who: 'Guest access · Room 203 · until Nov 4, 10:00', status: 'Idle', color: 'var(--muted)', soft: 'var(--muted-soft)', pin: 'Browser-trust only', pinIcon: 'tabler:certificate-off', store: 'Keychain' },
+    ];
+    instances.forEach(i => { i.pinMask = this.mask(i.pinIcon); });
+    const wallDefs = [['awake', 'Keep screen awake', 'While wall mode is active', 'tabler:sun'], ['orient', 'Lock landscape', 'Ignore device rotation', 'tabler:rotate-2'], ['night', 'Dark theme at night', '22:00 – 06:00', 'tabler:moon'], ['pin', 'Lock settings with PIN', 'Only these app settings, not the OS', 'tabler:lock']];
+    const wallSettings = wallDefs.map(([k, label, sub, icon]) => ({ label, sub, icon, mask: this.mask(icon), on: !!s.wall[k], toggle: () => this.setState(st => ({ wall: { ...st.wall, [k]: !st.wall[k] } })) }));
+    const now = new Date();
+
+    return {
+      surfaces, themeSeg, layoutSeg, editorSeg, showLayoutSeg: surf === 'guest' || (surf === 'admin' && (scr === 'roles' || scr === 'preview')), showEditorSeg: surf === 'admin' && scr === 'roles',
+      isAdmin: surf === 'admin', isGuest: surf === 'guest', isTablet: surf === 'tablet', isNative: surf === 'native', isDark: s.theme === 'dark',
+      nav, policyVersion: s.policyVersion, noop: () => this.say('Not part of this mockup'),
+      isRooms: scr === 'rooms', isRoles: scr === 'roles', isPreview: scr === 'preview', isStays: scr === 'stays', isSessions: scr === 'sessions', isSetup: scr === 'setup', isAudit: scr === 'audit', isDiff: scr === 'diff',
+      units, unit,
+      role: r, roleVersionLabel: s.justPublished ? `v${s.published.version} · published` : `v${s.published.version + 1} draft · based on v${s.published.version}`, isMatrix: s.editor === 'matrix', isCards: s.editor === 'cards',
+      matrixCols: `minmax(150px,1.4fr) repeat(${cols.length}, minmax(44px, 1fr))`, matrixHead, matrixRows, cardRows,
+      setTMin: e => this.setRole('tMin', Number(e.target.value)), setTMax: e => this.setRole('tMax', Number(e.target.value)), setTStep: e => this.setRole('tStep', e.target.value), toggleFence: () => this.setRole('fenceMia', !r.fenceMia),
+      explainOn: s.explainOn, toggleExplain: () => this.setState({ explainOn: !s.explainOn }),
+      editorPreview: this.project('guest203', 'now'), guestLayout: s.guestLayout,
+      onDecision: d => this.setState(st => ({ decisions: [d, ...st.decisions].slice(0, 8) })),
+      discard: () => { this.setState({ role: { ...s.published.role } }); this.say('Draft discarded · back to published rules'); },
+      goDiff: () => this.setState({ screen: 'diff' }), goRoles: () => this.setState({ screen: 'roles' }),
+      preview, previewTarget: s.previewTarget, setPreviewTarget: e => this.setState({ previewTarget: e.target.value, decisions: [] }), previewWidth: s.previewWidth, previewLayout: s.previewTarget === 'display' ? 'tiles' : s.guestLayout, widthSeg, timeSeg,
+      decisions, noDecisions: decisions.length === 0, clearDecisions: () => this.setState({ decisions: [] }),
+      stays, publishedLabel: pubLabel, draftLabel: `v${s.published.version + 1}`,
+      previewInvite: () => this.setState({ screen: 'preview', previewTarget: 'guest203', qrOpen: false }), openQr: () => this.setState({ qrOpen: true, qrIndex: 1 }), closeQr: () => this.setState({ qrOpen: false }), nextQr: () => this.setState({ qrIndex: 2 }), qrOpen: s.qrOpen, qrIndex: s.qrIndex,
+      sessions, notCheckedOut: !s.checkedOut, checkedOut: s.checkedOut, confirmOpen: s.confirmOpen, openConfirm: () => this.setState({ confirmOpen: true }), closeConfirm: () => this.setState({ confirmOpen: false }),
+      doCheckout: () => { this.setState({ confirmOpen: false, checkedOut: true }); this.say('Stay ended · 1 session, 1 refresh family, 1 invite revoked · guest phone shows "Access ended"'); },
+      setupSteps, auditSeg, auditRows,
+      diffs, noDiff: diffs.length === 0, publishOpacity: diffs.length ? '1' : '.5', summaryBefore: sum(s.published.role), summaryAfter: sum(r), rollout: s.rollout, toggleRollout: () => this.setState({ rollout: !s.rollout }),
+      notPublished: !s.justPublished, justPublished: s.justPublished,
+      publish: () => { if (!diffs.length) return; this.setState(st => ({ published: { version: st.published.version + 1, role: { ...st.role } }, policyVersion: st.policyVersion + 1, justPublished: true })); this.say(s.rollout ? 'Published and rolled out · open clients get a new snapshot' : 'Published · existing stays keep the previous version until rollout'); },
+      guestRooms, guestStatus: s.checkedOut ? 'expired' : s.guestStatus, isJoin: s.guestStage === 'join', isDash: s.guestStage === 'dash',
+      joinNow: () => this.setState({ guestStage: 'dash' }), resetJoin: () => this.setState({ guestStage: 'join', guestStatus: 'online' }), guestStale: () => this.setState({ guestStage: 'dash', guestStatus: 'stale' }), guestOnline: () => this.setState({ guestStatus: 'online' }),
+      displayRooms, displayStatus: s.displayStatus, displayStaleToggle: () => this.setState({ displayStatus: s.displayStatus === 'online' ? 'stale' : 'online' }), displayToggleLabel: s.displayStatus === 'online' ? 'Simulate connection loss' : 'Back online',
+      clock: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+      nativeTabs, nativeTitle: s.nativeScreen === 'instances' ? 'Instances' : s.nativeScreen === 'scan' ? 'Add instance' : 'Wall mode', nInstances: s.nativeScreen === 'instances', nScan: s.nativeScreen === 'scan', nWall: s.nativeScreen === 'wall', instances, wallSettings,
+      goScan: () => this.setState({ nativeScreen: 'scan' }), goTabletSurface: () => this.setState({ surface: 'tablet' }),
+      toast: s.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

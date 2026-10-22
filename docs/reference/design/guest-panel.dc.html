@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><style>body{margin:0;--bg:#F7F5F0;--surface:#FFFFFF;--ink:#1F1D19;--muted:#6B665C;--line:rgba(31,29,25,.14);--accent:#C8A24A;--accent-ink:#7A5E12;--accent-soft:rgba(200,162,74,.18);--ok:#3F8F5E;--ok-soft:rgba(63,143,94,.14);--warn:#B9742B;--warn-soft:rgba(185,116,43,.14);--err:#C64B3C;--err-soft:rgba(198,75,60,.14);--info:#2C8C86;--info-soft:rgba(44,140,134,.14);--muted-soft:rgba(31,29,25,.08);--font:'Nunito Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace}</style></helmet>
+<div style="font-family:var(--font);color:var(--ink);background:var(--bg);min-height:100%;box-sizing:border-box;padding:16px;display:flex;flex-direction:column;gap:18px">
+  <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px">
+    <div style="min-width:0">
+      <div style="font-weight:800;font-size:{{titleFs}}px;line-height:1.15;letter-spacing:-0.01em">{{title}}</div>
+      <div style="color:var(--muted);font-size:14px;margin-top:2px">{{subtitle}}</div>
+    </div>
+    <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700;background:{{pill.soft}};color:{{pill.color}};white-space:nowrap">
+      <span style="width:8px;height:8px;border-radius:50%;background:{{pill.color}}"></span>{{pill.text}}
+    </div>
+  </div>
+  <sc-if value="{{notice}}" hint-placeholder-val="{{false}}">
+    <div style="padding:12px 14px;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-size:14px;line-height:1.4;display:flex;gap:10px;align-items:flex-start">
+      <span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/info-circle.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/info-circle.svg) center/contain no-repeat;color:var(--muted);flex:none;"></span><span>{{notice}}</span>
+    </div>
+  </sc-if>
+  <sc-for list="{{rooms}}" as="room" hint-placeholder-count="1">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">{{room.name}}</div>
+      <div style="display:grid;gap:12px;grid-template-columns:{{gridCols}}">
+        <sc-for list="{{room.resources}}" as="res" hint-placeholder-count="3">
+          <div style="background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:{{cardPad}}px;display:grid;gap:12px;align-items:center;grid-template-columns:{{cardCols}};grid-column:{{res.span}};min-height:{{cardMinH}}px;box-sizing:border-box;min-width:0;overflow:hidden">
+            <div style="display:flex;align-items:flex-start;gap:12px;min-width:0">
+              <div style="width:{{iconBox}}px;height:{{iconBox}}px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);display:grid;place-items:center;flex:none"><span aria-hidden="true" style="display:inline-block;width:{{iconW}}px;height:{{iconW}}px;flex:none;background:currentColor;-webkit-mask:{{res.mask}};mask:{{res.mask}};"></span></div>
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:700;font-size:{{labelFs}}px;line-height:1.2;overflow-wrap:anywhere">{{res.label}}</div>
+                <sc-if value="{{res.read}}" hint-placeholder-val="{{true}}"><div style="color:var(--muted);font-size:14px;margin-top:2px">{{res.stateText}}</div></sc-if>
+                <sc-if value="{{res.noRead}}" hint-placeholder-val="{{false}}"><div style="color:var(--muted);font-size:13px;margin-top:2px;font-style:italic">State not shared</div></sc-if>
+              </div>
+            </div>
+            <sc-if value="{{res.isClimate}}" hint-placeholder-val="{{false}}">
+              <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:{{ctlJustify}};min-width:0">
+                  <button aria-label="Lower target" disabled="{{res.decOff}}" onClick="{{res.dec}}" style="width:{{btnH}}px;height:{{btnH}}px;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:24px;font-family:var(--font);cursor:pointer;display:grid;place-items:center;opacity:{{res.decOp}}"><span aria-hidden="true" style="display:inline-block;width:24px;height:24px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/minus.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/minus.svg) center/contain no-repeat;"></span></button>
+                  <div style="text-align:center;min-width:64px"><span style="font-weight:800;font-size:{{tempFs}}px;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">{{res.target}}</span><span style="font-size:16px;color:var(--muted);margin-left:2px">°C</span></div>
+                  <button aria-label="Raise target" disabled="{{res.incOff}}" onClick="{{res.inc}}" style="width:{{btnH}}px;height:{{btnH}}px;border-radius:14px;border:none;background:var(--accent);color:#1F1D19;font-size:24px;font-family:var(--font);cursor:pointer;display:grid;place-items:center;opacity:{{res.incOp}}"><span aria-hidden="true" style="display:inline-block;width:24px;height:24px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/plus.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/plus.svg) center/contain no-repeat;"></span></button>
+                </div>
+                <div style="font-size:12px;color:var(--muted);text-align:{{ctlAlign}}">{{res.rangeText}}</div>
+              </div>
+            </sc-if>
+            <sc-if value="{{res.hasBtns}}" hint-placeholder-val="{{true}}">
+              <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:{{ctlJustify}}">
+                <sc-for list="{{res.btns}}" as="b" hint-placeholder-count="1">
+                  <button disabled="{{b.disabled}}" onClick="{{b.fire}}" style="{{b.style}}"><span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:{{b.mask}};mask:{{b.mask}};"></span>{{b.label}}</button>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{res.hasSlider}}" hint-placeholder-val="{{false}}">
+              <div style="grid-column:1 / -1;display:flex;align-items:center;gap:12px">
+                <span aria-hidden="true" style="display:inline-block;width:20px;height:20px;flex:none;background:currentColor;-webkit-mask:url(https://api.iconify.design/tabler/sun-low.svg) center/contain no-repeat;mask:url(https://api.iconify.design/tabler/sun-low.svg) center/contain no-repeat;color:var(--muted);"></span>
+                <input type="range" min="0" max="100" step="1" aria-label="Brightness" disabled="{{res.disabled}}" value="{{res.level}}" onChange="{{res.setLevel}}" onPointerUp="{{res.sendLevel}}" onKeyUp="{{res.sendLevel}}" style="flex:1;min-width:0;accent-color:var(--accent);background:transparent;height:32px;padding:{{sliderPad}}px 0;box-sizing:content-box;margin:0">
+                <span style="font-variant-numeric:tabular-nums;font-size:14px;min-width:38px;text-align:right">{{res.level}} %</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{res.cmd}}" hint-placeholder-val="{{false}}">
+              <div role="status" style="grid-column:1 / -1;display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:600;background:{{res.cmd.soft}};color:{{res.cmd.color}}">
+                <span aria-hidden="true" style="display:inline-block;width:18px;height:18px;flex:none;background:currentColor;-webkit-mask:{{res.cmd.mask}};mask:{{res.cmd.mask}};"></span><span>{{res.cmd.text}}</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{showExplain}}" hint-placeholder-val="{{false}}">
+              <div style="grid-column:1 / -1;border-top:1px dashed var(--line);padding-top:10px;display:flex;flex-direction:column;gap:5px">
+                <sc-for list="{{res.rules}}" as="rule" hint-placeholder-count="2">
+                  <div style="display:grid;grid-template-columns:7px minmax(0,1fr);gap:4px 8px;align-items:baseline;font-size:12px;line-height:1.35;min-width:0"><span style="width:7px;height:7px;border-radius:50%;background:{{rule.color}};transform:translateY(-1px)"></span><span style="min-width:0;overflow-wrap:anywhere"><span style="font-family:var(--mono);color:var(--ink)">{{rule.action}}</span> <span style="color:var(--muted)">{{rule.text}}</span></span></div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-for>
+  <sc-if value="{{footer}}" hint-placeholder-val="{{false}}"><div style="font-size:12px;color:var(--muted);text-align:center;padding-top:4px">{{footer}}</div></sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:390,&quot;height&quot;:720},&quot;rooms&quot;:{&quot;editor&quot;:null,&quot;default&quot;:[],&quot;tsType&quot;:&quot;Room[]&quot;},&quot;layout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;tiles&quot;,&quot;list&quot;,&quot;focus&quot;],&quot;default&quot;:&quot;tiles&quot;,&quot;tsType&quot;:&quot;'tiles'|'list'|'focus'&quot;},&quot;wall&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;simulate&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;explain&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;status&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;online&quot;,&quot;stale&quot;,&quot;waiting&quot;,&quot;expired&quot;],&quot;default&quot;:&quot;online&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;title&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Room 203&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;subtitle&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;footer&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;string|null&quot;},&quot;onDecision&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;(d: Decision) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  state = { cmds: {}, targets: {}, levels: {}, power: {}, pos: {} };
+  timers = [];
+  componentWillUnmount() { this.timers.forEach(clearTimeout); }
+
+  later(ms, fn) { this.timers.push(setTimeout(fn, ms)); }
+  mask(n) { return 'url(https://api.iconify.design/' + String(n || 'tabler:point').replace(':', '/') + '.svg) center/contain no-repeat'; }
+  rule(res, action) { return (res.rules || []).find(r => r.action === action); }
+  fire(res, action, params, apply) {
+    const p = this.props;
+    if (p.simulate) {
+      const r = this.rule(res, action);
+      const allow = !!(r && r.status === 'allow') || (r && r.status === 'fence');
+      const reason = r ? r.text : 'no matching grant';
+      this.setState(s => ({ cmds: { ...s.cmds, [res.id]: { phase: 'sim', allow, text: (allow ? 'Simulation · would allow · ' : 'Simulation · would deny · ') + reason } } }));
+      if (typeof p.onDecision === 'function') p.onDecision({ resource: res.label, action, params, allow, reason });
+      return;
+    }
+    const set = (phase, extra) => this.setState(s => ({ cmds: { ...s.cmds, [res.id]: { phase, action, ...extra } } }));
+    set('checking');
+    this.later(550, () => set('accepted'));
+    this.later(1600, () => {
+      if (res.state && res.state.availability === 'offline') set('unknown');
+      else { set('confirmed'); if (apply) this.setState(apply); }
+    });
+    this.later(4800, () => this.setState(s => { const c = { ...s.cmds }; if (c[res.id] && c[res.id].phase !== 'sim') delete c[res.id]; return { cmds: c }; }));
+  }
+  renderVals() {
+    const p = this.props;
+    const layout = p.layout || 'tiles', wall = !!p.wall, status = p.status || 'online', sim = !!p.simulate, explain = !!p.explain;
+    const live = status === 'online';
+    const pills = {
+      online: { text: 'Connected', color: 'var(--ok)', soft: 'var(--ok-soft)' },
+      stale: { text: 'Reconnecting · data from 12 s ago', color: 'var(--warn)', soft: 'var(--warn-soft)' },
+      waiting: { text: 'Starts Nov 1, 14:00', color: 'var(--info)', soft: 'var(--info-soft)' },
+      expired: { text: 'Access ended', color: 'var(--err)', soft: 'var(--err-soft)' },
+    };
+    const notices = {
+      stale: 'Controls are paused until the connection is back. Shown values may be outdated.',
+      waiting: 'Your stay has not started yet. Controls unlock on Nov 1 at 14:00.',
+      expired: 'This access ended at checkout. Need help? Ask reception or call +49 30 000000.',
+    };
+    const ruleColor = { allow: 'var(--ok)', deny: 'var(--err)', fence: 'var(--warn)', missing: 'var(--muted)' };
+    const btnH = wall ? 64 : 48;
+    const base = `min-height:${btnH}px;padding:0 ${wall ? 22 : 16}px;border-radius:14px;font:700 ${wall ? 18 : 15}px var(--font);cursor:pointer;display:inline-flex;align-items:center;gap:8px;`;
+    const styles = {
+      primary: base + 'border:none;background:var(--accent);color:#1F1D19;',
+      secondary: base + 'border:1px solid var(--line);background:var(--surface);color:var(--ink);',
+      denied: base + 'border:1px dashed var(--err);background:transparent;color:var(--err);opacity:.8;',
+    };
+    const mk = (res, label, action, icon, allow, kind, params, apply) => {
+      if (!allow && !sim) return null;
+      return { label, icon, mask: this.mask(icon), disabled: !live, fire: () => this.fire(res, action, params, apply), style: (allow ? styles[kind] : styles.denied) + (live ? '' : 'opacity:.45;cursor:default;') };
+    };
+    const roomsIn = Array.isArray(p.rooms) ? p.rooms : [];
+    const rooms = roomsIn.map(room => {
+      let list = (room.resources || []).map(res => {
+        const c = res.caps || {}, st = res.state || {}, read = res.read !== false;
+        const power = this.state.power[res.id] ?? st.power;
+        const target = this.state.targets[res.id] ?? st.target;
+        const level = this.state.levels[res.id] ?? st.level ?? 0;
+        const v = { ...res, read, noRead: !read, span: 'auto', btns: [], isClimate: false, hasSlider: false, disabled: !live, rules: (res.rules || []).map(r => ({ ...r, color: ruleColor[r.status] || 'var(--muted)' })) };
+        const sendLevel = () => this.fire(res, 'light.set_level', { level_pct: String(this.state.levels[res.id] ?? level) }, s => ({ power: { ...s.power, [res.id]: (s.levels[res.id] ?? level) > 0 ? 'on' : 'off' } }));
+        if (res.kind === 'light') {
+          v.icon = res.icon || 'tabler:bulb';
+          v.stateText = power === 'on' ? (c.dim ? `On · ${level} %` : 'On') : power === 'off' ? 'Off' : 'State unknown';
+          const onApply = s => ({ power: { ...s.power, [res.id]: 'on' } }), offApply = s => ({ power: { ...s.power, [res.id]: 'off' } });
+          if (c.on && c.off && read && power && power !== 'unknown') {
+            v.btns = [power === 'on' ? mk(res, 'Turn off', 'light.off', 'tabler:bulb-off', true, 'secondary', {}, offApply) : mk(res, 'Turn on', 'light.on', 'tabler:bulb', true, 'primary', {}, onApply)];
+          } else {
+            v.btns = [mk(res, 'Turn on', 'light.on', 'tabler:bulb', !!c.on, 'primary', {}, onApply), mk(res, 'Turn off', 'light.off', 'tabler:bulb-off', !!c.off, 'secondary', {}, offApply)];
+          }
+          if (c.dim) { v.hasSlider = true; v.level = level; v.setLevel = e => { const val = Number(e.target.value); this.setState(s => ({ levels: { ...s.levels, [res.id]: val } })); }; v.sendLevel = sendLevel; }
+        } else if (res.kind === 'climate') {
+          v.icon = res.icon || 'tabler:temperature';
+          v.isClimate = !!c.set || sim;
+          v.stateText = st.current != null ? `Now ${st.current} °C` : 'State unknown';
+          const step = Number(c.step || 0.5), min = Number(c.min), max = Number(c.max);
+          const t = Number(target);
+          v.target = (Number.isFinite(t) ? t : min).toFixed(1).replace(/\.0$/, '');
+          v.rangeText = c.set ? `Allowed ${min}–${max} °C · ${step}° steps` : 'Temperature is read-only for you';
+          const go = next => { const val = Math.round(next * 10) / 10; this.fire(res, 'climate.set_temperature', { target_c: String(val) }, s => ({ targets: { ...s.targets, [res.id]: val } })); if (!sim) this.setState(s => ({ targets: { ...s.targets, [res.id]: val } })); };
+          v.decOff = !live || !c.set || t - step < min - 1e-9; v.incOff = !live || !c.set || t + step > max + 1e-9;
+          v.decOp = v.decOff ? '.4' : '1'; v.incOp = v.incOff ? '.4' : '1';
+          v.dec = () => go(t - step); v.inc = () => go(t + step);
+          if (layout === 'focus') v.span = '1 / -1';
+          if (c.mode || sim) v.btns = [mk(res, 'Eco mode', 'climate.set_mode', 'tabler:leaf', !!c.mode, 'secondary', { mode: 'eco' })];
+        } else if (res.kind === 'cover') {
+          v.icon = res.icon || 'tabler:window';
+          const pos = this.state.pos[res.id] ?? st.position;
+          v.stateText = pos != null ? `${pos} % open` : 'State unknown';
+          v.btns = [
+            mk(res, 'Open', 'cover.open', 'tabler:arrow-bar-up', !!c.open, 'primary', {}, s => ({ pos: { ...s.pos, [res.id]: 100 } })),
+            mk(res, 'Stop', 'cover.stop', 'tabler:player-stop', !!c.stop, 'secondary', {}),
+            mk(res, 'Close', 'cover.close', 'tabler:arrow-bar-down', !!c.close, 'secondary', {}, s => ({ pos: { ...s.pos, [res.id]: 0 } })),
+          ];
+        } else {
+          v.icon = res.icon || 'tabler:droplet';
+          v.stateText = st.value != null ? `${st.value} ${st.unit || ''}` : 'State unknown';
+        }
+        v.btns = v.btns.filter(Boolean);
+        v.mask = this.mask(v.icon);
+        v.hasBtns = v.btns.length > 0;
+        const cm = this.state.cmds[res.id];
+        if (cm) {
+          const map = {
+            checking: { text: 'Checking and sending…', color: 'var(--info)', soft: 'var(--info-soft)', icon: 'tabler:loader-2' },
+            accepted: { text: 'Accepted by the hub · waiting for the device', color: 'var(--accent-ink)', soft: 'var(--accent-soft)', icon: 'tabler:send' },
+            confirmed: { text: 'Confirmed · ' + (res.kind === 'climate' ? `set to ${v.target} °C` : res.kind === 'cover' ? `blind ${cm.action === 'cover.open' ? 'opening' : cm.action === 'cover.close' ? 'closing' : 'stopped'}` : `${res.label} is ${power}`), color: 'var(--ok)', soft: 'var(--ok-soft)', icon: 'tabler:circle-check' },
+            unknown: { text: 'Result unclear · device not reachable', color: 'var(--warn)', soft: 'var(--warn-soft)', icon: 'tabler:help-circle' },
+            failed: { text: 'Failed · nothing was changed', color: 'var(--err)', soft: 'var(--err-soft)', icon: 'tabler:alert-circle' },
+            sim: { text: cm.text, color: cm.allow ? 'var(--ok)' : 'var(--err)', soft: cm.allow ? 'var(--ok-soft)' : 'var(--err-soft)', icon: cm.allow ? 'tabler:eye-check' : 'tabler:eye-off' },
+          };
+          v.cmd = { ...map[cm.phase], mask: this.mask(map[cm.phase].icon) };
+        } else v.cmd = null;
+        return v;
+      });
+      if (layout === 'focus') list = [...list.filter(r => r.kind === 'climate'), ...list.filter(r => r.kind !== 'climate')];
+      return { ...room, resources: list };
+    });
+    const tileMin = explain ? 'min(100%, 230px)' : 'min(100%, 165px)';
+    const gridCols = wall ? 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))' : layout === 'list' ? 'minmax(0,1fr)' : layout === 'focus' ? 'repeat(auto-fill, minmax(min(100%, 230px), 1fr))' : `repeat(auto-fill, minmax(${tileMin}, 1fr))`;
+    return {
+      rooms, gridCols, btnH, sliderPad: (btnH - 32) / 2, showExplain: explain,
+      title: p.title || 'Room 203', subtitle: p.subtitle || '',
+      pill: pills[status] || pills.online, notice: notices[status] || null, footer: p.footer || null,
+      cardCols: layout === 'list' && !wall ? 'minmax(0,1fr) auto' : 'minmax(0,1fr)',
+      cardPad: wall ? 20 : 16, cardMinH: layout === 'tiles' || wall ? 150 : 0,
+      ctlJustify: layout === 'list' && !wall ? 'flex-end' : 'flex-start', ctlAlign: layout === 'list' && !wall ? 'right' : 'left',
+      iconBox: wall ? 52 : 40, iconW: wall ? 28 : 22, labelFs: wall ? 20 : 16, titleFs: wall ? 30 : 22, tempFs: wall ? 44 : layout === 'focus' ? 40 : 30,
+    };
+  }
+}
+</script>
+</body>
+</html>
