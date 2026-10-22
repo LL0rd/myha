@@ -79,23 +79,52 @@ async def test_audit_does_not_commit(engine: AsyncEngine) -> None:
 
 
 @pytest.mark.parametrize(
-    "params",
+    "key",
     [
-        {"token": "x"},
-        {"invite_secret": "x"},
-        {"Password": "x"},
-        {"pin": "1234"},
-        {"pairing_code": "123456"},
-        {"X-MyHA-CSRF": "x"},
-        {"ws_ticket": "x"},
-        {"cookie": "x"},
-        {"nested": {"refresh_TOKEN": "x"}},
-        {"items": [{"secret": "x"}]},
+        "token",
+        "invite_secret",
+        "Password",
+        "pin",
+        "pairing_code",
+        "X-MyHA-CSRF",
+        "ws_ticket",
+        "cookie",
+        "auth",
+        "Authorization",
+        "credentials",
+        "apiKey",
+        "api_key",
+        "API-KEY",
+        "myApikeyValue",
+        "bearer",
+        "passphrase",
+        "private_key",
+        "accesstoken",
     ],
 )
-def test_secret_looking_params_are_refused(params: dict[str, Any]) -> None:
-    with pytest.raises(ValueError, match="normalized_params"):
-        AuditEvent(operation="auth.redeem", result="ok", normalized_params=params)
+def test_secret_looking_keys_are_refused(key: str) -> None:
+    for params in ({key: "x"}, {"nested": {key: "x"}}, {"items": [{key: "x"}]}):
+        with pytest.raises(ValueError, match="normalized_params"):
+            AuditEvent(operation="auth.redeem", result="ok", normalized_params=params)
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["reason_code", "language_code", "mapping", "keeping", "ping", "spin", "hvac_mode"]
+    + ["target_c", "position", "brightness_pct", "author", "key", "private", "api"],
+)
+def test_ordinary_keys_pass(key: str) -> None:
+    AuditEvent(operation="action.execute", result="ok", normalized_params={key: 1})
+
+
+async def test_audit_checks_the_params_again_on_write(engine: AsyncEngine) -> None:
+    params: dict[str, Any] = {"level": 40}
+    event = AuditEvent(operation="action.execute", result="ok", normalized_params=params)
+    params["token"] = "added after the check"
+    async with write_session(engine) as session:
+        with pytest.raises(ValueError, match="normalized_params"):
+            await audit(session, event)
+    assert await rows(engine) == []
 
 
 def test_event_has_no_payload_fields_beyond_the_audit_columns() -> None:

@@ -22,6 +22,8 @@ class SlidingWindowLimiter:
         clock: Callable[[], float] = time.monotonic,
         max_keys: int = 10_000,
     ) -> None:
+        if limit < 1 or window_s <= 0:
+            raise ValueError("limit and window_s must be positive")
         self.limit, self.window_s, self.max_keys = limit, window_s, max_keys
         self._clock = clock
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()

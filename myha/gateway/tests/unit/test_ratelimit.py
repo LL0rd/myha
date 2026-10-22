@@ -1,5 +1,7 @@
 """The sliding-window rate limiter."""
 
+import pytest
+
 from myha_gateway.auth.ratelimit import SlidingWindowLimiter
 
 
@@ -78,3 +80,9 @@ def test_keys_with_an_empty_window_are_dropped() -> None:
     clock.now += 60
     assert limiter.allow("b")  # every call sweeps the expired keys at the old end
     assert len(limiter) == 1
+
+
+@pytest.mark.parametrize(("limit", "window_s"), [(0, 60), (-1, 60), (5, 0), (5, -1)])
+def test_limit_and_window_must_be_positive(limit: int, window_s: float) -> None:
+    with pytest.raises(ValueError):
+        SlidingWindowLimiter(limit=limit, window_s=window_s)

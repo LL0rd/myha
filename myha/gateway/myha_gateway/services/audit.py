@@ -13,14 +13,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from myha_gateway.db.models import AuditEvent as AuditRow
 
-# Substrings of parameter names that could carry a credential, at any depth, in any case.
-_SECRET_KEY = re.compile(r"token|secret|password|pin|code|csrf|ticket|cookie", re.IGNORECASE)
+# Parameter names that could carry a credential, judged word by word (snake_case, kebab-case,
+# camelCase), at any depth, in any case. Single words match exactly, so "reason_code",
+# "mapping" and "ping" pass; compounds match inside a word ("accesstoken"); pairs match as
+# neighbouring words ("api_key").
+_WORD_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
+_SECRET_WORDS = frozenset(
+    {"token", "secret", "password", "pin", "csrf", "ticket", "cookie", "auth"}
+    | {"authorization", "credential", "credentials", "apikey", "bearer", "passphrase"}
+)
+_SECRET_PARTS = ("token", "secret", "password", "passwd", "csrf", "ticket", "cookie", "apikey")
+_SECRET_PAIRS = frozenset({("api", "key"), ("private", "key"), ("pairing", "code")})
+
+
+def _is_secret(key: str) -> bool:
+    words = [word.lower() for word in _WORD_SPLIT.split(key) if word]
+    return (
+        any(word in _SECRET_WORDS for word in words)
+        or any(part in word for word in words for part in _SECRET_PARTS)
+        or any(pair in _SECRET_PAIRS for pair in zip(words, words[1:], strict=False))
+    )
 
 
 def _check_keys(value: Any) -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if _SECRET_KEY.search(str(key)):
+            if _is_secret(str(key)):
                 raise ValueError(f"normalized_params must not contain {key!r}")
             _check_keys(item)
     elif isinstance(value, list | tuple):
@@ -51,6 +69,7 @@ class AuditEvent:
 
 async def audit(session: AsyncSession, event: AuditEvent) -> None:
     """Add the event to the caller's write session; the caller's transaction commits it."""
+    _check_keys(event.normalized_params)  # the mapping may have changed since the event was made
     params = None if event.normalized_params is None else dict(event.normalized_params)
     session.add(
         AuditRow(
