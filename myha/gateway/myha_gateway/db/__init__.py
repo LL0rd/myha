@@ -8,6 +8,7 @@ affordable at this write rate.
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,20 @@ _PRAGMAS = (
     "PRAGMA synchronous=FULL",
 )
 _MIGRATIONS = Path(__file__).parent / "migrations"
+# Set inside write_session; tasks created there inherit it with their context copy.
+_write_session_open: ContextVar[bool] = ContextVar("write_session_open", default=False)
+
+
+def assert_no_write_session(what: str = "network I/O") -> None:
+    """Raise ``RuntimeError`` if called inside a write session (see ``write_session``)."""
+    if _write_session_open.get():
+        raise RuntimeError(f"{what} inside a write session")
+
+
+class _ReadSession(AsyncSession):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        assert_no_write_session("read session")
+        super().__init__(*args, **kwargs)
 
 
 def create_engine(path: Path | str) -> AsyncEngine:
@@ -64,7 +79,7 @@ def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
     Keep them short: an open read transaction keeps the WAL from being checkpointed.
     """
-    return async_sessionmaker(engine, expire_on_commit=False)
+    return async_sessionmaker(engine, class_=_ReadSession, expire_on_commit=False)
 
 
 @asynccontextmanager
@@ -81,10 +96,17 @@ async def write_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
       ``database is locked``;
     - no nested write session (it waits on its own lock);
     - no Home Assistant or other network I/O.
+
+    The read session factory and the network clients enforce the first and the last rule
+    through ``assert_no_write_session``.
     """
     writer = engine.execution_options(myha_write=True)
-    async with AsyncSession(writer, expire_on_commit=False) as session, session.begin():
-        yield session
+    flag = _write_session_open.set(True)
+    try:
+        async with AsyncSession(writer, expire_on_commit=False) as session, session.begin():
+            yield session
+    finally:
+        _write_session_open.reset(flag)
 
 
 async def run_migrations(engine: AsyncEngine) -> None:

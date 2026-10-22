@@ -17,6 +17,7 @@ from typing import Any
 
 from websockets import ClientConnection, ConnectionClosed, WebSocketException, connect
 
+from myha_gateway.db import assert_no_write_session
 from myha_gateway.ha.messages import (
     MALFORMED,
     ConnectionStatus,
@@ -239,6 +240,7 @@ class HAClient:
 
     async def _connection(self) -> str:
         """One connection from handshake to close; returns why it closed."""
+        assert_no_write_session()
         ws = await connect(
             self._ws_url,
             max_size=MAX_MESSAGE_BYTES,
@@ -375,6 +377,7 @@ class HAClient:
 
     async def _command(self, message: dict[str, Any], seconds: float) -> dict[str, Any]:
         """Send ``message`` with the next id; Core's answer, or HAUnavailable after ``seconds``."""
+        assert_no_write_session()
         ws = self._ws
         if ws is None:
             raise HAUnavailable("not connected to Home Assistant")

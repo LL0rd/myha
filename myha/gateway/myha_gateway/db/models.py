@@ -9,7 +9,7 @@ compare and increment them, the ORM never does it implicitly.
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, MetaData, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, MetaData, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from myha_gateway.db.types import UtcDateTime
@@ -316,8 +316,12 @@ class Command(Base):
 
 class AuditEvent(Base):
     __tablename__ = "audit_event"
-    # AUTOINCREMENT: ids never repeat, even after retention emptied the table.
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (
+        # Finds the row that folds repeated denials (design §5).
+        Index("ix_audit_event_fold", "operation", "reason_code", "anon_key", "ts"),
+        # AUTOINCREMENT: ids never repeat, even after retention emptied the table.
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ts: Mapped[datetime] = mapped_column(index=True)
@@ -331,5 +335,7 @@ class AuditEvent(Base):
     policy_version: Mapped[int | None]
     normalized_params: Mapped[dict[str, Any] | None]
     ha_context_id: Mapped[str | None]  # spec §15.2
+    # Fold key of an anonymous event (operation|reason_code|minute|client_ip), else NULL.
+    anon_key: Mapped[str | None] = mapped_column(String(128))
     # Denials folded into this row (design §5).
     aggregate_count: Mapped[int] = mapped_column(default=1, server_default="1")

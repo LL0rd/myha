@@ -41,9 +41,12 @@ class AuditEvent:
     resource_id: str | None = None
     policy_version: int | None = None
     normalized_params: Mapping[str, Any] | None = None
+    anon_key: str | None = None  # fold key of an anonymous event
 
     def __post_init__(self) -> None:
         _check_keys(self.normalized_params)
+        if self.anon_key is not None and len(self.anon_key) > 128:
+            raise ValueError("anon_key is longer than 128 characters")
 
 
 async def audit(session: AsyncSession, event: AuditEvent) -> None:
@@ -61,6 +64,7 @@ async def audit(session: AsyncSession, event: AuditEvent) -> None:
             resource_id=event.resource_id,
             policy_version=event.policy_version,
             normalized_params=params,
+            anon_key=event.anon_key,
         )
     )
     await session.flush()

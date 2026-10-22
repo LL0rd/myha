@@ -31,11 +31,15 @@ def upgrade() -> None:
         sa.Column("policy_version", sa.Integer(), nullable=True),
         sa.Column("normalized_params", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("ha_context_id", sa.String(), nullable=True),
+        sa.Column("anon_key", sa.String(length=128), nullable=True),
         sa.Column("aggregate_count", sa.Integer(), server_default="1", nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_audit_event")),
         sqlite_autoincrement=True,
     )
     op.create_index(op.f("ix_audit_event_ts"), "audit_event", ["ts"])
+    op.create_index(
+        "ix_audit_event_fold", "audit_event", ["operation", "reason_code", "anon_key", "ts"]
+    )
 
     op.create_table(
         "fence",

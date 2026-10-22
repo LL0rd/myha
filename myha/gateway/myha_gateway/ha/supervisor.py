@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
+from myha_gateway.db import assert_no_write_session
+
 
 class SupervisorUnavailable(Exception):
     """Unreachable, refused (``status``), or an answer without the expected data."""
@@ -71,6 +73,7 @@ class SupervisorClient:
 
     async def _data(self, path: str) -> dict[str, Any]:
         """The ``data`` object of a Supervisor answer."""
+        assert_no_write_session()
         token = self._token
         headers = {"Authorization": f"Bearer {token.get_secret_value()}"} if token else {}
         try:
