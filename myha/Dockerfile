@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.23-2026.10.1
 # Build tools pinned by tag and digest; Dependabot updates both.
-FROM ghcr.io/astral-sh/uv:0.10.12@sha256:72ab0aeb448090480ccabb99fb5f52b0dc3c71923bffb5e2e26517a1c27b7fec AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS web
 WORKDIR /src/web
